@@ -1,193 +1,90 @@
-# 架构硬规则（ARCHITECTURE RULES）
+# ARCHITECTURE RULES
 
-> 本文件定义项目中**必须遵守**的架构与产品边界。
-> Codex、人工开发、后续重构都不得违反以下规则。
+## 1. 目标
 
----
+本文档定义 TraceFold API 的强制架构规则。
 
-## 1. 数据真相源规则
-
-### 1.1 SQLite 唯一真相源
-- SQLite 是系统唯一真相源
-- 原始业务数据必须写入 SQLite
-- 任何图表、导出、Markdown、前端缓存都不是主数据源
-
-### 1.2 AI 内容不得覆盖原始数据
-- AI 生成的摘要、关系建议、健康分析、Dashboard 文本说明必须存放在独立表或独立派生结构中
-- AI 不得直接覆盖原始记录字段
-- 前端必须明确标识哪些内容是 AI 派生结果
-
-### 1.3 派生层可重算
-- AI 结果、报表缓存、导出文件都应被视为可重建数据
-- 允许删除和重算
-- 不得把无法重建的重要事实只存放在派生层
+所有新增代码、重构、扩展都必须遵守本文档。
+如某个实现任务与本文档冲突，默认以本文档为准；除非该任务的目标本身就是修改架构规则，并且先同步更新本文档。
 
 ---
 
-## 2. 分层规则
+## 2. 当前架构立场（Phase 1）
 
-### 2.1 所有前端必须走 API
-- Web 前端不得直连 SQLite
-- Electron 不得直连 SQLite
-- Telegram Bot 不得直连 SQLite
-- 所有业务读写必须通过后端服务层与 API 完成
+TraceFold API 在第一阶段采用以下固定立场：
 
-### 2.2 Router 不写业务逻辑
-- FastAPI Router 仅负责参数接收、鉴权（如未来加入）、调用 Service、返回响应
-- 不得在 Router 中直接写复杂业务逻辑
-- 不得在 Router 中直接拼接 SQL 处理业务分支
+1. **业务域 + 公共层并存**
+   - 业务能力按域组织
+   - 基础设施按公共层统一收口
 
-### 2.3 Service 才是业务核心
-- 业务规则、状态流转、跨表操作必须放在 Service 层
-- Service 可以调用 Parser、Rules、AI、Report 层
-- Service 不依赖具体前端 UI
+2. **本地优先（local-first）**
+   - 当前优先服务单用户、本地运行场景
+   - 暂不为多租户、分布式、复杂权限体系增加结构复杂度
 
-### 2.4 Electron 只是壳
-- Electron 负责托盘、快捷键、窗口管理、系统通知、本地集成功能
-- Electron 不承载业务逻辑
-- Electron 不复制后端 API 能力
+3. **SQLite 是唯一真相源**
+   - 第一阶段所有结构化数据统一进入 SQLite
+   - 不允许业务域各自引入新的数据库或私有真相源
+
+4. **先保证可维护，再追求功能速度**
+   - 优先保证目录清晰、职责明确、依赖方向稳定
+   - 不为了短期开发速度破坏边界
 
 ---
 
-## 3. Capture / Pending 主链规则
+## 3. 标准目录结构
 
-### 3.1 统一 Capture 入口
-- Telegram、Web、桌面端、导入都应尽量先进入统一 Capture 主链
-- 禁止各入口私自绕过 Capture 写正式表（除明确的后台管理接口外）
+TraceFold API 目录结构必须保持如下主形态：
 
-### 3.2 Pending 是正式流程的一部分
-- Pending 不是临时垃圾箱
-- Pending 记录必须支持查看、修正、确认、丢弃、强制入库
-- 所有修正动作必须可留痕
-
-### 3.3 Review 行为可追溯
-- confirm / discard / fix / force-insert 等操作必须写入操作记录
-- 后续可用于分析 parser 与规则质量
-
----
-
-## 4. Knowledge 模块规则
-
-### 4.1 采用双层结构
-- 原始层：capture / source / 素材
-- 整理层：knowledge 卡片
-- 不得用单一表混合承担“素材”和“知识卡片”的全部语义
-
-### 4.2 第一版图谱只使用人工关系
-- 图谱第一版的正式边只来自人工确认关系
-- 不得默认用 tags/theme 自动生成正式边
-- 自动关系建议如需实现，必须与正式关系分离
-
-### 4.3 Obsidian 暂不进入主架构
-- 第一阶段不设计强绑定 Obsidian 的主数据结构
-- 如需验证 Obsidian，单独做 PoC
-- 不得让 Obsidian 成为当前阶段的数据主源
-
----
-
-## 5. Health 模块规则
-
-### 5.1 健康数据分两类
-#### A. 硬指标
-例如：
-- 心率
-- 睡眠时间
-- 血压
-- 体重
-
-规则：
-- 可走显式规则判断
-- 可产生 alerts
-- 必须可解释
-
-#### B. 主观记录
-例如：
-- 疲劳
-- 头晕
-- 不适
-- 情绪变化
-- 恢复描述
-- 受伤感受
-
-规则：
-- 不做强规则硬判定
-- 主要交由 AI 派生分析处理
-- 但原始文本必须保留
-
-### 5.2 健康 AI 不是医疗诊断
-- AI 可生成摘要、观察建议、提醒复查/就医的辅助提示
-- AI 不得伪装成医生诊断
-- 前端必须明确标注“仅供辅助参考”
-
----
-
-## 6. 模板系统规则
-
-### 6.1 第一阶段模板定位
-模板当前定位为：
-- 页面状态预设
-- 快捷入口集合
-- 查询默认参数
-- 工作模式入口
-
-### 6.2 第一阶段不做脚本引擎
-- 模板不得直接演变为任意代码执行器
-- 不得引入复杂自动动作链
-- 如未来升级为 workflow，需单独设计
-
----
-
-## 7. AI 集成规则
-
-### 7.1 AI 只能处理允许的层
-AI 可处理：
-- 知识摘要
-- 关系建议
-- 主观健康分析
-- Dashboard 文本总结
-- 展示层整理
-
-AI 不可处理：
-- 未授权直接改写正式业务字段
-- 跳过审核直接改动原始事实
-- 生成高风险医疗结论作为最终判断
-
-### 7.2 AI 输出必须结构化
-- AI 结果尽量落成结构化 JSON 或确定字段
-- 避免仅保存不可检索的自由文本
-- 需要记录 model_name / version / created_at
-
----
-
-## 8. 代码组织规则
-
-### 8.1 禁止跨层乱调
-- 前端不直接碰数据库
-- Router 不直接写复杂逻辑
-- Electron 不直接实现业务逻辑
-- Bot 不直接访问数据库
-
-### 8.2 共享定义集中管理
-- 枚举、常量、共享 schema 尽量放在统一位置
-- 不允许在多个模块复制一份不同版本的状态定义
-
-### 8.3 测试优先覆盖业务核心
-优先测试：
-- Parser
-- Pending 流程
-- Rule Engine
-- Health Alert
-- Service 层状态流转
-
----
-
-## 9. 变更规则
-以下变更必须先更新本文件或相关设计文档，再改代码：
-
-- 改变唯一真相源
-- 允许前端直连数据库
-- 允许 AI 改写原始数据
-- 修改健康模块规则边界
-- 修改 Knowledge 图谱正式边来源
-- 模板升级为工作流引擎
-- Obsidian 进入主架构
+```text
+apps/api/
+├─ app/
+│  ├─ main.py
+│  ├─ api/
+│  │  ├─ deps.py
+│  │  ├─ router.py
+│  │  └─ system.py
+│  ├─ core/
+│  │  ├─ config.py
+│  │  ├─ exceptions.py
+│  │  ├─ logging.py
+│  │  └─ responses.py
+│  ├─ db/
+│  │  ├─ base.py
+│  │  ├─ session.py
+│  │  └─ init_db.py
+│  ├─ schemas/
+│  │  └─ common.py
+│  └─ domains/
+│     ├─ capture/
+│     │  ├─ router.py
+│     │  ├─ service.py
+│     │  ├─ repository.py
+│     │  ├─ models.py
+│     │  └─ schemas.py
+│     ├─ pending/
+│     │  ├─ router.py
+│     │  ├─ service.py
+│     │  ├─ repository.py
+│     │  ├─ models.py
+│     │  └─ schemas.py
+│     ├─ expense/
+│     │  ├─ router.py
+│     │  ├─ service.py
+│     │  ├─ repository.py
+│     │  ├─ models.py
+│     │  └─ schemas.py
+│     ├─ knowledge/
+│     │  ├─ router.py
+│     │  ├─ service.py
+│     │  ├─ repository.py
+│     │  ├─ models.py
+│     │  └─ schemas.py
+│     └─ health/
+│        ├─ router.py
+│        ├─ service.py
+│        ├─ repository.py
+│        ├─ models.py
+│        └─ schemas.py
+├─ tests/
+├─ .env.example
+└─ README.md
