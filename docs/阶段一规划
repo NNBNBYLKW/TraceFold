@@ -1,0 +1,522 @@
+下面继续补第 4 份：**第一阶段路线图文档**。
+这份给 Codex 很有用，因为它能告诉它：**现在先做什么，不要做什么，顺序是什么**。
+
+---
+
+# 4）`docs/ROADMAP_PHASE1.md`
+
+````md id="2wkt4k"
+# 第一阶段路线图（ROADMAP PHASE 1）
+
+> 本文档定义项目第一阶段的目标、边界、里程碑与实施顺序。
+> 第一阶段重点是**打基础平台**，不是追求功能炫酷或一次做全。
+
+---
+
+## 1. 第一阶段总目标
+
+构建一个可长期扩展的本地个人数据平台基础版，具备以下能力：
+
+- 以 SQLite 为唯一真相源
+- 以后端 API 为核心
+- 支持 Web 工作台
+- 支持 Electron 桌面壳
+- 支持 Telegram 作为输入入口之一
+- 建立统一的 Capture -> Parse -> Pending -> Confirm 主链
+- 建立 AI 派生层，但不污染原始数据
+- 建立健康模块“硬指标规则 / 主观记录 AI”双通道基础结构
+
+---
+
+## 2. 第一阶段不追求的目标
+
+以下内容明确不在第一阶段范围内：
+
+- Obsidian 深整合
+- 多用户与权限系统
+- 云同步
+- 自动知识关系连边
+- 大规模全局图谱
+- 模板脚本引擎
+- 重型预算引擎
+- 本地模型编排平台
+- 医疗诊断式 AI
+- 完整移动端 App
+
+---
+
+## 3. 第一阶段交付结果
+
+第一阶段结束时，应至少交付：
+
+### 3.1 后端
+- FastAPI 服务可运行
+- SQLite 模型与迁移可运行
+- Capture / Pending / Expense / Knowledge / Health / Templates / AI Views 基础 API 可用
+- 基础测试可运行
+
+### 3.2 Web 前端
+- Dashboard 页面
+- Capture Inbox 页面
+- Pending Queue 页面
+- Expense 基础页面
+- Knowledge 基础页面
+- Health 基础页面
+- Templates 页面
+- 手机端简化查看页
+
+### 3.3 桌面壳
+- Electron 可启动
+- 托盘常驻
+- 全局快捷键显示/隐藏
+- 能加载工作台地址
+- 基础通知
+
+### 3.4 Telegram
+- 作为 API 客户端接入
+- 支持文本录入与基础队列操作
+
+### 3.5 AI 派生层
+- 至少支持：
+  - Dashboard 文本总结
+  - Knowledge 摘要
+  - Health 主观记录分析
+
+---
+
+## 4. 第一阶段实施原则
+
+### 4.1 先打地基，再做亮点
+本阶段优先顺序：
+1. 服务化
+2. 数据模型
+3. Capture / Pending 主链
+4. Web 工作台基础页
+5. 桌面壳
+6. Bot 接入
+7. AI 派生层
+
+### 4.2 不做双轨主架构
+旧 Tkinter 架构不再作为主线延续。
+如需参考旧逻辑，只能作为业务参考，不作为正式运行基础。
+
+### 4.3 每完成一个模块，必须满足可验收
+不接受“概念上实现了但系统跑不通”。
+
+---
+
+## 5. 项目结构目标
+
+第一阶段目标结构：
+
+```text
+personal-data-platform/
+├─ apps/
+│  ├─ api/
+│  ├─ worker/
+│  ├─ bot/
+│  ├─ web/
+│  └─ desktop/
+├─ packages/
+│  ├─ core/
+│  ├─ db/
+│  ├─ services/
+│  ├─ parser/
+│  ├─ ai/
+│  ├─ rules/
+│  ├─ reports/
+│  ├─ exports/
+│  └─ integrations/
+├─ data/
+├─ configs/
+├─ docs/
+└─ scripts/
+````
+
+---
+
+## 6. 里程碑划分
+
+## Milestone 0：项目骨架初始化
+
+### 目标
+
+让项目从“空目录”变成可运行的多端骨架。
+
+### 内容
+
+* 初始化 Git 仓库
+* 初始化 `apps/api`
+* 初始化 `apps/web`
+* 初始化 `apps/desktop`
+* 初始化 `packages/*`
+* 创建 `.env.example`
+* 创建基础 README
+* 建立 docs 基础文档
+
+### 验收标准
+
+* [ ] FastAPI 可启动
+* [ ] Vue Web 可启动
+* [ ] Electron 可启动
+* [ ] Electron 能打开 Web 页面
+* [ ] 基础目录结构齐全
+
+---
+
+## Milestone 1：数据库与后端底座
+
+### 目标
+
+建立系统的真相源与后端基础层。
+
+### 内容
+
+* SQLAlchemy Base / Session
+* SQLite 初始化脚本
+* 模型定义
+* Alembic（可选，但建议尽早接入）
+* 通用响应格式
+* 全局异常处理
+* 日志基础
+
+### 第一批模型
+
+* `captures`
+* `pending_reviews`
+* `review_actions`
+* `expenses`
+* `knowledges`
+* `knowledge_relations`
+* `health_metrics`
+* `health_subjective_records`
+* `health_alerts`
+* `templates`
+* `ai_views`
+
+### 验收标准
+
+* [ ] 数据库初始化成功
+* [ ] 模型可创建表
+* [ ] API 服务启动正常
+* [ ] 路由模块结构已建立
+
+---
+
+## Milestone 2：Capture -> Parse -> Pending 主链
+
+### 目标
+
+建立统一输入处理主链。
+
+### 内容
+
+* `POST /captures`
+* Capture Service
+* Parser 分发器
+* 置信度机制
+* 低置信度进入 Pending
+* 高置信度可转正式记录
+* Confirm / Discard / Fix / Force Insert
+
+### 验收标准
+
+* [ ] 文本输入可进入 Capture
+* [ ] 可根据解析结果进入 Pending
+* [ ] 可执行 Confirm / Discard / Fix / Force Insert
+* [ ] Review 行为有留痕
+
+---
+
+## Milestone 3：基础查询与 Dashboard
+
+### 目标
+
+让系统具备“可看、可查、可用”的基础能力。
+
+### 内容
+
+* Expense 基础查询与统计
+* Knowledge 列表与详情
+* Health 指标列表与趋势查询
+* Health Alerts 查询
+* Dashboard 聚合接口
+* 基础报表聚合层
+
+### 验收标准
+
+* [ ] Dashboard 可返回总览数据
+* [ ] Expense 可基础查询
+* [ ] Knowledge 可基础查询
+* [ ] Health 可基础查询
+* [ ] Alerts 可查询
+
+---
+
+## Milestone 4：Web 工作台基础页
+
+### 目标
+
+用 Web 页面承接核心管理操作。
+
+### 页面范围
+
+* Dashboard
+* Capture Inbox
+* Pending Queue
+* Expense
+* Knowledge
+* Health
+* Templates
+
+### 验收标准
+
+* [ ] 能通过 Web 完成基础管理
+* [ ] 能通过 Web 查看 Dashboard
+* [ ] Pending 页面可完成核心审核操作
+* [ ] 手机浏览器访问时可看到简化版摘要页
+
+---
+
+## Milestone 5：Telegram Bot 接后端
+
+### 目标
+
+让 Telegram 成为正式入口之一，但不破坏架构。
+
+### 内容
+
+* Bot 改为 API 客户端
+* 文本录入
+* `/pending`
+* `/review`
+* `/confirm`
+* `/discard`
+* `/fix`
+* 简版 Dashboard 查询
+
+### 验收标准
+
+* [ ] Bot 不再直连数据库
+* [ ] Bot 可通过 API 完成录入
+* [ ] Bot 可操作 Pending 基本流程
+
+---
+
+## Milestone 6：Electron 桌面壳
+
+### 目标
+
+让主力机具备“真正像应用”的使用体验。
+
+### 内容
+
+* 托盘图标
+* 单实例
+* 全局快捷键
+* 显示/隐藏主窗口
+* 加载工作台地址
+* 服务未连接提示
+* 基础系统通知
+
+### 验收标准
+
+* [ ] Electron 常驻托盘可用
+* [ ] 全局快捷键可唤起窗口
+* [ ] 启动后可加载工作台
+* [ ] 服务未连接时有明确提示
+
+---
+
+## Milestone 7：AI 派生层第一版
+
+### 目标
+
+建立 AI 与原始数据分层的第一版能力。
+
+### 范围
+
+* Knowledge 摘要
+* Health 主观记录分析
+* Dashboard 文本总结
+
+### 不包括
+
+* AI 自动改原始数据
+* AI 自动生成正式知识关系
+* AI 医疗诊断式判断
+
+### 验收标准
+
+* [ ] AI 派生结果单独存放
+* [ ] 前端明确标注 AI 内容
+* [ ] 可针对目标记录重算 AI 内容
+
+---
+
+## 7. Health 模块第一阶段专项约束
+
+### 7.1 硬指标
+
+以下指标第一阶段按规则处理：
+
+* 心率
+* 睡眠时间
+* 血压
+* 体重
+
+要求：
+
+* 可配置阈值
+* 可解释触发原因
+* 生成 alerts
+
+### 7.2 主观记录
+
+以下内容第一阶段按 AI 派生分析处理：
+
+* 疲劳
+* 头晕
+* 不适
+* 情绪差
+* 恢复过程描述
+* 受伤主观感受
+
+要求：
+
+* 原始文本保留
+* AI 输出单独存储
+* 明确标注为辅助分析
+
+---
+
+## 8. Knowledge 模块第一阶段专项约束
+
+### 8.1 双层结构
+
+* Capture：原始素材、摘录、碎片
+* Knowledge：整理后的知识卡片
+
+### 8.2 第一版图谱边来源
+
+* 第一版正式边只来自人工关系
+* 自动建议关系如需实现，不得混入正式边
+
+### 8.3 图谱目标
+
+第一阶段图谱只需要做到：
+
+* 局部图
+* 基础节点点击
+* 基础关系展示
+
+不要求：
+
+* 全局复杂布局
+* 自动聚类
+* 自动关系发现
+
+---
+
+## 9. 模板系统第一阶段约束
+
+模板第一阶段只负责：
+
+* 工作模式入口
+* 页面状态预设
+* 查询默认参数
+* 快捷入口集合
+
+不负责：
+
+* 任意脚本执行
+* 复杂动作链
+* 自动 AI 工作流编排
+
+---
+
+## 10. 建议开发顺序（推荐给 Codex 的任务顺序）
+
+### Step 1
+
+初始化项目骨架：
+
+* FastAPI
+* Vue
+* Electron
+* 基础目录
+
+### Step 2
+
+建立数据库底座：
+
+* Base / Session
+* models
+* init script
+
+### Step 3
+
+实现 Capture / Pending 基础 API
+
+### Step 4
+
+实现 Expense / Knowledge / Health 基础 API
+
+### Step 5
+
+实现 Dashboard 聚合 API
+
+### Step 6
+
+实现 Web 基础页面
+
+### Step 7
+
+实现 Telegram Bot API Client
+
+### Step 8
+
+实现 Electron 托盘壳
+
+### Step 9
+
+实现 AI 派生层第一版
+
+---
+
+## 11. 第一阶段完成定义（Definition of Done）
+
+当以下条件都满足时，第一阶段视为完成：
+
+* [ ] SQLite 作为唯一真相源已稳定运行
+* [ ] Capture -> Pending -> Confirm 主链已跑通
+* [ ] 三大模块基础查询可用
+* [ ] Dashboard 可用
+* [ ] Web 工作台可用
+* [ ] Electron 壳可用
+* [ ] Telegram Bot 可接入
+* [ ] AI 派生层已与原始数据分离
+* [ ] Health 的硬指标规则与主观 AI 分析两条线清晰
+
+````
+
+---
+
+你现在仓库里最值得先放进去的 4 个文档就是：
+
+```text
+docs/
+  PROJECT_BRIEF.md
+  ARCHITECTURE_RULES.md
+  TASK_TEMPLATE.md
+  ROADMAP_PHASE1.md
+````
+
+接下来最顺手的一步，是继续补两份更实操的文档：
+
+* `docs/DATA_MODEL_DRAFT.md`
+* `docs/API_CONVENTIONS.md`
+
+这样 Codex 就能更稳定地开始搭代码。
+
+我先建议下一条做 `DATA_MODEL_DRAFT.md`。
