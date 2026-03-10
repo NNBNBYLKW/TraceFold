@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
     - initialize database schema
     - reserve a single place for future startup/shutdown hooks
     """
-    init_db()
+    # init_db()
     yield
 
 
