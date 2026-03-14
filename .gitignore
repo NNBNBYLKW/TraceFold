@@ -1,26 +1,71 @@
-# Python
+# =========================
+# Python cache / bytecode
+# =========================
 __pycache__/
 *.py[cod]
-*.pyo
+*$py.class
 
-# Virtual env
+# =========================
+# Virtual environments
+# =========================
 .venv/
 venv/
+env/
+ENV/
 
+# =========================
+# Test / type / lint cache
+# =========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# =========================
 # Local databases
+# =========================
 *.db
 *.sqlite
 *.sqlite3
 
-# Local data
+# =========================
+# Local data directories
+# =========================
 data/
 apps/api/data/
 
-# Test / cache
-.pytest_cache/
-.mypy_cache/
+# =========================
+# Build / packaging artifacts
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
 
-# Editor / OS
+# =========================
+# IDE / editor files
+# =========================
+.idea/
 .vscode/
+*.code-workspace
+
+# =========================
+# OS junk files
+# =========================
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Environment files
+# =========================
+.env
+.env.*
+!.env.example
