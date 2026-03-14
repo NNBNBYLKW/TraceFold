@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -37,6 +38,39 @@ def create_pending_item(
 
 def get_pending_item_by_id(db: Session, pending_item_id: int) -> PendingItem | None:
     return db.get(PendingItem, pending_item_id)
+
+
+def update_pending_corrected_payload(
+    db: Session,
+    *,
+    pending_item: PendingItem,
+    corrected_payload_json: JsonValue,
+) -> PendingItem:
+    pending_item.corrected_payload_json = corrected_payload_json
+    db.flush()
+    return pending_item
+
+
+def update_pending_status(
+    db: Session,
+    *,
+    pending_item: PendingItem,
+    status: str,
+) -> PendingItem:
+    pending_item.status = status
+    db.flush()
+    return pending_item
+
+
+def set_pending_resolved_at(
+    db: Session,
+    *,
+    pending_item: PendingItem,
+    resolved_at: datetime | None,
+) -> PendingItem:
+    pending_item.resolved_at = resolved_at
+    db.flush()
+    return pending_item
 
 
 def create_pending_review_action(

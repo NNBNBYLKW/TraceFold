@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Any, cast
+
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.domains.capture import repository as capture_repository
+from app.domains.capture.models import CaptureRecord, CaptureStatus, ParseTargetDomain
+from app.domains.expense.service import create_expense_record
+from app.domains.health.service import create_health_record
+from app.domains.knowledge.service import create_knowledge_entry
 from app.domains.pending import repository
-from app.domains.pending.models import PendingItem, PendingReviewAction
+from app.domains.pending.models import PendingActionType, PendingItem, PendingReviewAction, PendingStatus
+
+
+JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
+ResolvedPendingStatuses = {
+    PendingStatus.CONFIRMED,
+    PendingStatus.DISCARDED,
+    PendingStatus.FORCED,
+}
 
 
 def create_pending(
@@ -25,6 +42,185 @@ def create_pending(
     )
 
 
+def fix_pending_item(
+    db: Session,
+    *,
+    pending_item_id: int,
+    corrected_payload_json: JsonValue = None,
+    note: str | None = None,
+) -> PendingItem:
+    try:
+        pending_item = _get_pending_item_or_raise(db, pending_item_id)
+        _ensure_pending_is_actionable(pending_item)
+
+        before_payload = _get_latest_payload_snapshot(pending_item)
+        repository.update_pending_corrected_payload(
+            db,
+            pending_item=pending_item,
+            corrected_payload_json=corrected_payload_json,
+        )
+        repository.create_pending_review_action(
+            db,
+            pending_item_id=pending_item.id,
+            action_type=PendingActionType.FIX,
+            before_payload_json=before_payload,
+            after_payload_json=corrected_payload_json,
+            note=note,
+        )
+
+        db.commit()
+        db.refresh(pending_item)
+        return pending_item
+    except Exception:
+        db.rollback()
+        raise
+
+
+def confirm_pending_item(
+    db: Session,
+    *,
+    pending_item_id: int,
+    note: str | None = None,
+) -> PendingItem:
+    try:
+        pending_item = _get_pending_item_or_raise(db, pending_item_id)
+        _ensure_pending_is_actionable(pending_item)
+        capture = _get_capture_for_pending_or_raise(db, pending_item)
+        effective_payload = _select_effective_payload(pending_item)
+
+        _write_fact_record(
+            db,
+            pending_item=pending_item,
+            capture=capture,
+            payload=effective_payload,
+        )
+
+        resolved_at = datetime.utcnow()
+        repository.update_pending_status(
+            db,
+            pending_item=pending_item,
+            status=PendingStatus.CONFIRMED,
+        )
+        repository.set_pending_resolved_at(
+            db,
+            pending_item=pending_item,
+            resolved_at=resolved_at,
+        )
+        capture.status = CaptureStatus.COMMITTED
+        capture.finalized_at = resolved_at
+        db.flush()
+
+        repository.create_pending_review_action(
+            db,
+            pending_item_id=pending_item.id,
+            action_type=PendingActionType.CONFIRM,
+            before_payload_json=effective_payload,
+            after_payload_json=effective_payload,
+            note=note,
+        )
+
+        db.commit()
+        db.refresh(pending_item)
+        return pending_item
+    except Exception:
+        db.rollback()
+        raise
+
+
+def discard_pending_item(
+    db: Session,
+    *,
+    pending_item_id: int,
+    note: str | None = None,
+) -> PendingItem:
+    try:
+        pending_item = _get_pending_item_or_raise(db, pending_item_id)
+        _ensure_pending_is_actionable(pending_item)
+        capture = _get_capture_for_pending_or_raise(db, pending_item)
+
+        resolved_at = datetime.utcnow()
+        repository.update_pending_status(
+            db,
+            pending_item=pending_item,
+            status=PendingStatus.DISCARDED,
+        )
+        repository.set_pending_resolved_at(
+            db,
+            pending_item=pending_item,
+            resolved_at=resolved_at,
+        )
+        capture.status = CaptureStatus.DISCARDED
+        capture.finalized_at = resolved_at
+        db.flush()
+
+        repository.create_pending_review_action(
+            db,
+            pending_item_id=pending_item.id,
+            action_type=PendingActionType.DISCARD,
+            before_payload_json=_get_latest_payload_snapshot(pending_item),
+            after_payload_json=None,
+            note=note,
+        )
+
+        db.commit()
+        db.refresh(pending_item)
+        return pending_item
+    except Exception:
+        db.rollback()
+        raise
+
+
+def force_insert_pending_item(
+    db: Session,
+    *,
+    pending_item_id: int,
+    note: str | None = None,
+) -> PendingItem:
+    try:
+        pending_item = _get_pending_item_or_raise(db, pending_item_id)
+        _ensure_pending_is_actionable(pending_item)
+        capture = _get_capture_for_pending_or_raise(db, pending_item)
+        effective_payload = _select_effective_payload(pending_item)
+
+        _write_fact_record(
+            db,
+            pending_item=pending_item,
+            capture=capture,
+            payload=effective_payload,
+        )
+
+        resolved_at = datetime.utcnow()
+        repository.update_pending_status(
+            db,
+            pending_item=pending_item,
+            status=PendingStatus.FORCED,
+        )
+        repository.set_pending_resolved_at(
+            db,
+            pending_item=pending_item,
+            resolved_at=resolved_at,
+        )
+        capture.status = CaptureStatus.COMMITTED
+        capture.finalized_at = resolved_at
+        db.flush()
+
+        repository.create_pending_review_action(
+            db,
+            pending_item_id=pending_item.id,
+            action_type=PendingActionType.FORCE_INSERT,
+            before_payload_json=effective_payload,
+            after_payload_json=effective_payload,
+            note=note,
+        )
+
+        db.commit()
+        db.refresh(pending_item)
+        return pending_item
+    except Exception:
+        db.rollback()
+        raise
+
+
 def add_review_action(
     db: Session,
     *,
@@ -42,3 +238,168 @@ def add_review_action(
         after_payload_json=after_payload_json,
         note=note,
     )
+
+
+def _get_pending_item_or_raise(db: Session, pending_item_id: int) -> PendingItem:
+    pending_item = repository.get_pending_item_by_id(db, pending_item_id)
+    if pending_item is None:
+        raise NotFoundError(
+            message=f"Pending item {pending_item_id} was not found.",
+            code="PENDING_ITEM_NOT_FOUND",
+        )
+    return pending_item
+
+
+def _get_capture_for_pending_or_raise(db: Session, pending_item: PendingItem) -> CaptureRecord:
+    capture = capture_repository.get_capture_by_id(db, pending_item.capture_id)
+    if capture is None:
+        raise NotFoundError(
+            message=f"Capture {pending_item.capture_id} for pending item {pending_item.id} was not found.",
+            code="CAPTURE_NOT_FOUND",
+        )
+    return capture
+
+
+def _ensure_pending_is_actionable(pending_item: PendingItem) -> None:
+    if pending_item.status in ResolvedPendingStatuses:
+        raise ConflictError(
+            message=(
+                f"Pending item {pending_item.id} is already resolved with status "
+                f"{pending_item.status} and cannot be reviewed again."
+            ),
+            code="PENDING_ALREADY_RESOLVED",
+        )
+    if pending_item.status != PendingStatus.OPEN:
+        raise ConflictError(
+            message=(
+                f"Pending item {pending_item.id} must be in status "
+                f"{PendingStatus.OPEN} before review actions can be applied."
+            ),
+            code="PENDING_NOT_OPEN",
+        )
+
+
+def _select_effective_payload(pending_item: PendingItem) -> dict[str, Any]:
+    validator = _get_payload_validator(pending_item.target_domain)
+
+    corrected_payload = pending_item.corrected_payload_json
+    if corrected_payload is not None:
+        if validator(corrected_payload):
+            return cast(dict[str, Any], corrected_payload)
+        raise BadRequestError(
+            message=(
+                f"Pending item {pending_item.id} has corrected payload, "
+                f"but it is invalid for target domain {pending_item.target_domain}."
+            ),
+            code="INVALID_CORRECTED_PAYLOAD",
+        )
+
+    proposed_payload = pending_item.proposed_payload_json
+    if validator(proposed_payload):
+        return cast(dict[str, Any], proposed_payload)
+
+    raise BadRequestError(
+        message=(
+            f"Pending item {pending_item.id} does not have a valid payload for "
+            f"target domain {pending_item.target_domain}."
+        ),
+        code="INVALID_PENDING_PAYLOAD",
+    )
+
+
+def _write_fact_record(
+    db: Session,
+    *,
+    pending_item: PendingItem,
+    capture: CaptureRecord,
+    payload: dict[str, Any],
+) -> None:
+    if pending_item.target_domain == ParseTargetDomain.EXPENSE:
+        create_expense_record(
+            db,
+            source_capture_id=capture.id,
+            source_pending_id=pending_item.id,
+            payload=payload,
+        )
+        return
+
+    if pending_item.target_domain == ParseTargetDomain.KNOWLEDGE:
+        create_knowledge_entry(
+            db,
+            source_capture_id=capture.id,
+            source_pending_id=pending_item.id,
+            payload=payload,
+        )
+        return
+
+    if pending_item.target_domain == ParseTargetDomain.HEALTH:
+        create_health_record(
+            db,
+            source_capture_id=capture.id,
+            source_pending_id=pending_item.id,
+            payload=payload,
+        )
+        return
+
+    raise BadRequestError(
+        message=f"Pending item {pending_item.id} has unsupported target domain {pending_item.target_domain}.",
+        code="UNSUPPORTED_TARGET_DOMAIN",
+    )
+
+
+def _get_payload_validator(target_domain: str) -> Any:
+    if target_domain == ParseTargetDomain.EXPENSE:
+        return _is_valid_expense_payload
+    if target_domain == ParseTargetDomain.KNOWLEDGE:
+        return _is_valid_knowledge_payload
+    if target_domain == ParseTargetDomain.HEALTH:
+        return _is_valid_health_payload
+    raise BadRequestError(
+        message=f"Unsupported target domain {target_domain}.",
+        code="UNSUPPORTED_TARGET_DOMAIN",
+    )
+
+
+def _is_valid_expense_payload(payload: JsonValue) -> bool:
+    payload_dict = _as_payload_dict(payload)
+    if payload_dict is None:
+        return False
+    return bool(
+        _string_value(payload_dict.get("amount"))
+        and _string_value(payload_dict.get("currency"))
+    )
+
+
+def _is_valid_knowledge_payload(payload: JsonValue) -> bool:
+    payload_dict = _as_payload_dict(payload)
+    if payload_dict is None:
+        return False
+    return any(
+        _string_value(payload_dict.get(field_name))
+        for field_name in ("title", "content", "source_text")
+    )
+
+
+def _is_valid_health_payload(payload: JsonValue) -> bool:
+    payload_dict = _as_payload_dict(payload)
+    if payload_dict is None:
+        return False
+    return bool(_string_value(payload_dict.get("metric_type")))
+
+
+def _get_latest_payload_snapshot(pending_item: PendingItem) -> JsonValue:
+    if pending_item.corrected_payload_json is not None:
+        return pending_item.corrected_payload_json
+    return pending_item.proposed_payload_json
+
+
+def _as_payload_dict(payload: JsonValue) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _string_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
