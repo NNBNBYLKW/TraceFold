@@ -8,14 +8,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, IdMixin
 
 
-class HealthRecord(IdMixin, Base):
-    __tablename__ = "health_records"
+class KnowledgeEntry(IdMixin, Base):
+    __tablename__ = "knowledge_entries"
 
     source_capture_id: Mapped[int] = mapped_column(ForeignKey("capture_records.id"), nullable=False)
     source_pending_id: Mapped[int | None] = mapped_column(ForeignKey("pending_items.id"), nullable=True)
-    metric_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    value_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(),
         nullable=False,
