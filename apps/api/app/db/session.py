@@ -18,11 +18,11 @@ def _build_engine() -> Engine:
     """
     connect_args: dict[str, object] = {}
 
-    if settings.api_database_url.startswith("sqlite"):
+    if settings.api_db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
 
     return create_engine(
-        settings.api_database_url,
+        settings.api_db_url,
         echo=False,
         future=True,
         connect_args=connect_args,

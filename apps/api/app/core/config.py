@@ -19,28 +19,40 @@ class Settings(BaseSettings):
     Rules:
     - Environment variables are read only here.
     - Other modules must import `settings` or call `get_settings()`.
-    - Do not call os.getenv() outside this file.
+    - Do not call os.getenv() / os.environ outside this file.
     """
 
+    app_name: str = Field(
+        default="TraceFold API",
+        alias="TRACEFOLD_API_APP_NAME",
+    )
     api_env: Literal["development", "test", "production"] = Field(
         default="development",
-        alias="API_ENV",
+        alias="TRACEFOLD_API_ENV",
+    )
+    debug: bool = Field(
+        default=True,
+        alias="TRACEFOLD_API_DEBUG",
     )
     api_host: str = Field(
         default="127.0.0.1",
-        alias="API_HOST",
+        alias="TRACEFOLD_API_HOST",
     )
     api_port: int = Field(
         default=8000,
-        alias="API_PORT",
+        alias="TRACEFOLD_API_PORT",
+    )
+    api_db_url: str = Field(
+        default="sqlite:///../../data/tracefold.db",
+        alias="TRACEFOLD_API_DB_URL",
     )
     api_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO",
-        alias="API_LOG_LEVEL",
+        alias="TRACEFOLD_API_LOG_LEVEL",
     )
-    api_database_url: str = Field(
-        default="sqlite:///../../data/app.db",
-        alias="API_DATABASE_URL",
+    enable_docs: bool = Field(
+        default=True,
+        alias="TRACEFOLD_API_ENABLE_DOCS",
     )
 
     model_config = SettingsConfigDict(
@@ -62,6 +74,18 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.api_env == "production"
+
+    @property
+    def docs_url(self) -> str | None:
+        return "/docs" if self.enable_docs else None
+
+    @property
+    def redoc_url(self) -> str | None:
+        return "/redoc" if self.enable_docs else None
+
+    @property
+    def openapi_url(self) -> str | None:
+        return "/openapi.json" if self.enable_docs else None
 
 
 @lru_cache

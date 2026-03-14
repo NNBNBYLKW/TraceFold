@@ -17,9 +17,10 @@ def init_db() -> None:
 
     # Import domain models here to ensure they are registered on Base.metadata
     from app.domains.capture import models as capture_models  # noqa: F401
-    from app.domains.pending import models as pending_models  # noqa: F401
-    from app.domains.expense import models as expense_models  # noqa: F401
-    from app.domains.knowledge import models as knowledge_models  # noqa: F401
-    from app.domains.health import models as health_models  # noqa: F401
+    from app.domains.system_tasks import models as system_tasks_models  # noqa: F401
+    # from app.domains.pending import models as pending_models  # noqa: F401
+    # from app.domains.expense import models as expense_models  # noqa: F401
+    # from app.domains.knowledge import models as knowledge_models  # noqa: F401
+    # from app.domains.health import models as health_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
