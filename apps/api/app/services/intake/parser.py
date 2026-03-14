@@ -33,8 +33,8 @@ def parse_raw_text(raw_text: str | None) -> dict[str, Any]:
         }
 
     return {
-        "target_domain": ParseTargetDomain.KNOWLEDGE,
-        "confidence_score": 0.6,
-        "confidence_level": ParseConfidenceLevel.LOW,
-        "parsed_payload_json": {"raw_text": raw_text},
-    }
+    "target_domain": ParseTargetDomain.UNKNOWN,
+    "confidence_score": 0.3,
+    "confidence_level": ParseConfidenceLevel.LOW,
+    "parsed_payload_json": {"raw_text": raw_text},
+}
