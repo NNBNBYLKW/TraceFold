@@ -93,6 +93,7 @@ def test_expense_list_service_supports_default_sort_category_and_note_keyword(db
     filtered_by_keyword = list_expense_reads(db, keyword="keyword")
 
     assert [item.amount for item in result.items] == [newest.amount, middle.amount, oldest.amount]
+    assert [item.id for item in result.items] == [newest.id, middle.id, oldest.id]
     assert [item.category for item in filtered_by_category.items] == ["food", "food"]
     assert [item.amount for item in filtered_by_keyword.items] == [middle.amount]
     assert filtered_by_keyword.items[0].note_preview == "lunch keyword match"
@@ -120,6 +121,7 @@ def test_knowledge_list_service_handles_untitled_keyword_scope_and_source_text_f
     source_only_match = list_knowledge_reads(db, keyword="secret")
 
     assert result.items[1].display_title == "(untitled)"
+    assert [item.id for item in result.items] == [titled.id, untitled.id]
     assert result.items[0].has_source_text is True
     assert result.items[1].has_source_text is False
     assert [item.display_title for item in title_match.items] == ["Alpha note"]
@@ -137,7 +139,7 @@ def test_health_list_service_filters_note_keyword_and_metric_type_with_previews(
         note="slept 8 hours",
         with_pending=False,
     )
-    _create_health_fact(
+    weight = _create_health_fact(
         db,
         created_at=_dt(minutes=2),
         metric_type="weight",
@@ -150,6 +152,7 @@ def test_health_list_service_filters_note_keyword_and_metric_type_with_previews(
     all_items = list_health_reads(db)
 
     assert [item.metric_type for item in keyword_match.items] == ["weight"]
+    assert [item.id for item in keyword_match.items] == [weight.id]
     assert [item.metric_type for item in metric_match.items] == ["sleep"]
     assert all_items.items[0].value_text_preview == "70kg"
     assert all_items.items[1].value_text_preview is None

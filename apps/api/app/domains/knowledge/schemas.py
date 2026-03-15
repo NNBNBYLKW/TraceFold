@@ -10,6 +10,7 @@ from app.schemas.common import PaginatedListRead
 class KnowledgeListItemRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    id: int
     created_at: datetime
     display_title: str
     content_preview: str | None = None

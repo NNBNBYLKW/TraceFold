@@ -91,6 +91,7 @@ def get_health_read(db: Session, health_id: int) -> HealthDetailRead:
 
 def _build_health_list_item(record: HealthRecord) -> HealthListItemRead:
     return HealthListItemRead(
+        id=record.id,
         created_at=record.created_at,
         metric_type=record.metric_type,
         value_text_preview=_build_preview(record.value_text),

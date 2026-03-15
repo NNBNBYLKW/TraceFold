@@ -10,6 +10,7 @@ from app.schemas.common import PaginatedListRead
 class ExpenseListItemRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    id: int
     created_at: datetime
     amount: str
     currency: str

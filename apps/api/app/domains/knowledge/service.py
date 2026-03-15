@@ -92,6 +92,7 @@ def get_knowledge_read(db: Session, knowledge_id: int) -> KnowledgeDetailRead:
 
 def _build_knowledge_list_item(entry: KnowledgeEntry) -> KnowledgeListItemRead:
     return KnowledgeListItemRead(
+        id=entry.id,
         created_at=entry.created_at,
         display_title=_display_title(entry.title),
         content_preview=_build_preview(entry.content),

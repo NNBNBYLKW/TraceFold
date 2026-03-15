@@ -93,6 +93,7 @@ def get_expense_read(db: Session, expense_id: int) -> ExpenseDetailRead:
 
 def _build_expense_list_item(record: ExpenseRecord) -> ExpenseListItemRead:
     return ExpenseListItemRead(
+        id=record.id,
         created_at=record.created_at,
         amount=record.amount,
         currency=record.currency,

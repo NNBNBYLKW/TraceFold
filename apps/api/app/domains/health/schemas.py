@@ -10,6 +10,7 @@ from app.schemas.common import PaginatedListRead
 class HealthListItemRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    id: int
     created_at: datetime
     metric_type: str
     value_text_preview: str | None = None
