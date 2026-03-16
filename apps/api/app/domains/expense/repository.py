@@ -51,3 +51,36 @@ def list_expense_records(
         .all()
     )
     return items, total
+
+
+def list_recent_expense_records(
+    db: Session,
+    *,
+    limit: int,
+) -> list[ExpenseRecord]:
+    return (
+        db.query(ExpenseRecord)
+        .order_by(ExpenseRecord.created_at.desc(), ExpenseRecord.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def list_expense_records_created_between(
+    db: Session,
+    *,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    limit: int | None = None,
+) -> list[ExpenseRecord]:
+    query = db.query(ExpenseRecord)
+
+    if created_from is not None:
+        query = query.filter(ExpenseRecord.created_at >= created_from)
+    if created_to is not None:
+        query = query.filter(ExpenseRecord.created_at <= created_to)
+
+    query = query.order_by(ExpenseRecord.created_at.desc(), ExpenseRecord.id.desc())
+    if limit is not None:
+        query = query.limit(limit)
+    return query.all()

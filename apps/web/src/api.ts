@@ -19,6 +19,87 @@ export interface PaginatedResponse<T> {
   total: number
 }
 
+export interface DashboardPendingSummary {
+  open_count: number
+  open_count_by_target_domain: Record<string, number>
+  opened_in_last_7_days: number
+  resolved_in_last_7_days: number
+  href: string
+}
+
+export interface DashboardQuickLink {
+  label: string
+  href: string
+}
+
+export interface DashboardExpenseSummary {
+  created_in_current_month: number
+  amount_by_currency_current_month: Record<string, string>
+  latest_expense_created_at: string | null
+  href: string
+}
+
+export interface DashboardKnowledgeSummary {
+  created_in_last_7_days: number
+  created_in_last_30_days: number
+  latest_knowledge_created_at: string | null
+  href: string
+}
+
+export interface DashboardHealthSummary {
+  created_in_last_7_days: number
+  latest_health_created_at: string | null
+  recent_metric_types: string[]
+  href: string
+}
+
+export interface DashboardRecentActivity {
+  activity_type: string
+  occurred_at: string
+  target_domain: string
+  target_id: number
+  title_or_preview: string | null
+  action_label: string
+  href: string
+}
+
+export interface DashboardData {
+  pending_summary: DashboardPendingSummary
+  quick_links: DashboardQuickLink[]
+  expense_summary: DashboardExpenseSummary
+  knowledge_summary: DashboardKnowledgeSummary
+  health_summary: DashboardHealthSummary
+  recent_activity: DashboardRecentActivity[]
+}
+
+export interface PendingListItem {
+  id: number
+  status: string
+  target_domain: string
+  reason_preview: string | null
+  created_at: string
+  has_corrected_payload: boolean
+  source_capture_id: number
+  is_next_to_review: boolean
+}
+
+export interface PendingListResponse extends PaginatedResponse<PendingListItem> {
+  next_pending_item_id: number | null
+}
+
+export interface PendingDetail {
+  id: number
+  status: string
+  target_domain: string
+  reason: string | null
+  proposed_payload_json: unknown
+  corrected_payload_json: unknown
+  created_at: string
+  resolved_at: string | null
+  source_capture_id: number
+  parse_result_id: number
+}
+
 export interface ExpenseListItem {
   id: number
   created_at: string
@@ -76,6 +157,20 @@ export interface HealthDetail {
   note: string | null
   source_capture_id: number
   source_pending_id: number | null
+}
+
+export async function fetchDashboard(): Promise<DashboardData> {
+  return request<DashboardData>('/api/dashboard')
+}
+
+export async function fetchPendingList(
+  params: Record<string, string>,
+): Promise<PendingListResponse> {
+  return request<PendingListResponse>('/api/pending', params)
+}
+
+export async function fetchPendingDetail(id: string): Promise<PendingDetail> {
+  return request<PendingDetail>(`/api/pending/${id}`)
 }
 
 export async function fetchExpenseList(

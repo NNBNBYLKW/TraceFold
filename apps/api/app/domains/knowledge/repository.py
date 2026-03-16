@@ -55,3 +55,24 @@ def list_knowledge_entries(
         .all()
     )
     return items, total
+
+
+def count_knowledge_entries_created_since(
+    db: Session,
+    *,
+    created_from: datetime,
+) -> int:
+    return db.query(KnowledgeEntry).filter(KnowledgeEntry.created_at >= created_from).count()
+
+
+def list_recent_knowledge_entries(
+    db: Session,
+    *,
+    limit: int,
+) -> list[KnowledgeEntry]:
+    return (
+        db.query(KnowledgeEntry)
+        .order_by(KnowledgeEntry.created_at.desc(), KnowledgeEntry.id.desc())
+        .limit(limit)
+        .all()
+    )

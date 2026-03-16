@@ -13,6 +13,7 @@ from app.domains.health.service import create_health_record
 from app.domains.knowledge.service import create_knowledge_entry
 from app.domains.pending import repository
 from app.domains.pending.models import PendingActionType, PendingItem, PendingReviewAction, PendingStatus
+from app.domains.pending.schemas import PendingDetailRead, PendingListItemRead, PendingListRead
 
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
@@ -21,6 +22,22 @@ ResolvedPendingStatuses = {
     PendingStatus.DISCARDED,
     PendingStatus.FORCED,
 }
+_DEFAULT_SORT_BY = "created_at"
+_ALLOWED_SORT_FIELDS = {"created_at", "resolved_at", "status", "target_domain"}
+_ALLOWED_SORT_ORDERS = {"asc", "desc"}
+_ALLOWED_STATUSES = {
+    PendingStatus.OPEN,
+    PendingStatus.CONFIRMED,
+    PendingStatus.DISCARDED,
+    PendingStatus.FORCED,
+}
+_ALLOWED_TARGET_DOMAINS = {
+    ParseTargetDomain.EXPENSE,
+    ParseTargetDomain.KNOWLEDGE,
+    ParseTargetDomain.HEALTH,
+    ParseTargetDomain.UNKNOWN,
+}
+_PREVIEW_LENGTH = 120
 
 
 def create_pending(
@@ -40,6 +57,174 @@ def create_pending(
         proposed_payload_json=proposed_payload_json,
         reason=reason,
     )
+
+
+def list_pending_reads(
+    db: Session,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    sort_by: str | None = None,
+    sort_order: str = "desc",
+    status: str | None = None,
+    target_domain: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> PendingListRead:
+    validated_page, validated_page_size = _validate_pagination(page=page, page_size=page_size)
+    validated_sort_by = _validate_sort_by(sort_by, default=_DEFAULT_SORT_BY)
+    validated_sort_order = _validate_sort_order(sort_order)
+    validated_status = _validate_status(status)
+    validated_target_domain = _validate_target_domain(target_domain)
+    _validate_date_range(date_from=date_from, date_to=date_to)
+
+    items, total = repository.list_pending_items(
+        db,
+        page=validated_page,
+        page_size=validated_page_size,
+        sort_by=validated_sort_by,
+        sort_order=validated_sort_order,
+        status=validated_status,
+        target_domain=validated_target_domain,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    next_pending_item = repository.get_oldest_open_pending_item(db)
+    next_pending_item_id = next_pending_item.id if next_pending_item is not None else None
+
+    return PendingListRead(
+        items=[
+            _build_pending_list_item(
+                pending_item,
+                next_pending_item_id=next_pending_item_id,
+            )
+            for pending_item in items
+        ],
+        page=validated_page,
+        page_size=validated_page_size,
+        total=total,
+        next_pending_item_id=next_pending_item_id,
+    )
+
+
+def get_pending_read(db: Session, pending_item_id: int) -> PendingDetailRead:
+    pending_item = _get_pending_item_or_raise(db, pending_item_id)
+    return PendingDetailRead(
+        id=pending_item.id,
+        status=pending_item.status,
+        target_domain=pending_item.target_domain,
+        reason=pending_item.reason,
+        proposed_payload_json=pending_item.proposed_payload_json,
+        corrected_payload_json=pending_item.corrected_payload_json,
+        created_at=pending_item.created_at,
+        resolved_at=pending_item.resolved_at,
+        source_capture_id=pending_item.capture_id,
+        parse_result_id=pending_item.parse_result_id,
+    )
+
+
+def _build_pending_list_item(
+    pending_item: PendingItem,
+    *,
+    next_pending_item_id: int | None,
+) -> PendingListItemRead:
+    return PendingListItemRead(
+        id=pending_item.id,
+        status=pending_item.status,
+        target_domain=pending_item.target_domain,
+        reason_preview=_build_preview(pending_item.reason),
+        created_at=pending_item.created_at,
+        has_corrected_payload=pending_item.corrected_payload_json is not None,
+        source_capture_id=pending_item.capture_id,
+        is_next_to_review=pending_item.id == next_pending_item_id,
+    )
+
+
+def _build_preview(value: str | None) -> str | None:
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return None
+    if len(normalized) <= _PREVIEW_LENGTH:
+        return normalized
+    return normalized[: _PREVIEW_LENGTH - 3].rstrip() + "..."
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(str(value).split())
+    return normalized or None
+
+
+def _validate_pagination(*, page: int, page_size: int) -> tuple[int, int]:
+    if page < 1:
+        raise BadRequestError(
+            message="page must be greater than or equal to 1.",
+            code="INVALID_PAGE",
+        )
+    if page_size < 1 or page_size > 100:
+        raise BadRequestError(
+            message="page_size must be between 1 and 100.",
+            code="INVALID_PAGE_SIZE",
+        )
+    return page, page_size
+
+
+def _validate_sort_by(sort_by: str | None, *, default: str) -> str:
+    if sort_by is None:
+        return default
+    normalized_sort_by = sort_by.strip()
+    if normalized_sort_by not in _ALLOWED_SORT_FIELDS:
+        allowed = ", ".join(sorted(_ALLOWED_SORT_FIELDS))
+        raise BadRequestError(
+            message=f"sort_by must be one of: {allowed}.",
+            code="INVALID_SORT_BY",
+        )
+    return normalized_sort_by
+
+
+def _validate_sort_order(sort_order: str) -> str:
+    normalized_sort_order = sort_order.strip().lower()
+    if normalized_sort_order not in _ALLOWED_SORT_ORDERS:
+        raise BadRequestError(
+            message="sort_order must be either asc or desc.",
+            code="INVALID_SORT_ORDER",
+        )
+    return normalized_sort_order
+
+
+def _validate_status(status: str | None) -> str:
+    normalized_status = _normalize_optional_text(status)
+    if normalized_status is None:
+        return PendingStatus.OPEN
+    if normalized_status not in _ALLOWED_STATUSES:
+        allowed = ", ".join(sorted(_ALLOWED_STATUSES))
+        raise BadRequestError(
+            message=f"status must be one of: {allowed}.",
+            code="INVALID_STATUS",
+        )
+    return normalized_status
+
+
+def _validate_target_domain(target_domain: str | None) -> str | None:
+    normalized_target_domain = _normalize_optional_text(target_domain)
+    if normalized_target_domain is None:
+        return None
+    if normalized_target_domain not in _ALLOWED_TARGET_DOMAINS:
+        allowed = ", ".join(sorted(_ALLOWED_TARGET_DOMAINS))
+        raise BadRequestError(
+            message=f"target_domain must be one of: {allowed}.",
+            code="INVALID_TARGET_DOMAIN",
+        )
+    return normalized_target_domain
+
+
+def _validate_date_range(*, date_from: datetime | None, date_to: datetime | None) -> None:
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise BadRequestError(
+            message="date_from must be earlier than or equal to date_to.",
+            code="INVALID_DATE_RANGE",
+        )
 
 
 def fix_pending_item(

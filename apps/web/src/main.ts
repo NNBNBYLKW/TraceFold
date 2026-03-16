@@ -1,14 +1,19 @@
 import './style.css'
 
 import {
+  fetchDashboard,
   fetchExpenseDetail,
   fetchExpenseList,
   fetchHealthDetail,
   fetchHealthList,
   fetchKnowledgeDetail,
   fetchKnowledgeList,
+  fetchPendingDetail,
+  fetchPendingList,
 } from './api.ts'
 import type {
+  DashboardData,
+  DashboardRecentActivity,
   ExpenseDetail,
   ExpenseListItem,
   HealthDetail,
@@ -16,9 +21,12 @@ import type {
   KnowledgeDetail,
   KnowledgeListItem,
   PaginatedResponse,
+  PendingDetail,
+  PendingListItem,
+  PendingListResponse,
 } from './api.ts'
 
-type NavSection = 'capture' | 'pending' | 'expense' | 'knowledge' | 'health'
+type NavSection = 'dashboard' | 'capture' | 'pending' | 'expense' | 'knowledge' | 'health'
 type SortOrder = 'asc' | 'desc'
 
 interface BaseListQuery {
@@ -28,6 +36,11 @@ interface BaseListQuery {
   sortOrder: SortOrder
   dateFrom: string
   dateTo: string
+}
+
+interface PendingListQuery extends BaseListQuery {
+  status: string
+  targetDomain: string
 }
 
 interface ExpenseListQuery extends BaseListQuery {
@@ -46,8 +59,16 @@ interface HealthListQuery extends BaseListQuery {
 }
 
 type Route =
+  | { kind: 'dashboard'; section: NavSection; pageTitle: string; documentTitle: string }
   | { kind: 'capture'; section: NavSection; pageTitle: string; documentTitle: string }
-  | { kind: 'pending'; section: NavSection; pageTitle: string; documentTitle: string }
+  | { kind: 'pending-list'; section: NavSection; pageTitle: string; documentTitle: string }
+  | {
+      kind: 'pending-detail'
+      section: NavSection
+      pageTitle: string
+      documentTitle: string
+      id: string
+    }
   | { kind: 'expense-list'; section: NavSection; pageTitle: string; documentTitle: string }
   | {
       kind: 'expense-detail'
@@ -122,15 +143,22 @@ function parseRoute(pathname: string): Route {
   const parts = pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean)
 
   if (parts.length === 0) {
-    return { kind: 'redirect', to: '/expense' }
+    return { kind: 'redirect', to: '/dashboard' }
   }
 
   if (parts.length === 1) {
     switch (parts[0]) {
+      case 'dashboard':
+        return {
+          kind: 'dashboard',
+          section: 'dashboard',
+          pageTitle: 'Dashboard',
+          documentTitle: 'Dashboard',
+        }
       case 'capture':
         return { kind: 'capture', section: 'capture', pageTitle: 'Capture', documentTitle: 'Capture' }
       case 'pending':
-        return { kind: 'pending', section: 'pending', pageTitle: 'Pending', documentTitle: 'Pending' }
+        return { kind: 'pending-list', section: 'pending', pageTitle: 'Pending', documentTitle: 'Pending' }
       case 'expense':
         return { kind: 'expense-list', section: 'expense', pageTitle: 'Expenses', documentTitle: 'Expenses' }
       case 'knowledge':
@@ -143,11 +171,20 @@ function parseRoute(pathname: string): Route {
       case 'health':
         return { kind: 'health-list', section: 'health', pageTitle: 'Health', documentTitle: 'Health' }
       default:
-        return { kind: 'redirect', to: '/expense' }
+        return { kind: 'redirect', to: '/dashboard' }
     }
   }
 
   if (parts.length === 2) {
+    if (parts[0] === 'pending') {
+      return {
+        kind: 'pending-detail',
+        section: 'pending',
+        pageTitle: 'Pending Detail',
+        documentTitle: 'Pending Detail',
+        id: parts[1],
+      }
+    }
     if (parts[0] === 'expense') {
       return {
         kind: 'expense-detail',
@@ -177,15 +214,19 @@ function parseRoute(pathname: string): Route {
     }
   }
 
-  return { kind: 'redirect', to: '/expense' }
+  return { kind: 'redirect', to: '/dashboard' }
 }
 
 async function renderRoute(route: Exclude<Route, { kind: 'redirect' }>): Promise<string> {
   switch (route.kind) {
+    case 'dashboard':
+      return renderDashboardPage()
     case 'capture':
       return renderPlaceholderPage(route.pageTitle, 'Capture view is not implemented yet.')
-    case 'pending':
-      return renderPlaceholderPage(route.pageTitle, 'Pending view is not implemented yet.')
+    case 'pending-list':
+      return renderPendingListPage()
+    case 'pending-detail':
+      return renderPendingDetailPage(route.id)
     case 'expense-list':
       return renderExpenseListPage()
     case 'expense-detail':
@@ -198,6 +239,35 @@ async function renderRoute(route: Exclude<Route, { kind: 'redirect' }>): Promise
       return renderHealthListPage()
     case 'health-detail':
       return renderHealthDetailPage(route.id)
+  }
+}
+
+async function renderDashboardPage(): Promise<string> {
+  try {
+    const dashboard = await fetchDashboard()
+    return renderDashboardView(dashboard)
+  } catch (error) {
+    return renderDashboardView(null, toErrorMessage(error))
+  }
+}
+
+async function renderPendingListPage(): Promise<string> {
+  const query = parsePendingListQuery(new URLSearchParams(window.location.search))
+
+  try {
+    const response = await fetchPendingList(buildPendingApiParams(query))
+    return renderPendingListView(query, response)
+  } catch (error) {
+    return renderPendingListView(query, null, toErrorMessage(error))
+  }
+}
+
+async function renderPendingDetailPage(id: string): Promise<string> {
+  try {
+    const detail = await fetchPendingDetail(id)
+    return renderPendingDetailView(detail)
+  } catch (error) {
+    return renderDetailErrorView('Pending Detail', '/pending', 'Pending', toErrorMessage(error))
   }
 }
 
@@ -355,6 +425,7 @@ function renderShell(activeSection: NavSection, content: string): string {
           <span class="brand-caption">Local-first workspace</span>
         </div>
         <nav class="workspace-nav" aria-label="Primary">
+          ${renderNavLink('Dashboard', '/dashboard', activeSection === 'dashboard')}
           ${renderNavLink('Capture', '/capture', activeSection === 'capture')}
           ${renderNavLink('Pending', '/pending', activeSection === 'pending')}
           ${renderNavLink('Expense', '/expense', activeSection === 'expense')}
@@ -397,6 +468,253 @@ function renderPlaceholderPage(title: string, message: string): string {
     </section>
     <section class="panel page-section">
       <p class="placeholder-copy">${escapeHtml(message)}</p>
+    </section>
+  `
+}
+
+function renderDashboardView(dashboard: DashboardData | null, errorMessage?: string): string {
+  return `
+    <section class="page-header">
+      <h1>Dashboard</h1>
+      <p class="page-copy">Workspace overview for pending review, formal records, and recent context.</p>
+    </section>
+    ${
+      errorMessage
+        ? renderErrorState(errorMessage)
+        : dashboard
+          ? `
+              ${renderPendingSummarySection(dashboard)}
+              ${renderQuickLinksSection(dashboard)}
+              ${renderFormalSummariesSection(dashboard)}
+              ${renderRecentActivitySection(dashboard)}
+            `
+          : renderEmptyState('Dashboard data is not available.')
+    }
+  `
+}
+
+function renderPendingSummarySection(dashboard: DashboardData): string {
+  return `
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Pending Summary</h2>
+      </div>
+      <div class="summary-grid">
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Open pending items</h3>
+            <a class="record-action" href="${escapeHtml(dashboard.pending_summary.href)}" data-nav="true">View pending</a>
+          </div>
+          <div class="summary-stack">
+            <p class="summary-value">${dashboard.pending_summary.open_count}</p>
+            <div class="field-grid">
+              ${renderField('Opened in last 7 days', String(dashboard.pending_summary.opened_in_last_7_days))}
+              ${renderField('Resolved in last 7 days', String(dashboard.pending_summary.resolved_in_last_7_days))}
+            </div>
+            <div>
+              <span class="field__label">Open by target domain</span>
+              ${renderDataList(
+                Object.entries(dashboard.pending_summary.open_count_by_target_domain).map(([domain, count]) => ({
+                  label: formatDomainLabel(domain),
+                  value: String(count),
+                })),
+                'No open pending items by domain.',
+              )}
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+  `
+}
+
+function renderQuickLinksSection(dashboard: DashboardData): string {
+  return `
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Quick Links</h2>
+      </div>
+      ${
+        dashboard.quick_links.length > 0
+          ? `
+              <div class="summary-grid">
+                ${dashboard.quick_links
+                  .map(
+                    (link) => `
+                      <a class="quick-link-card" href="${escapeHtml(link.href)}" data-nav="true">
+                        <span class="quick-link-card__label">${escapeHtml(link.label)}</span>
+                        <span class="quick-link-card__meta">Open context</span>
+                      </a>
+                    `,
+                  )
+                  .join('')}
+              </div>
+            `
+          : renderEmptyState('No quick links available.')
+      }
+    </section>
+  `
+}
+
+function renderFormalSummariesSection(dashboard: DashboardData): string {
+  return `
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Expense / Knowledge / Health Summaries</h2>
+      </div>
+      <div class="summary-grid">
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Expense</h3>
+            <a class="record-action" href="${escapeHtml(dashboard.expense_summary.href)}" data-nav="true">View expenses</a>
+          </div>
+          <div class="summary-stack">
+            ${renderField('Created this month', String(dashboard.expense_summary.created_in_current_month))}
+            ${renderField(
+              'Latest expense',
+              dashboard.expense_summary.latest_expense_created_at
+                ? formatDateTime(dashboard.expense_summary.latest_expense_created_at)
+                : null,
+              true,
+            )}
+            <div>
+              <span class="field__label">Amount by currency</span>
+              ${renderDataList(
+                Object.entries(dashboard.expense_summary.amount_by_currency_current_month).map(([currency, amount]) => ({
+                  label: currency,
+                  value: amount,
+                })),
+                'No expense amounts for the current month.',
+              )}
+            </div>
+          </div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Knowledge</h3>
+            <a class="record-action" href="${escapeHtml(dashboard.knowledge_summary.href)}" data-nav="true">View knowledge</a>
+          </div>
+          <div class="summary-stack">
+            <div class="field-grid">
+              ${renderField('Created in last 7 days', String(dashboard.knowledge_summary.created_in_last_7_days))}
+              ${renderField('Created in last 30 days', String(dashboard.knowledge_summary.created_in_last_30_days))}
+            </div>
+            ${renderField(
+              'Latest knowledge entry',
+              dashboard.knowledge_summary.latest_knowledge_created_at
+                ? formatDateTime(dashboard.knowledge_summary.latest_knowledge_created_at)
+                : null,
+              true,
+            )}
+          </div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Health</h3>
+            <a class="record-action" href="${escapeHtml(dashboard.health_summary.href)}" data-nav="true">View health</a>
+          </div>
+          <div class="summary-stack">
+            ${renderField('Created in last 7 days', String(dashboard.health_summary.created_in_last_7_days))}
+            ${renderField(
+              'Latest health record',
+              dashboard.health_summary.latest_health_created_at
+                ? formatDateTime(dashboard.health_summary.latest_health_created_at)
+                : null,
+              true,
+            )}
+            <div>
+              <span class="field__label">Recent metric types</span>
+              ${renderInlineList(
+                dashboard.health_summary.recent_metric_types.map((metricType) => formatDomainLabel(metricType)),
+                'No recent metric types.',
+              )}
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+  `
+}
+
+function renderRecentActivitySection(dashboard: DashboardData): string {
+  return `
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Recent Activity</h2>
+      </div>
+      ${
+        dashboard.recent_activity.length > 0
+          ? renderRecentActivityRecords(dashboard.recent_activity)
+          : renderEmptyState('No recent activity available.')
+      }
+    </section>
+  `
+}
+
+function renderPendingListView(
+  query: PendingListQuery,
+  response: PendingListResponse | null,
+  errorMessage?: string,
+): string {
+  return `
+    <section class="page-header">
+      <h1>Pending</h1>
+      <p class="page-copy">Minimal read view for open and resolved pending items.</p>
+    </section>
+    ${renderPendingFilters(query)}
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>List</h2>
+      </div>
+      ${
+        response?.next_pending_item_id
+          ? `<p class="section-copy">Next to review uses the earliest open pending item rule. Current hint: #${response.next_pending_item_id}.</p>`
+          : ''
+      }
+      ${
+        errorMessage
+          ? renderErrorState(errorMessage)
+          : response && response.items.length > 0
+            ? renderPendingRecords(response.items)
+            : renderEmptyState('No pending items found.')
+      }
+    </section>
+    ${renderPagination('/pending', response?.page ?? query.page, response?.page_size ?? query.pageSize, response?.total ?? 0)}
+  `
+}
+
+function renderPendingDetailView(detail: PendingDetail): string {
+  return `
+    <section class="page-header">
+      <a class="back-link" href="/pending" data-nav="true">Back to Pending</a>
+      <h1>Pending Detail</h1>
+    </section>
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Detail</h2>
+      </div>
+      <div class="field-grid">
+        ${renderField('ID', String(detail.id))}
+        ${renderField('Status', formatStatusLabel(detail.status))}
+        ${renderField('Target Domain', formatDomainLabel(detail.target_domain))}
+        ${renderField('Created At', formatDateTime(detail.created_at))}
+        ${renderField('Resolved At', detail.resolved_at ? formatDateTime(detail.resolved_at) : null)}
+        ${renderField('source_capture_id', String(detail.source_capture_id))}
+        ${renderField('parse_result_id', String(detail.parse_result_id))}
+        ${renderField('Reason', detail.reason, true)}
+      </div>
+    </section>
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Proposed Payload</h2>
+      </div>
+      ${renderTextBlock(formatJson(detail.proposed_payload_json))}
+    </section>
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Corrected Payload</h2>
+      </div>
+      ${renderTextBlock(formatJson(detail.corrected_payload_json))}
     </section>
   `
 }
@@ -571,6 +889,44 @@ function renderDetailErrorView(title: string, backPath: string, backLabel: strin
   `
 }
 
+function renderPendingFilters(query: PendingListQuery): string {
+  return renderFilterSection(
+    '/pending',
+    `
+      ${renderDateInput('date_from', 'Date From', query.dateFrom)}
+      ${renderDateInput('date_to', 'Date To', query.dateTo)}
+      ${renderSelectInput('status', 'Status', query.status, [
+        ['open', 'open'],
+        ['confirmed', 'confirmed'],
+        ['discarded', 'discarded'],
+        ['forced', 'forced'],
+      ])}
+      ${renderSelectInput('target_domain', 'Target Domain', query.targetDomain, [
+        ['', 'All'],
+        ['expense', 'expense'],
+        ['knowledge', 'knowledge'],
+        ['health', 'health'],
+        ['unknown', 'unknown'],
+      ])}
+      ${renderSelectInput('sort_by', 'Sort By', query.sortBy, [
+        ['created_at', 'created_at'],
+        ['resolved_at', 'resolved_at'],
+        ['status', 'status'],
+        ['target_domain', 'target_domain'],
+      ])}
+      ${renderSelectInput('sort_order', 'Sort Order', query.sortOrder, [
+        ['desc', 'desc'],
+        ['asc', 'asc'],
+      ])}
+      ${renderSelectInput('page_size', 'Page Size', String(query.pageSize), [
+        ['20', '20'],
+        ['50', '50'],
+        ['100', '100'],
+      ])}
+    `,
+  )
+}
+
 function renderExpenseFilters(query: ExpenseListQuery): string {
   return renderFilterSection(
     '/expense',
@@ -669,6 +1025,35 @@ function renderFilterSection(path: string, controls: string): string {
   `
 }
 
+function renderPendingRecords(items: PendingListItem[]): string {
+  return items
+    .map(
+      (item) => `
+        <article class="record-card${item.is_next_to_review ? ' record-card--priority' : ''}">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>Pending #${item.id}</h3>
+              <span class="record-meta">${escapeHtml(formatDateTime(item.created_at))}</span>
+            </div>
+            <a class="record-action" href="/pending/${item.id}" data-nav="true">Open</a>
+          </div>
+          <div class="record-badges">
+            ${renderBadge(formatStatusLabel(item.status))}
+            ${renderBadge(formatDomainLabel(item.target_domain), true)}
+            ${item.has_corrected_payload ? renderBadge('Has corrected payload') : ''}
+            ${item.is_next_to_review ? renderBadge('Next to review') : ''}
+          </div>
+          <div class="field-grid">
+            ${renderField('Reason Preview', item.reason_preview, true)}
+            ${renderField('source_capture_id', String(item.source_capture_id))}
+            ${renderField('Has Corrected Payload', formatBoolean(item.has_corrected_payload))}
+          </div>
+        </article>
+      `,
+    )
+    .join('')
+}
+
 function renderExpenseRecords(items: ExpenseListItem[]): string {
   return items
     .map(
@@ -736,6 +1121,68 @@ function renderHealthRecords(items: HealthListItem[]): string {
       `,
     )
     .join('')
+}
+
+function renderRecentActivityRecords(items: DashboardRecentActivity[]): string {
+  return `
+    <div class="activity-list">
+      ${items
+        .map(
+          (item) => `
+            <article class="activity-card">
+              <div class="activity-card__body">
+                <div class="activity-card__meta">
+                  <span>${escapeHtml(formatDateTime(item.occurred_at))}</span>
+                  <span>${escapeHtml(formatDomainLabel(item.target_domain))}</span>
+                  <span>${escapeHtml(item.activity_type)}</span>
+                </div>
+                <p class="activity-card__target">${escapeHtml(item.title_or_preview || 'No preview available.')}</p>
+                <p class="section-copy">Target #${item.target_id}</p>
+              </div>
+              <a class="record-action" href="${escapeHtml(item.href)}" data-nav="true">${escapeHtml(item.action_label)}</a>
+            </article>
+          `,
+        )
+        .join('')}
+    </div>
+  `
+}
+
+function renderDataList(items: Array<{ label: string; value: string }>, emptyMessage: string): string {
+  if (items.length === 0) {
+    return `<p class="section-copy">${escapeHtml(emptyMessage)}</p>`
+  }
+
+  return `
+    <ul class="data-list">
+      ${items
+        .map(
+          (item) => `
+            <li class="data-list__item">
+              <span>${escapeHtml(item.label)}</span>
+              <strong>${escapeHtml(item.value)}</strong>
+            </li>
+          `,
+        )
+        .join('')}
+    </ul>
+  `
+}
+
+function renderInlineList(items: string[], emptyMessage: string): string {
+  if (items.length === 0) {
+    return `<p class="section-copy">${escapeHtml(emptyMessage)}</p>`
+  }
+
+  return `
+    <div class="inline-list">
+      ${items.map((item) => renderBadge(item, true)).join('')}
+    </div>
+  `
+}
+
+function renderBadge(label: string, muted = false): string {
+  return `<span class="badge${muted ? ' is-muted' : ''}">${escapeHtml(label)}</span>`
 }
 
 function renderPagination(path: string, page: number, pageSize: number, total: number): string {
@@ -872,6 +1319,19 @@ function renderSelectInput(
   `
 }
 
+function parsePendingListQuery(params: URLSearchParams): PendingListQuery {
+  return {
+    page: parsePositiveInt(params.get('page'), 1),
+    pageSize: parsePageSize(params.get('page_size')),
+    sortBy: parseSortBy(params.get('sort_by'), ['created_at', 'resolved_at', 'status', 'target_domain'], 'created_at'),
+    sortOrder: parseSortOrder(params.get('sort_order')),
+    dateFrom: params.get('date_from') ?? '',
+    dateTo: params.get('date_to') ?? '',
+    status: parseOption(params.get('status'), ['open', 'confirmed', 'discarded', 'forced'], 'open'),
+    targetDomain: parseOption(params.get('target_domain'), ['expense', 'knowledge', 'health', 'unknown'], ''),
+  }
+}
+
 function parseExpenseListQuery(params: URLSearchParams): ExpenseListQuery {
   return {
     page: parsePositiveInt(params.get('page'), 1),
@@ -910,6 +1370,19 @@ function parseHealthListQuery(params: URLSearchParams): HealthListQuery {
     dateTo: params.get('date_to') ?? '',
     metricType: params.get('metric_type') ?? '',
     keyword: params.get('keyword') ?? '',
+  }
+}
+
+function buildPendingApiParams(query: PendingListQuery): Record<string, string> {
+  return {
+    page: String(query.page),
+    page_size: String(query.pageSize),
+    sort_by: query.sortBy,
+    sort_order: query.sortOrder,
+    status: query.status,
+    target_domain: query.targetDomain,
+    date_from: toDateTimeStart(query.dateFrom),
+    date_to: toDateTimeEnd(query.dateTo),
   }
 }
 
@@ -976,6 +1449,10 @@ function parseSortOrder(value: string | null): SortOrder {
   return value === 'asc' ? 'asc' : 'desc'
 }
 
+function parseOption(value: string | null, allowed: string[], fallback: string): string {
+  return value && allowed.includes(value) ? value : fallback
+}
+
 function toDateTimeStart(value: string): string {
   return value ? `${value}T00:00:00` : ''
 }
@@ -999,6 +1476,31 @@ function formatDateTime(value: string): string {
 
 function formatBoolean(value: boolean): string {
   return value ? 'Yes' : 'No'
+}
+
+function formatStatusLabel(value: string): string {
+  return value
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function formatDomainLabel(value: string): string {
+  return value
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function formatJson(value: unknown): string {
+  if (value === undefined) {
+    return '—'
+  }
+  try {
+    return JSON.stringify(value, null, 2) ?? '—'
+  } catch {
+    return String(value)
+  }
 }
 
 function escapeHtml(value: string): string {

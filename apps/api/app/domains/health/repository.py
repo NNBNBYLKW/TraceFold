@@ -51,3 +51,46 @@ def list_health_records(
         .all()
     )
     return items, total
+
+
+def count_health_records_created_since(
+    db: Session,
+    *,
+    created_from: datetime,
+) -> int:
+    return db.query(HealthRecord).filter(HealthRecord.created_at >= created_from).count()
+
+
+def list_recent_health_records(
+    db: Session,
+    *,
+    limit: int,
+) -> list[HealthRecord]:
+    return (
+        db.query(HealthRecord)
+        .order_by(HealthRecord.created_at.desc(), HealthRecord.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def list_recent_metric_types(
+    db: Session,
+    *,
+    limit: int,
+) -> list[str]:
+    rows = (
+        db.query(
+            HealthRecord.metric_type,
+            func.max(HealthRecord.created_at).label("latest_created_at"),
+            func.max(HealthRecord.id).label("latest_id"),
+        )
+        .group_by(HealthRecord.metric_type)
+        .order_by(
+            func.max(HealthRecord.created_at).desc(),
+            func.max(HealthRecord.id).desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+    return [str(row[0]) for row in rows]

@@ -1,3 +1,48 @@
-from fastapi import APIRouter
+from __future__ import annotations
+
+from datetime import datetime
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.core.responses import ApiResponse, success_response
+from app.db.session import get_db
+from app.domains.pending import service
+from app.domains.pending.schemas import PendingDetailRead, PendingListRead
 
 router = APIRouter()
+
+
+@router.get("", response_model=ApiResponse[PendingListRead])
+def list_pending_items(
+    page: int = 1,
+    page_size: int = 20,
+    sort_by: str | None = None,
+    sort_order: str = "desc",
+    status: str | None = None,
+    target_domain: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    db: Session = Depends(get_db),
+) -> ApiResponse[PendingListRead]:
+    result = service.list_pending_reads(
+        db,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        status=status,
+        target_domain=target_domain,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return success_response(data=result, message="Pending items fetched.")
+
+
+@router.get("/{pending_item_id}", response_model=ApiResponse[PendingDetailRead])
+def get_pending_item(
+    pending_item_id: int,
+    db: Session = Depends(get_db),
+) -> ApiResponse[PendingDetailRead]:
+    result = service.get_pending_read(db, pending_item_id)
+    return success_response(data=result, message="Pending item fetched.")

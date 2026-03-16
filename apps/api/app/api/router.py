@@ -5,6 +5,7 @@ from app.api.system import router as system_router
 from fastapi import APIRouter
 
 from app.domains.capture.router import router as capture_router
+from app.domains.dashboard.router import router as dashboard_router
 from app.domains.expense.router import router as expense_router
 from app.domains.health.router import router as health_router
 from app.domains.knowledge.router import router as knowledge_router
@@ -15,6 +16,12 @@ from app.domains.system_tasks.router import router as system_tasks_router
 api_router = APIRouter()
 
 api_router.include_router(system_router)
+
+api_router.include_router(
+    dashboard_router,
+    prefix="/dashboard",
+    tags=["dashboard"],
+)
 
 api_router.include_router(
     capture_router,
