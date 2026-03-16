@@ -49,6 +49,26 @@ class HealthSummaryRead(BaseModel):
     href: str
 
 
+class AlertSummaryItemRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    source_record_id: int
+    severity: str
+    title: str
+    message: str
+    triggered_at: datetime
+    href: str
+
+
+class AlertSummaryRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    open_count: int
+    recent_open_items: list[AlertSummaryItemRead]
+    href: str
+
+
 class RecentActivityRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -65,6 +85,7 @@ class DashboardRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pending_summary: PendingSummaryRead
+    alert_summary: AlertSummaryRead
     quick_links: list[QuickLinkRead]
     expense_summary: ExpenseSummaryRead
     knowledge_summary: KnowledgeSummaryRead

@@ -23,6 +23,8 @@ from app.main import app
 
 @pytest.fixture
 def db(tmp_path: Path) -> Generator[Session, None, None]:
+    import app.domains.alerts.models  # noqa: F401
+    import app.domains.ai_derivations.models  # noqa: F401
     import app.domains.capture.models  # noqa: F401
     import app.domains.expense.models  # noqa: F401
     import app.domains.health.models  # noqa: F401

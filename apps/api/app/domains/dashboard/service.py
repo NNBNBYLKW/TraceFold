@@ -6,7 +6,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.domains.alerts import repository as alerts_repository
+from app.domains.alerts.models import AlertResult, AlertStatus
 from app.domains.dashboard.schemas import (
+    AlertSummaryItemRead,
+    AlertSummaryRead,
     DashboardRead,
     ExpenseSummaryRead,
     HealthSummaryRead,
@@ -29,8 +33,10 @@ _PENDING_HREF = "/pending"
 _EXPENSE_HREF = "/expense"
 _KNOWLEDGE_HREF = "/knowledge"
 _HEALTH_HREF = "/health"
+_HEALTH_ALERTS_HREF = "/health?focus=alerts"
 _RECENT_ACTIVITY_LIMIT = 10
 _RECENT_METRIC_TYPES_LIMIT = 5
+_RECENT_ALERTS_LIMIT = 5
 _PREVIEW_LENGTH = 120
 
 _FORMAL_ACTIVITY_TYPE = "formal_record_created"
@@ -88,6 +94,23 @@ def get_dashboard_read(
                 resolved_only=True,
             ),
             href=_PENDING_HREF,
+        ),
+        alert_summary=AlertSummaryRead(
+            open_count=alerts_repository.count_alert_results(
+                db,
+                source_domain="health",
+                status=AlertStatus.OPEN,
+            ),
+            recent_open_items=[
+                _build_alert_summary_item(result)
+                for result in alerts_repository.list_alert_results(
+                    db,
+                    source_domain="health",
+                    status=AlertStatus.OPEN,
+                    limit=_RECENT_ALERTS_LIMIT,
+                )
+            ],
+            href=_HEALTH_ALERTS_HREF,
         ),
         quick_links=list(_QUICK_LINKS),
         expense_summary=ExpenseSummaryRead(
@@ -203,6 +226,18 @@ def _build_pending_action_activity(
         title_or_preview=_build_pending_action_preview(action, pending_item.target_domain),
         action_label=_PENDING_ACTION_LABELS.get(action.action_type, "Reviewed pending item"),
         href=_PENDING_HREF,
+    )
+
+
+def _build_alert_summary_item(result: AlertResult) -> AlertSummaryItemRead:
+    return AlertSummaryItemRead(
+        id=result.id,
+        source_record_id=result.source_record_id,
+        severity=result.severity,
+        title=result.title,
+        message=result.message,
+        triggered_at=result.triggered_at,
+        href=f"{_HEALTH_HREF}/{result.source_record_id}",
     )
 
 

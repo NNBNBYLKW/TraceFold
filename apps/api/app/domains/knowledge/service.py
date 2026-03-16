@@ -5,6 +5,11 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, NotFoundError
+from app.domains.ai_derivations.schemas import AiDerivationResultListRead
+from app.domains.knowledge.ai_summary import (
+    rerun_knowledge_summary_for_entry,
+    run_knowledge_summary_on_entry_create,
+)
 from app.domains.knowledge import repository
 from app.domains.knowledge.models import KnowledgeEntry
 from app.domains.knowledge.schemas import KnowledgeDetailRead, KnowledgeListItemRead, KnowledgeListRead
@@ -33,6 +38,7 @@ def create_knowledge_entry(
     )
     db.add(entry)
     db.flush()
+    run_knowledge_summary_on_entry_create(db, knowledge_entry=entry)
     return entry
 
 
@@ -90,6 +96,27 @@ def get_knowledge_read(db: Session, knowledge_id: int) -> KnowledgeDetailRead:
     )
 
 
+def rerun_knowledge_summary(
+    db: Session,
+    *,
+    knowledge_id: int,
+) -> AiDerivationResultListRead:
+    try:
+        entry = repository.get_knowledge_entry_by_id(db, knowledge_id)
+        if entry is None:
+            raise NotFoundError(
+                message=f"Knowledge entry {knowledge_id} was not found.",
+                code="KNOWLEDGE_NOT_FOUND",
+            )
+
+        rerun_knowledge_summary_for_entry(db, knowledge_entry=entry)
+        db.commit()
+        return _build_ai_derivation_result_list_read(db, knowledge_id=entry.id)
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _build_knowledge_list_item(entry: KnowledgeEntry) -> KnowledgeListItemRead:
     return KnowledgeListItemRead(
         id=entry.id,
@@ -98,6 +125,20 @@ def _build_knowledge_list_item(entry: KnowledgeEntry) -> KnowledgeListItemRead:
         content_preview=_build_preview(entry.content),
         has_source_text=_normalize_optional_text(entry.source_text) is not None,
         has_source_pending=entry.source_pending_id is not None,
+    )
+
+
+def _build_ai_derivation_result_list_read(
+    db: Session,
+    *,
+    knowledge_id: int,
+) -> AiDerivationResultListRead:
+    from app.domains.ai_derivations.service import list_ai_derivation_reads
+
+    return list_ai_derivation_reads(
+        db,
+        target_domain="knowledge",
+        target_record_id=knowledge_id,
     )
 
 

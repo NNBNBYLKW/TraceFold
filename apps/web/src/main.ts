@@ -1,6 +1,9 @@
 import './style.css'
 
 import {
+  fetchAiDerivationList,
+  dismissAlert,
+  fetchAlertList,
   fetchDashboard,
   fetchExpenseDetail,
   fetchExpenseList,
@@ -8,10 +11,15 @@ import {
   fetchHealthList,
   fetchKnowledgeDetail,
   fetchKnowledgeList,
+  markAlertViewed,
   fetchPendingDetail,
   fetchPendingList,
+  rerunHealthAiSummary,
+  rerunKnowledgeAiSummary,
 } from './api.ts'
 import type {
+  AlertResultItem,
+  AiDerivationResultItem,
   DashboardData,
   DashboardRecentActivity,
   ExpenseDetail,
@@ -56,6 +64,7 @@ interface KnowledgeListQuery extends BaseListQuery {
 interface HealthListQuery extends BaseListQuery {
   metricType: string
   keyword: string
+  focusAlerts: boolean
 }
 
 type Route =
@@ -303,38 +312,88 @@ async function renderKnowledgeListPage(): Promise<string> {
 }
 
 async function renderKnowledgeDetailPage(id: string): Promise<string> {
-  try {
-    const detail = await fetchKnowledgeDetail(id)
-    return renderKnowledgeDetailView(detail)
-  } catch (error) {
-    return renderDetailErrorView('Knowledge Detail', '/knowledge', 'Knowledge', toErrorMessage(error))
+  const [detailResult, aiResult] = await Promise.allSettled([
+    fetchKnowledgeDetail(id),
+    fetchAiDerivationList({ target_domain: 'knowledge', target_record_id: id }),
+  ])
+
+  if (detailResult.status === 'rejected') {
+    return renderDetailErrorView('Knowledge Detail', '/knowledge', 'Knowledge', toErrorMessage(detailResult.reason))
   }
+
+  return renderKnowledgeDetailView(
+    detailResult.value,
+    aiResult.status === 'fulfilled' ? getKnowledgeSummaryDerivation(aiResult.value.items) : null,
+    aiResult.status === 'rejected' ? toErrorMessage(aiResult.reason) : undefined,
+  )
 }
 
 async function renderHealthListPage(): Promise<string> {
   const query = parseHealthListQuery(new URLSearchParams(window.location.search))
 
-  try {
-    const response = await fetchHealthList(buildHealthApiParams(query))
-    return renderHealthListView(query, response)
-  } catch (error) {
-    return renderHealthListView(query, null, toErrorMessage(error))
-  }
+  const [healthResult, alertResult] = await Promise.allSettled([
+    fetchHealthList(buildHealthApiParams(query)),
+    fetchAlertList({ source_domain: 'health' }),
+  ])
+
+  return renderHealthListView(
+    query,
+    healthResult.status === 'fulfilled' ? healthResult.value : null,
+    alertResult.status === 'fulfilled' ? alertResult.value.items : [],
+    healthResult.status === 'rejected' ? toErrorMessage(healthResult.reason) : undefined,
+    alertResult.status === 'rejected' ? toErrorMessage(alertResult.reason) : undefined,
+  )
 }
 
 async function renderHealthDetailPage(id: string): Promise<string> {
-  try {
-    const detail = await fetchHealthDetail(id)
-    return renderHealthDetailView(detail)
-  } catch (error) {
-    return renderDetailErrorView('Health Detail', '/health', 'Health', toErrorMessage(error))
+  const [detailResult, alertResult, aiResult] = await Promise.allSettled([
+    fetchHealthDetail(id),
+    fetchAlertList({ source_domain: 'health', source_record_id: id }),
+    fetchAiDerivationList({ target_domain: 'health', target_record_id: id }),
+  ])
+
+  if (detailResult.status === 'rejected') {
+    return renderDetailErrorView('Health Detail', '/health', 'Health', toErrorMessage(detailResult.reason))
   }
+
+  return renderHealthDetailView(
+    detailResult.value,
+    alertResult.status === 'fulfilled' ? alertResult.value.items : [],
+    aiResult.status === 'fulfilled' ? getHealthSummaryDerivation(aiResult.value.items) : null,
+    alertResult.status === 'rejected' ? toErrorMessage(alertResult.reason) : undefined,
+    aiResult.status === 'rejected' ? toErrorMessage(aiResult.reason) : undefined,
+  )
 }
 
 function handleClick(event: MouseEvent): void {
   const target = event.target instanceof Element ? event.target : null
 
   if (!target) {
+    return
+  }
+
+  const aiActionButton = target.closest<HTMLButtonElement>('[data-ai-action]')
+  if (aiActionButton) {
+    const action = aiActionButton.dataset.aiAction
+    const recordId = Number.parseInt(aiActionButton.dataset.recordId || '', 10)
+    if (
+      (action === 'rerun-health-summary' || action === 'rerun-knowledge-summary') &&
+      Number.isFinite(recordId)
+    ) {
+      event.preventDefault()
+      void handleAiDerivationAction(recordId, action)
+    }
+    return
+  }
+
+  const alertActionButton = target.closest<HTMLButtonElement>('[data-alert-action]')
+  if (alertActionButton) {
+    const action = alertActionButton.dataset.alertAction
+    const alertId = Number.parseInt(alertActionButton.dataset.alertId || '', 10)
+    if ((action === 'viewed' || action === 'dismissed') && Number.isFinite(alertId)) {
+      event.preventDefault()
+      void handleAlertAction(alertId, action)
+    }
     return
   }
 
@@ -472,6 +531,35 @@ function renderPlaceholderPage(title: string, message: string): string {
   `
 }
 
+async function handleAiDerivationAction(
+  recordId: number,
+  action: 'rerun-health-summary' | 'rerun-knowledge-summary',
+): Promise<void> {
+  try {
+    if (action === 'rerun-health-summary') {
+      await rerunHealthAiSummary(recordId)
+    } else {
+      await rerunKnowledgeAiSummary(recordId)
+    }
+    await renderApp()
+  } catch (error) {
+    window.alert(toErrorMessage(error))
+  }
+}
+
+async function handleAlertAction(alertId: number, action: 'viewed' | 'dismissed'): Promise<void> {
+  try {
+    if (action === 'viewed') {
+      await markAlertViewed(alertId)
+    } else {
+      await dismissAlert(alertId)
+    }
+    await renderApp()
+  } catch (error) {
+    window.alert(toErrorMessage(error))
+  }
+}
+
 function renderDashboardView(dashboard: DashboardData | null, errorMessage?: string): string {
   return `
     <section class="page-header">
@@ -484,12 +572,59 @@ function renderDashboardView(dashboard: DashboardData | null, errorMessage?: str
         : dashboard
           ? `
               ${renderPendingSummarySection(dashboard)}
+              ${renderAlertSummarySection(dashboard)}
               ${renderQuickLinksSection(dashboard)}
               ${renderFormalSummariesSection(dashboard)}
               ${renderRecentActivitySection(dashboard)}
             `
           : renderEmptyState('Dashboard data is not available.')
     }
+  `
+}
+
+function renderAlertSummarySection(dashboard: DashboardData): string {
+  return `
+    <section class="panel page-section">
+      <div class="section-header">
+        <h2>Rule Alerts</h2>
+      </div>
+      <div class="summary-grid">
+        <article class="summary-card summary-card--alert">
+          <div class="summary-card__header">
+            <h3>Open health alerts</h3>
+            <a class="record-action" href="${escapeHtml(dashboard.alert_summary.href)}" data-nav="true">View alerts</a>
+          </div>
+          <div class="summary-stack">
+            <p class="summary-value">${dashboard.alert_summary.open_count}</p>
+            ${
+              dashboard.alert_summary.recent_open_items.length > 0
+                ? `
+                    <div class="alert-summary-list">
+                      ${dashboard.alert_summary.recent_open_items
+                        .map(
+                          (item) => `
+                            <article class="alert-summary-item">
+                              <div class="record-badges">
+                                ${renderSeverityBadge(item.severity)}
+                              </div>
+                              <p class="alert-summary-item__title">${escapeHtml(item.title)}</p>
+                              <p class="section-copy">${escapeHtml(item.message)}</p>
+                              <div class="alert-summary-item__footer">
+                                <span class="record-meta">${escapeHtml(formatDateTime(item.triggered_at))}</span>
+                                <a class="record-action" href="${escapeHtml(item.href)}" data-nav="true">Open record</a>
+                              </div>
+                            </article>
+                          `,
+                        )
+                        .join('')}
+                    </div>
+                  `
+                : '<p class="section-copy">No open rule alerts.</p>'
+            }
+          </div>
+        </article>
+      </div>
+    </section>
   `
 }
 
@@ -779,16 +914,14 @@ function renderKnowledgeListView(
 function renderHealthListView(
   query: HealthListQuery,
   response: PaginatedResponse<HealthListItem> | null,
+  alerts: AlertResultItem[],
   errorMessage?: string,
+  alertsErrorMessage?: string,
 ): string {
-  return `
-    <section class="page-header">
-      <h1>Health</h1>
-    </section>
-    ${renderHealthFilters(query)}
+  const factsSection = `
     <section class="panel page-section">
       <div class="section-header">
-        <h2>List</h2>
+        <h2>Formal Records</h2>
       </div>
       ${
         errorMessage
@@ -798,6 +931,24 @@ function renderHealthListView(
             : renderEmptyState('No health records found.')
       }
     </section>
+  `
+  const alertsSection = renderHealthAlertSection(
+    alerts,
+    alertsErrorMessage,
+    {
+      heading: 'Rule Alerts',
+      emptyMessage: 'No rule alerts for health records.',
+      emphasize: query.focusAlerts,
+    },
+  )
+
+  return `
+    <section class="page-header">
+      <h1>Health</h1>
+    </section>
+    ${renderHealthFilters(query)}
+    ${factsSection}
+    ${alertsSection}
     ${renderPagination('/health', response?.page ?? query.page, response?.page_size ?? query.pageSize, response?.total ?? 0)}
   `
 }
@@ -825,7 +976,11 @@ function renderExpenseDetailView(detail: ExpenseDetail): string {
   `
 }
 
-function renderKnowledgeDetailView(detail: KnowledgeDetail): string {
+function renderKnowledgeDetailView(
+  detail: KnowledgeDetail,
+  aiSummary: AiDerivationResultItem | null,
+  aiErrorMessage?: string,
+): string {
   return `
     <section class="page-header">
       <a class="back-link" href="/knowledge" data-nav="true">Back to Knowledge</a>
@@ -833,31 +988,35 @@ function renderKnowledgeDetailView(detail: KnowledgeDetail): string {
     </section>
     <section class="panel page-section">
       <div class="section-header">
-        <h2>Detail</h2>
-      </div>
-      <div class="field-grid">
-        ${renderField('ID', String(detail.id))}
-        ${renderField('Created At', formatDateTime(detail.created_at))}
-        ${renderField('Title', detail.title)}
-      </div>
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
         <h2>Content</h2>
       </div>
-      ${renderTextBlock(detail.content)}
+      <div class="field-grid">
+        ${renderField('Created At', formatDateTime(detail.created_at))}
+        ${renderField('Title', detail.title, true)}
+        ${renderField('Content', detail.content, true)}
+      </div>
     </section>
     <section class="panel page-section">
       <div class="section-header">
-        <h2>Source Text</h2>
+        <h2>Source</h2>
       </div>
-      ${renderTextBlock(detail.source_text)}
+      <div class="field-grid">
+        ${renderField('source_capture_id', String(detail.source_capture_id))}
+        ${renderField('source_pending_id', detail.source_pending_id === null ? null : String(detail.source_pending_id))}
+        ${renderField('source_text', detail.source_text, true)}
+      </div>
     </section>
-    ${renderSourceSection(detail.source_capture_id, detail.source_pending_id)}
+    ${renderKnowledgeAiSummarySection(detail.id, aiSummary, aiErrorMessage)}
   `
 }
 
-function renderHealthDetailView(detail: HealthDetail): string {
+function renderHealthDetailView(
+  detail: HealthDetail,
+  alerts: AlertResultItem[],
+  aiSummary: AiDerivationResultItem | null,
+  alertsErrorMessage?: string,
+  aiErrorMessage?: string,
+): string {
   return `
     <section class="page-header">
       <a class="back-link" href="/health" data-nav="true">Back to Health</a>
@@ -875,7 +1034,13 @@ function renderHealthDetailView(detail: HealthDetail): string {
         ${renderField('Note', detail.note, true)}
       </div>
     </section>
+    ${renderHealthAlertSection(alerts, alertsErrorMessage, {
+      heading: 'Rule Alerts',
+      emptyMessage: 'No rule alerts for this health record.',
+      sourceRecordId: detail.id,
+    })}
     ${renderSourceSection(detail.source_capture_id, detail.source_pending_id)}
+    ${renderHealthAiSummarySection(detail.id, aiSummary, aiErrorMessage)}
   `
 }
 
@@ -1123,6 +1288,232 @@ function renderHealthRecords(items: HealthListItem[]): string {
     .join('')
 }
 
+function renderHealthAlertSection(
+  alerts: AlertResultItem[],
+  errorMessage: string | undefined,
+  options: {
+    heading: string
+    emptyMessage: string
+    sourceRecordId?: number
+    emphasize?: boolean
+  },
+): string {
+  const filteredAlerts =
+    typeof options.sourceRecordId === 'number'
+      ? alerts.filter((item) => item.source_record_id === options.sourceRecordId)
+      : alerts
+
+  return `
+    <section class="panel page-section${options.emphasize ? ' page-section--alert-focus' : ''}" id="health-alerts">
+      <div class="section-header">
+        <h2>${escapeHtml(options.heading)}</h2>
+      </div>
+      ${
+        errorMessage
+          ? renderErrorState(errorMessage)
+          : filteredAlerts.length > 0
+            ? renderAlertRecords(filteredAlerts)
+            : renderEmptyState(options.emptyMessage)
+      }
+    </section>
+  `
+}
+
+function renderHealthAiSummarySection(
+  healthId: number,
+  aiSummary: AiDerivationResultItem | null,
+  errorMessage?: string,
+): string {
+  return `
+    <section class="panel page-section page-section--ai">
+      <div class="section-header section-header--with-badge">
+        <h2>AI Summary</h2>
+        ${renderAiLabelBadge()}
+      </div>
+      ${
+        errorMessage
+          ? renderErrorState(errorMessage)
+          : aiSummary
+            ? renderHealthAiSummaryContent(aiSummary, healthId)
+            : `
+                <div class="status-panel is-empty">
+                  <p class="status-copy">AI Summary is only available for subjective health records.</p>
+                  <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
+                    Generate AI Summary
+                  </button>
+                </div>
+              `
+      }
+    </section>
+  `
+}
+
+function renderKnowledgeAiSummarySection(
+  knowledgeId: number,
+  aiSummary: AiDerivationResultItem | null,
+  errorMessage?: string,
+): string {
+  return `
+    <section class="panel page-section page-section--ai">
+      <div class="section-header section-header--with-badge">
+        <h2>AI Summary</h2>
+        ${renderAiLabelBadge()}
+      </div>
+      ${
+        errorMessage
+          ? renderErrorState(errorMessage)
+          : aiSummary
+            ? renderKnowledgeAiSummaryContent(aiSummary, knowledgeId)
+            : `
+                <div class="status-panel is-empty">
+                  <p class="status-copy">AI Summary is not available for this knowledge entry yet.</p>
+                  <button class="secondary-button" type="button" data-ai-action="rerun-knowledge-summary" data-record-id="${knowledgeId}">
+                    Generate AI Summary
+                  </button>
+                </div>
+              `
+      }
+    </section>
+  `
+}
+
+function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthId: number): string {
+  const content = asHealthSummaryContent(aiSummary.content_json)
+  const summaryText = content?.summary ?? null
+  const observations = content?.observations ?? []
+  const suggestedFollowUp = content?.suggested_follow_up ?? null
+  const careLevelNote = content?.care_level_note ?? null
+
+  return `
+    <article class="record-card record-card--ai">
+      <div class="record-card__header">
+        <div class="record-card__title-group">
+          <h3>Supportive interpretation</h3>
+          <span class="record-meta">${escapeHtml(formatDateTime(aiSummary.generated_at || aiSummary.created_at))}</span>
+        </div>
+        <div class="record-badges">
+          ${renderAiStatusBadge(aiSummary.status)}
+        </div>
+      </div>
+      ${
+        aiSummary.status === 'failed'
+          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI summary generation failed.')}</p>`
+          : aiSummary.status === 'pending'
+            ? '<p class="section-copy">AI summary generation is in progress.</p>'
+            : `
+                <div class="field-grid">
+                  ${renderField('Summary', summaryText, true)}
+                  ${renderField('Suggested Follow-up', suggestedFollowUp, true)}
+                  ${renderField('Care Level Note', careLevelNote, true)}
+                </div>
+                <section class="subsection">
+                  <h3>Observations</h3>
+                  ${renderDataList(
+                    observations.map((item, index) => ({ label: `Observation ${index + 1}`, value: item })),
+                    'No observations available.',
+                  )}
+                </section>
+              `
+      }
+      <div class="alert-actions">
+        <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
+          Rerun AI Summary
+        </button>
+      </div>
+    </article>
+  `
+}
+
+function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem, knowledgeId: number): string {
+  const content = asKnowledgeSummaryContent(aiSummary.content_json)
+  const summaryText = content?.summary ?? null
+  const keyPoints = content?.key_points ?? []
+  const keywords = content?.keywords ?? []
+
+  return `
+    <article class="record-card record-card--ai">
+      <div class="record-card__header">
+        <div class="record-card__title-group">
+          <h3>Supportive interpretation</h3>
+          <span class="record-meta">${escapeHtml(formatDateTime(aiSummary.generated_at || aiSummary.created_at))}</span>
+        </div>
+        <div class="record-badges">
+          ${renderAiStatusBadge(aiSummary.status)}
+        </div>
+      </div>
+      ${
+        aiSummary.status === 'failed'
+          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI summary generation failed.')}</p>`
+          : aiSummary.status === 'pending'
+            ? '<p class="section-copy">AI summary generation is in progress.</p>'
+            : `
+                <div class="field-grid">
+                  ${renderField('Summary', summaryText, true)}
+                </div>
+                <section class="subsection">
+                  <h3>Key Points</h3>
+                  ${renderDataList(
+                    keyPoints.map((item, index) => ({ label: `Point ${index + 1}`, value: item })),
+                    'No key points available.',
+                  )}
+                </section>
+                <section class="subsection">
+                  <h3>Keywords</h3>
+                  ${renderInlineList(keywords, 'No keywords available.')}
+                </section>
+              `
+      }
+      <div class="alert-actions">
+        <button class="secondary-button" type="button" data-ai-action="rerun-knowledge-summary" data-record-id="${knowledgeId}">
+          Rerun AI Summary
+        </button>
+      </div>
+    </article>
+  `
+}
+
+function renderAlertRecords(items: AlertResultItem[]): string {
+  return items
+    .map(
+      (item) => `
+        <article class="record-card record-card--alert">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>${escapeHtml(item.title)}</h3>
+              <span class="record-meta">${escapeHtml(formatDateTime(item.triggered_at))}</span>
+            </div>
+            <a class="record-action" href="/health/${item.source_record_id}" data-nav="true">Open record</a>
+          </div>
+          <div class="record-badges">
+            ${renderSeverityBadge(item.severity)}
+            ${renderStatusBadge(item.status)}
+          </div>
+          <div class="field-grid">
+            ${renderField('Rule Code', item.rule_code)}
+            ${renderField('Source Record', `Health #${item.source_record_id}`)}
+            ${renderField('Message', item.message, true)}
+            ${renderField('Explanation', item.explanation, true)}
+          </div>
+          ${
+            item.status === 'dismissed'
+              ? ''
+              : `
+                  <div class="alert-actions">
+                    ${
+                      item.status === 'open'
+                        ? `<button class="secondary-button" type="button" data-alert-action="viewed" data-alert-id="${item.id}">Mark viewed</button>`
+                        : ''
+                    }
+                    <button class="secondary-button" type="button" data-alert-action="dismissed" data-alert-id="${item.id}">Dismiss</button>
+                  </div>
+                `
+          }
+        </article>
+      `,
+    )
+    .join('')
+}
+
 function renderRecentActivityRecords(items: DashboardRecentActivity[]): string {
   return `
     <div class="activity-list">
@@ -1183,6 +1574,22 @@ function renderInlineList(items: string[], emptyMessage: string): string {
 
 function renderBadge(label: string, muted = false): string {
   return `<span class="badge${muted ? ' is-muted' : ''}">${escapeHtml(label)}</span>`
+}
+
+function renderSeverityBadge(value: string): string {
+  return `<span class="badge badge--severity badge--severity-${escapeHtml(value)}">${escapeHtml(formatStatusLabel(value))}</span>`
+}
+
+function renderStatusBadge(value: string): string {
+  return `<span class="badge badge--status badge--status-${escapeHtml(value)}">${escapeHtml(formatStatusLabel(value))}</span>`
+}
+
+function renderAiLabelBadge(): string {
+  return '<span class="badge badge--ai-label">AI</span>'
+}
+
+function renderAiStatusBadge(value: string): string {
+  return `<span class="badge badge--ai-status badge--ai-status-${escapeHtml(value)}">${escapeHtml(formatStatusLabel(value))}</span>`
 }
 
 function renderPagination(path: string, page: number, pageSize: number, total: number): string {
@@ -1370,6 +1777,7 @@ function parseHealthListQuery(params: URLSearchParams): HealthListQuery {
     dateTo: params.get('date_to') ?? '',
     metricType: params.get('metric_type') ?? '',
     keyword: params.get('keyword') ?? '',
+    focusAlerts: params.get('focus') === 'alerts',
   }
 }
 
@@ -1500,6 +1908,65 @@ function formatJson(value: unknown): string {
     return JSON.stringify(value, null, 2) ?? '—'
   } catch {
     return String(value)
+  }
+}
+
+function getHealthSummaryDerivation(items: AiDerivationResultItem[]): AiDerivationResultItem | null {
+  return items.find((item) => item.derivation_type === 'health_summary') ?? null
+}
+
+function getKnowledgeSummaryDerivation(items: AiDerivationResultItem[]): AiDerivationResultItem | null {
+  return items.find((item) => item.derivation_type === 'knowledge_summary') ?? null
+}
+
+function asHealthSummaryContent(
+  value: unknown,
+): { summary: string; observations: string[]; suggested_follow_up: string; care_level_note: string } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const content = value as Record<string, unknown>
+  if (
+    typeof content.summary !== 'string' ||
+    !Array.isArray(content.observations) ||
+    content.observations.some((item) => typeof item !== 'string') ||
+    typeof content.suggested_follow_up !== 'string' ||
+    typeof content.care_level_note !== 'string'
+  ) {
+    return null
+  }
+
+  return {
+    summary: content.summary,
+    observations: content.observations as string[],
+    suggested_follow_up: content.suggested_follow_up,
+    care_level_note: content.care_level_note,
+  }
+}
+
+function asKnowledgeSummaryContent(
+  value: unknown,
+): { summary: string; key_points: string[]; keywords: string[] } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const content = value as Record<string, unknown>
+  if (
+    typeof content.summary !== 'string' ||
+    !Array.isArray(content.key_points) ||
+    content.key_points.some((item) => typeof item !== 'string') ||
+    !Array.isArray(content.keywords) ||
+    content.keywords.some((item) => typeof item !== 'string')
+  ) {
+    return null
+  }
+
+  return {
+    summary: content.summary,
+    key_points: content.key_points as string[],
+    keywords: content.keywords as string[],
   }
 }
 

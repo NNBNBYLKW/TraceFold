@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.responses import ApiResponse, success_response
+from app.domains.ai_derivations.schemas import AiDerivationResultListRead
 from app.db.session import get_db
+from app.domains.alerts.schemas import AlertResultListRead
 from app.domains.health import service
 from app.domains.health.schemas import HealthDetailRead, HealthListRead
 
@@ -47,3 +49,21 @@ def get_health_record(
 ) -> ApiResponse[HealthDetailRead]:
     result = service.get_health_read(db, health_id)
     return success_response(data=result, message="Health record fetched.")
+
+
+@router.post("/{health_id}/rules/rerun", response_model=ApiResponse[AlertResultListRead])
+def rerun_health_record_rules(
+    health_id: int,
+    db: Session = Depends(get_db),
+) -> ApiResponse[AlertResultListRead]:
+    result = service.rerun_health_rules(db, health_id=health_id)
+    return success_response(data=result, message="Health rules rerun completed.")
+
+
+@router.post("/{health_id}/ai/health-summary/rerun", response_model=ApiResponse[AiDerivationResultListRead])
+def rerun_health_record_ai_summary(
+    health_id: int,
+    db: Session = Depends(get_db),
+) -> ApiResponse[AiDerivationResultListRead]:
+    result = service.rerun_health_summary(db, health_id=health_id)
+    return success_response(data=result, message="Health AI summary rerun completed.")

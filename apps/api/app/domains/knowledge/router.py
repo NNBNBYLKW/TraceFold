@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.responses import ApiResponse, success_response
+from app.domains.ai_derivations.schemas import AiDerivationResultListRead
 from app.db.session import get_db
 from app.domains.knowledge import service
 from app.domains.knowledge.schemas import KnowledgeDetailRead, KnowledgeListRead
@@ -47,3 +48,12 @@ def get_knowledge(
 ) -> ApiResponse[KnowledgeDetailRead]:
     result = service.get_knowledge_read(db, knowledge_id)
     return success_response(data=result, message="Knowledge entry fetched.")
+
+
+@router.post("/{knowledge_id}/ai/knowledge-summary/rerun", response_model=ApiResponse[AiDerivationResultListRead])
+def rerun_knowledge_entry_ai_summary(
+    knowledge_id: int,
+    db: Session = Depends(get_db),
+) -> ApiResponse[AiDerivationResultListRead]:
+    result = service.rerun_knowledge_summary(db, knowledge_id=knowledge_id)
+    return success_response(data=result, message="Knowledge AI summary rerun completed.")

@@ -3,6 +3,7 @@ PS G:\Windows\Documents\GitHub\TraceFold> tree /f /a
 卷序列号为 C86A-CE7D
 G:.
 |   .env.example
+|   .gitignore
 |   step 1
 |   step 2
 |   step 3
@@ -12,6 +13,7 @@ G:.
 |   step 7
 |   step 8
 |   step 9
+|   tree.txt
 |   技术路线总览.txt
 |   软件最终需求.txt
 |
@@ -4497,109 +4499,366 @@ G:.
 |   +---api
 |   |   |   .env
 |   |   |   .env.example
+|   |   |   pytest.ini
 |   |   |   requirements.txt
+|   |   |   TESTING.md
 |   |   |
-|   |   \---app
-|   |       |   main.py
-|   |       |   __init__.py
-|   |       |
-|   |       +---api
-|   |       |   |   deps.py
-|   |       |   |   router.py
-|   |       |   |   system.py
-|   |       |   |   __init__.py
-|   |       |   |
-|   |       |   \---__pycache__
-|   |       |           router.cpython-312.pyc
-|   |       |           system.cpython-312.pyc
-|   |       |           __init__.cpython-312.pyc
-|   |       |
-|   |       +---core
-|   |       |   |   config.py
-|   |       |   |   exceptions.py
-|   |       |   |   logging.py
-|   |       |   |   responses.py
-|   |       |   |
-|   |       |   \---__pycache__
-|   |       |           config.cpython-312.pyc
-|   |       |           exceptions.cpython-312.pyc
-|   |       |           logging.cpython-312.pyc
-|   |       |           responses.cpython-312.pyc
-|   |       |
-|   |       +---db
-|   |       |   |   base.py
-|   |       |   |   init_db.py
-|   |       |   |   session.py
-|   |       |   |
-|   |       |   \---__pycache__
-|   |       |           base.cpython-312.pyc
-|   |       |           init_db.cpython-312.pyc
-|   |       |           session.cpython-312.pyc
+|   |   +---.pytest_cache
+|   |   |   |   .gitignore
+|   |   |   |   CACHEDIR.TAG
+|   |   |   |   README.md
+|   |   |   |
+|   |   |   \---v
+|   |   |       \---cache
+|   |   |               lastfailed
+|   |   |               nodeids
+|   |   |
+|   |   +---app
+|   |   |   |   main.py
+|   |   |   |   __init__.py
+|   |   |   |
+|   |   |   +---api
+|   |   |   |   |   deps.py
+|   |   |   |   |   router.py
+|   |   |   |   |   system.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           deps.cpython-314.pyc
+|   |   |   |           router.cpython-312.pyc
+|   |   |   |           router.cpython-314.pyc
+|   |   |   |           system.cpython-312.pyc
+|   |   |   |           system.cpython-314.pyc
+|   |   |   |           __init__.cpython-312.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   +---core
+|   |   |   |   |   config.py
+|   |   |   |   |   exceptions.py
+|   |   |   |   |   logging.py
+|   |   |   |   |   responses.py
+|   |   |   |   |   tasks.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           config.cpython-312.pyc
+|   |   |   |           config.cpython-314.pyc
+|   |   |   |           exceptions.cpython-312.pyc
+|   |   |   |           exceptions.cpython-314.pyc
+|   |   |   |           logging.cpython-312.pyc
+|   |   |   |           logging.cpython-314.pyc
+|   |   |   |           responses.cpython-312.pyc
+|   |   |   |           responses.cpython-314.pyc
+|   |   |   |           tasks.cpython-312.pyc
+|   |   |   |           tasks.cpython-314.pyc
+|   |   |   |
+|   |   |   +---db
+|   |   |   |   |   base.py
+|   |   |   |   |   init_db.py
+|   |   |   |   |   session.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           base.cpython-312.pyc
+|   |   |   |           base.cpython-314.pyc
+|   |   |   |           init_db.cpython-312.pyc
+|   |   |   |           init_db.cpython-314.pyc
+|   |   |   |           session.cpython-312.pyc
+|   |   |   |           session.cpython-314.pyc
+|   |   |   |
+|   |   |   +---domains
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   +---ai_derivations
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---alerts
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---capture
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---dashboard
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---expense
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---health
+|   |   |   |   |   |   ai_summary.py
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   rules.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           ai_summary.cpython-312.pyc
+|   |   |   |   |           ai_summary.cpython-314.pyc
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           rules.cpython-312.pyc
+|   |   |   |   |           rules.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---knowledge
+|   |   |   |   |   |   ai_summary.py
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           ai_summary.cpython-312.pyc
+|   |   |   |   |           ai_summary.cpython-314.pyc
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---pending
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   +---system_tasks
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           __init__.cpython-312.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   +---schemas
+|   |   |   |   |   common.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           common.cpython-312.pyc
+|   |   |   |           common.cpython-314.pyc
+|   |   |   |
+|   |   |   +---services
+|   |   |   |   \---intake
+|   |   |   |       |   parser.py
+|   |   |   |       |   service.py
+|   |   |   |       |   __init__.py
+|   |   |   |       |
+|   |   |   |       \---__pycache__
+|   |   |   |               parser.cpython-314.pyc
+|   |   |   |               service.cpython-314.pyc
+|   |   |   |               __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   \---__pycache__
+|   |   |           main.cpython-312.pyc
+|   |   |           main.cpython-314.pyc
+|   |   |           __init__.cpython-312.pyc
+|   |   |           __init__.cpython-314.pyc
+|   |   |
+|   |   +---scripts
+|   |   |   |   seed_step6_test_data.py
+|   |   |   |
+|   |   |   \---__pycache__
+|   |   |           seed_step6_test_data.cpython-314.pyc
+|   |   |
+|   |   \---tests
+|   |       |   conftest.py
+|   |       |   test_system.py
 |   |       |
 |   |       +---domains
-|   |       |   |   __init__.py
+|   |       |   +---alerts
+|   |       |   |   |   test_alert_consumption.py
+|   |       |   |   |
+|   |       |   |   \---__pycache__
+|   |       |   |           test_alert_consumption.cpython-314-pytest-9.0.2.pyc
 |   |       |   |
 |   |       |   +---capture
-|   |       |   |   |   models.py
-|   |       |   |   |   repository.py
-|   |       |   |   |   router.py
-|   |       |   |   |   schemas.py
-|   |       |   |   |   service.py
-|   |       |   |   |   __init__.py
+|   |       |   |   |   test_capture_smoke.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
-|   |       |   |           models.cpython-312.pyc
-|   |       |   |           router.cpython-312.pyc
-|   |       |   |           __init__.cpython-312.pyc
+|   |       |   |           test_capture_smoke.cpython-314-pytest-9.0.2.pyc
 |   |       |   |
-|   |       |   +---expense
-|   |       |   |   |   router.py
-|   |       |   |   |   __init__.py
+|   |       |   +---dashboard
+|   |       |   |   |   test_dashboard.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
-|   |       |   |           router.cpython-312.pyc
-|   |       |   |           __init__.cpython-312.pyc
+|   |       |   |           test_dashboard.cpython-314-pytest-9.0.2.pyc
+|   |       |   |
+|   |       |   +---enhancements
+|   |       |   |   |   test_enhancement_skeleton.py
+|   |       |   |   |
+|   |       |   |   \---__pycache__
+|   |       |   |           test_enhancement_skeleton.cpython-314-pytest-9.0.2.pyc
+|   |       |   |
+|   |       |   +---formal_read
+|   |       |   |   |   test_formal_read_layer.py
+|   |       |   |   |
+|   |       |   |   \---__pycache__
+|   |       |   |           test_formal_read_layer.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_formal_read_layer.cpython-314.pyc
 |   |       |   |
 |   |       |   +---health
-|   |       |   |   |   router.py
-|   |       |   |   |   __init__.py
+|   |       |   |   |   test_health_ai_summary.py
+|   |       |   |   |   test_health_rules.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
-|   |       |   |           router.cpython-312.pyc
-|   |       |   |           __init__.cpython-312.pyc
+|   |       |   |           test_health_ai_summary.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_health_rules.cpython-314-pytest-9.0.2.pyc
 |   |       |   |
 |   |       |   +---knowledge
-|   |       |   |   |   router.py
-|   |       |   |   |   __init__.py
+|   |       |   |   |   test_knowledge_ai_summary.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
-|   |       |   |           router.cpython-312.pyc
-|   |       |   |           __init__.cpython-312.pyc
+|   |       |   |           test_knowledge_ai_summary.cpython-314-pytest-9.0.2.pyc
 |   |       |   |
-|   |       |   +---pending
-|   |       |   |   |   router.py
-|   |       |   |   |   __init__.py
-|   |       |   |   |
-|   |       |   |   \---__pycache__
-|   |       |   |           router.cpython-312.pyc
-|   |       |   |           __init__.cpython-312.pyc
-|   |       |   |
-|   |       |   +---system_tasks
-|   |       |   |       models.py
-|   |       |   |       repository.py
-|   |       |   |       router.py
-|   |       |   |       schemas.py
-|   |       |   |       service.py
-|   |       |   |
-|   |       |   \---__pycache__
-|   |       |           __init__.cpython-312.pyc
-|   |       |
-|   |       +---schemas
-|   |       |       common.py
+|   |       |   \---pending
+|   |       |       |   test_pending_read.py
+|   |       |       |   test_pending_review_service.py
+|   |       |       |
+|   |       |       \---__pycache__
+|   |       |               test_pending_read.cpython-314-pytest-9.0.2.pyc
+|   |       |               test_pending_review_service.cpython-314-pytest-9.0.2.pyc
+|   |       |               test_pending_review_service.cpython-314.pyc
 |   |       |
 |   |       \---__pycache__
-|   |               main.cpython-312.pyc
-|   |               __init__.cpython-312.pyc
+|   |               conftest.cpython-314-pytest-9.0.2.pyc
+|   |               test_system.cpython-314-pytest-9.0.2.pyc
 |   |
 |   \---web
 |       |   .env
@@ -4609,6 +4868,14 @@ G:.
 |       |   package-lock.json
 |       |   package.json
 |       |   tsconfig.json
+|       |
+|       +---dist
+|       |   |   index.html
+|       |   |   vite.svg
+|       |   |
+|       |   \---assets
+|       |           index-BbD3ulDS.css
+|       |           index-ClEgypPc.js
 |       |
 |       +---node_modules
 |       |   |   .package-lock.json
@@ -5099,20 +5366,32 @@ G:.
 |       +---public
 |       |       vite.svg
 |       |
-|       \---src
-|               counter.ts
-|               main.ts
-|               style.css
-|               typescript.svg
+|       +---src
+|       |       api.ts
+|       |       counter.ts
+|       |       main.ts
+|       |       style.css
+|       |       typescript.svg
+|       |
+|       \---tests
+|           |   test_health_ai_ui_contract.py
+|           |   test_knowledge_ai_ui_contract.py
+|           |
+|           \---__pycache__
+|                   test_health_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
+|                   test_knowledge_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
 |
 +---data
+|       tracefold-step6.db
 |       tracefold.db
 |
 \---docs
         ARCHITECTURE_RULES.md
         DATA_MODEL_DRAFT.md
         ENV_CONVENTIONS.md
+        MIGRATION_MIN_SPEC.md
         PROJECT_BRIEF.md
+        QUALITY_BASELINE.md
         RISK_DRIFT_WARNINGS.md
         ROADMAP_PHASE1.md
         TASK_TEMPLATE.md

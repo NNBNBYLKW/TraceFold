@@ -4,6 +4,8 @@ from app.api.system import router as system_router
 
 from fastapi import APIRouter
 
+from app.domains.ai_derivations.router import router as ai_derivations_router
+from app.domains.alerts.router import router as alerts_router
 from app.domains.capture.router import router as capture_router
 from app.domains.dashboard.router import router as dashboard_router
 from app.domains.expense.router import router as expense_router
@@ -16,6 +18,18 @@ from app.domains.system_tasks.router import router as system_tasks_router
 api_router = APIRouter()
 
 api_router.include_router(system_router)
+
+api_router.include_router(
+    alerts_router,
+    prefix="/alerts",
+    tags=["alerts"],
+)
+
+api_router.include_router(
+    ai_derivations_router,
+    prefix="/ai-derivations",
+    tags=["ai-derivations"],
+)
 
 api_router.include_router(
     dashboard_router,

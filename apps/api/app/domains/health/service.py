@@ -5,8 +5,12 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, NotFoundError
+from app.domains.ai_derivations.schemas import AiDerivationResultListRead
+from app.domains.alerts.schemas import AlertResultListRead
 from app.domains.health import repository
+from app.domains.health.ai_summary import rerun_health_summary_for_record, run_health_summary_on_record_create
 from app.domains.health.models import HealthRecord
+from app.domains.health.rules import execute_health_rules_for_record, run_health_rules_on_record_create
 from app.domains.health.schemas import HealthDetailRead, HealthListItemRead, HealthListRead
 
 
@@ -32,6 +36,8 @@ def create_health_record(
     )
     db.add(record)
     db.flush()
+    run_health_rules_on_record_create(db, health_record=record)
+    run_health_summary_on_record_create(db, health_record=record)
     return record
 
 
@@ -89,6 +95,48 @@ def get_health_read(db: Session, health_id: int) -> HealthDetailRead:
     )
 
 
+def rerun_health_rules(
+    db: Session,
+    *,
+    health_id: int,
+) -> AlertResultListRead:
+    try:
+        record = repository.get_health_record_by_id(db, health_id)
+        if record is None:
+            raise NotFoundError(
+                message=f"Health record {health_id} was not found.",
+                code="HEALTH_NOT_FOUND",
+            )
+
+        execute_health_rules_for_record(db, health_record=record)
+        db.commit()
+        return _build_alert_result_list_read(db, health_id=record.id)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def rerun_health_summary(
+    db: Session,
+    *,
+    health_id: int,
+) -> AiDerivationResultListRead:
+    try:
+        record = repository.get_health_record_by_id(db, health_id)
+        if record is None:
+            raise NotFoundError(
+                message=f"Health record {health_id} was not found.",
+                code="HEALTH_NOT_FOUND",
+            )
+
+        rerun_health_summary_for_record(db, health_record=record)
+        db.commit()
+        return _build_ai_derivation_result_list_read(db, health_id=record.id)
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _build_health_list_item(record: HealthRecord) -> HealthListItemRead:
     return HealthListItemRead(
         id=record.id,
@@ -97,6 +145,26 @@ def _build_health_list_item(record: HealthRecord) -> HealthListItemRead:
         value_text_preview=_build_preview(record.value_text),
         note_preview=_build_preview(record.note),
         has_source_pending=record.source_pending_id is not None,
+    )
+
+
+def _build_alert_result_list_read(db: Session, *, health_id: int) -> AlertResultListRead:
+    from app.domains.alerts.service import list_alert_reads
+
+    return list_alert_reads(
+        db,
+        source_domain="health",
+        source_record_id=health_id,
+    )
+
+
+def _build_ai_derivation_result_list_read(db: Session, *, health_id: int) -> AiDerivationResultListRead:
+    from app.domains.ai_derivations.service import list_ai_derivation_reads
+
+    return list_ai_derivation_reads(
+        db,
+        target_domain="health",
+        target_record_id=health_id,
     )
 
 

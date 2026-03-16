@@ -53,6 +53,22 @@ export interface DashboardHealthSummary {
   href: string
 }
 
+export interface DashboardAlertSummaryItem {
+  id: number
+  source_record_id: number
+  severity: string
+  title: string
+  message: string
+  triggered_at: string
+  href: string
+}
+
+export interface DashboardAlertSummary {
+  open_count: number
+  recent_open_items: DashboardAlertSummaryItem[]
+  href: string
+}
+
 export interface DashboardRecentActivity {
   activity_type: string
   occurred_at: string
@@ -65,6 +81,7 @@ export interface DashboardRecentActivity {
 
 export interface DashboardData {
   pending_summary: DashboardPendingSummary
+  alert_summary: DashboardAlertSummary
   quick_links: DashboardQuickLink[]
   expense_summary: DashboardExpenseSummary
   knowledge_summary: DashboardKnowledgeSummary
@@ -159,6 +176,45 @@ export interface HealthDetail {
   source_pending_id: number | null
 }
 
+export interface AiDerivationResultItem {
+  id: number
+  target_domain: string
+  target_record_id: number
+  derivation_type: string
+  status: string
+  model_name: string | null
+  model_version: string | null
+  generated_at: string | null
+  failed_at: string | null
+  content_json: unknown
+  error_message: string | null
+  created_at: string
+}
+
+export interface AiDerivationResultList {
+  items: AiDerivationResultItem[]
+}
+
+export interface AlertResultItem {
+  id: number
+  source_domain: string
+  source_record_id: number
+  rule_code: string
+  severity: string
+  status: string
+  title: string
+  message: string
+  explanation: string | null
+  triggered_at: string
+  viewed_at: string | null
+  dismissed_at: string | null
+  created_at: string
+}
+
+export interface AlertResultList {
+  items: AlertResultItem[]
+}
+
 export async function fetchDashboard(): Promise<DashboardData> {
   return request<DashboardData>('/api/dashboard')
 }
@@ -203,7 +259,33 @@ export async function fetchHealthDetail(id: string): Promise<HealthDetail> {
   return request<HealthDetail>(`/api/health/${id}`)
 }
 
-async function request<T>(path: string, params?: Record<string, string>): Promise<T> {
+export async function fetchAiDerivationList(
+  params: Record<string, string>,
+): Promise<AiDerivationResultList> {
+  return request<AiDerivationResultList>('/api/ai-derivations', params)
+}
+
+export async function fetchAlertList(params: Record<string, string>): Promise<AlertResultList> {
+  return request<AlertResultList>('/api/alerts', params)
+}
+
+export async function rerunHealthAiSummary(id: number): Promise<AiDerivationResultList> {
+  return request<AiDerivationResultList>(`/api/health/${id}/ai/health-summary/rerun`, undefined, 'POST')
+}
+
+export async function rerunKnowledgeAiSummary(id: number): Promise<AiDerivationResultList> {
+  return request<AiDerivationResultList>(`/api/knowledge/${id}/ai/knowledge-summary/rerun`, undefined, 'POST')
+}
+
+export async function markAlertViewed(id: number): Promise<AlertResultItem> {
+  return request<AlertResultItem>(`/api/alerts/${id}/viewed`, undefined, 'POST')
+}
+
+export async function dismissAlert(id: number): Promise<AlertResultItem> {
+  return request<AlertResultItem>(`/api/alerts/${id}/dismissed`, undefined, 'POST')
+}
+
+async function request<T>(path: string, params?: Record<string, string>, method = 'GET'): Promise<T> {
   const url = new URL(`${apiBaseUrl}${path}`)
 
   if (params) {
@@ -215,6 +297,7 @@ async function request<T>(path: string, params?: Record<string, string>): Promis
   }
 
   const response = await fetch(url.toString(), {
+    method,
     headers: {
       Accept: 'application/json',
     },

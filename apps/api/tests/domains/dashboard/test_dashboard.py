@@ -24,6 +24,8 @@ from app.main import app
 
 @pytest.fixture
 def db(tmp_path: Path) -> Generator[Session, None, None]:
+    import app.domains.alerts.models  # noqa: F401
+    import app.domains.ai_derivations.models  # noqa: F401
     import app.domains.capture.models  # noqa: F401
     import app.domains.expense.models  # noqa: F401
     import app.domains.health.models  # noqa: F401
@@ -85,6 +87,7 @@ def test_dashboard_returns_stable_empty_structure(
     data = payload["data"]
     assert set(data.keys()) == {
         "pending_summary",
+        "alert_summary",
         "quick_links",
         "expense_summary",
         "knowledge_summary",
@@ -97,6 +100,11 @@ def test_dashboard_returns_stable_empty_structure(
         "opened_in_last_7_days": 0,
         "resolved_in_last_7_days": 0,
         "href": "/pending",
+    }
+    assert data["alert_summary"] == {
+        "open_count": 0,
+        "recent_open_items": [],
+        "href": "/health?focus=alerts",
     }
     assert data["quick_links"] == [
         {"label": "View pending items", "href": "/pending"},
@@ -237,7 +245,7 @@ def test_dashboard_aggregates_summaries_with_pending_windows_and_currency_groups
         db,
         created_at=datetime(2026, 3, 10, 11, 30, 0),
         metric_type="blood_pressure",
-        value_text="120/80",
+        value_text="120/79",
         note=None,
         with_pending=False,
     )
@@ -330,6 +338,11 @@ def test_dashboard_aggregates_summaries_with_pending_windows_and_currency_groups
             "blood_pressure",
         ],
         "href": "/health",
+    }
+    assert data["alert_summary"] == {
+        "open_count": 0,
+        "recent_open_items": [],
+        "href": "/health?focus=alerts",
     }
 
 
@@ -463,6 +476,118 @@ def test_dashboard_recent_activity_uses_only_allowed_sources_and_is_sorted(
         },
     ]
     assert all(item["target_id"] != ignored_pending.id for item in recent_activity)
+
+
+def test_dashboard_alert_summary_uses_only_open_alerts_and_sorts_by_severity_then_triggered_at(
+    api_client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.domains.alerts.service import upsert_alert_result
+
+    fixed_now = datetime(2026, 3, 16, 12, 0, 0)
+    monkeypatch.setattr(dashboard_service, "_utcnow", lambda: fixed_now)
+
+    high_record = _create_health_fact(
+        db,
+        created_at=datetime(2026, 3, 15, 10, 0, 0),
+        metric_type="heart_rate",
+        value_text="135",
+        note=None,
+        with_pending=False,
+    )
+    warning_record = _create_health_fact(
+        db,
+        created_at=datetime(2026, 3, 15, 11, 0, 0),
+        metric_type="sleep_duration",
+        value_text="320",
+        note=None,
+        with_pending=False,
+    )
+    info_record = _create_health_fact(
+        db,
+        created_at=datetime(2026, 3, 15, 12, 0, 0),
+        metric_type="blood_pressure",
+        value_text="135/82",
+        note=None,
+        with_pending=False,
+    )
+    viewed_record = _create_health_fact(
+        db,
+        created_at=datetime(2026, 3, 15, 13, 0, 0),
+        metric_type="heart_rate",
+        value_text="132",
+        note=None,
+        with_pending=False,
+    )
+
+    upsert_alert_result(
+        db,
+        source_domain="health",
+        source_record_id=high_record.id,
+        rule_code="HEALTH_HEART_RATE_HIGH_V1",
+        severity="high",
+        status="open",
+        title="High alert",
+        message="Should stay first even if not the newest alert.",
+        explanation=None,
+        triggered_at=datetime(2026, 3, 16, 9, 0, 0),
+    )
+    upsert_alert_result(
+        db,
+        source_domain="health",
+        source_record_id=warning_record.id,
+        rule_code="HEALTH_SLEEP_DURATION_WARNING_V1",
+        severity="warning",
+        status="open",
+        title="Warning alert",
+        message="Should stay ahead of info.",
+        explanation=None,
+        triggered_at=datetime(2026, 3, 16, 10, 0, 0),
+    )
+    upsert_alert_result(
+        db,
+        source_domain="health",
+        source_record_id=info_record.id,
+        rule_code="HEALTH_BLOOD_PRESSURE_INFO_V1",
+        severity="info",
+        status="open",
+        title="Info alert",
+        message="Newest but lower priority.",
+        explanation=None,
+        triggered_at=datetime(2026, 3, 16, 11, 59, 0),
+    )
+    upsert_alert_result(
+        db,
+        source_domain="health",
+        source_record_id=viewed_record.id,
+        rule_code="HEALTH_HEART_RATE_HIGH_V1",
+        severity="high",
+        status="viewed",
+        title="Viewed high alert",
+        message="Should not appear on dashboard.",
+        explanation=None,
+        triggered_at=datetime(2026, 3, 16, 11, 58, 0),
+        viewed_at=datetime(2026, 3, 16, 11, 58, 30),
+    )
+    db.commit()
+
+    response = api_client.get("/api/dashboard")
+
+    assert response.status_code == 200
+    alert_summary = response.json()["data"]["alert_summary"]
+    assert alert_summary["open_count"] == 3
+    assert [item["source_record_id"] for item in alert_summary["recent_open_items"]] == [
+        high_record.id,
+        warning_record.id,
+        info_record.id,
+    ]
+    assert [item["severity"] for item in alert_summary["recent_open_items"]] == [
+        "high",
+        "warning",
+        "info",
+    ]
+    assert all(item["href"] == f"/health/{item['source_record_id']}" for item in alert_summary["recent_open_items"])
 
 
 def _create_expense_fact(
