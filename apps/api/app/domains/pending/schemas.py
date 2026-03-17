@@ -70,6 +70,12 @@ class PendingDiscardRequest(BaseModel):
     note: str | None = None
 
 
+class PendingFixTextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    correction_text: str
+
+
 class PendingFixRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,3 +99,14 @@ class PendingActionRead(BaseModel):
     after_payload_json: dict[str, Any] | list[Any] | str | int | float | bool | None = None
     note: str | None = None
     created_at: datetime
+
+
+class PendingActionResultRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_executed: bool
+    action_type: str
+    pending_id: int
+    status: str
+    target_domain: str
+    source_capture_id: int

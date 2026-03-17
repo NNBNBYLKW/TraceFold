@@ -13,7 +13,13 @@ from app.domains.health.service import create_health_record
 from app.domains.knowledge.service import create_knowledge_entry
 from app.domains.pending import repository
 from app.domains.pending.models import PendingActionType, PendingItem, PendingReviewAction, PendingStatus
-from app.domains.pending.schemas import PendingDetailRead, PendingListItemRead, PendingListRead
+from app.domains.pending.schemas import (
+    PendingActionResultRead,
+    PendingDetailRead,
+    PendingListItemRead,
+    PendingListRead,
+)
+from app.services.intake.parser import parse_raw_text
 
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
@@ -425,6 +431,66 @@ def add_review_action(
     )
 
 
+def apply_pending_confirm_action(
+    db: Session,
+    *,
+    pending_item_id: int,
+    note: str | None = None,
+) -> PendingActionResultRead:
+    pending_item = confirm_pending_item(
+        db,
+        pending_item_id=pending_item_id,
+        note=note,
+    )
+    return _build_pending_action_result(
+        pending_item=pending_item,
+        action_type=PendingActionType.CONFIRM,
+    )
+
+
+def apply_pending_discard_action(
+    db: Session,
+    *,
+    pending_item_id: int,
+    note: str | None = None,
+) -> PendingActionResultRead:
+    pending_item = discard_pending_item(
+        db,
+        pending_item_id=pending_item_id,
+        note=note,
+    )
+    return _build_pending_action_result(
+        pending_item=pending_item,
+        action_type=PendingActionType.DISCARD,
+    )
+
+
+def apply_pending_fix_action(
+    db: Session,
+    *,
+    pending_item_id: int,
+    correction_text: str,
+) -> PendingActionResultRead:
+    normalized_correction_text = _normalize_optional_text(correction_text)
+    if normalized_correction_text is None:
+        raise BadRequestError(
+            message="correction_text must not be empty.",
+            code="INVALID_FIX_INPUT",
+        )
+
+    parsed = parse_raw_text(normalized_correction_text)
+    pending_item = fix_pending_item(
+        db,
+        pending_item_id=pending_item_id,
+        corrected_payload_json=parsed.get("parsed_payload_json"),
+        note=normalized_correction_text,
+    )
+    return _build_pending_action_result(
+        pending_item=pending_item,
+        action_type=PendingActionType.FIX,
+    )
+
+
 def _get_pending_item_or_raise(db: Session, pending_item_id: int) -> PendingItem:
     pending_item = repository.get_pending_item_by_id(db, pending_item_id)
     if pending_item is None:
@@ -433,6 +499,21 @@ def _get_pending_item_or_raise(db: Session, pending_item_id: int) -> PendingItem
             code="PENDING_ITEM_NOT_FOUND",
         )
     return pending_item
+
+
+def _build_pending_action_result(
+    *,
+    pending_item: PendingItem,
+    action_type: str,
+) -> PendingActionResultRead:
+    return PendingActionResultRead(
+        action_executed=True,
+        action_type=action_type,
+        pending_id=pending_item.id,
+        status=pending_item.status,
+        target_domain=pending_item.target_domain,
+        source_capture_id=pending_item.capture_id,
+    )
 
 
 def _get_capture_for_pending_or_raise(db: Session, pending_item: PendingItem) -> CaptureRecord:

@@ -172,6 +172,6 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=error_response(
                 message="Internal server error.",
                 code="INTERNAL_SERVER_ERROR",
-                details=str(exc),
+                details=None,
             ).model_dump(),
         )

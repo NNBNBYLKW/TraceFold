@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import BadRequestError
 from app.domains.capture import repository
-from app.domains.capture.models import CaptureRecord, ParseResult
+from app.domains.capture.models import CaptureRecord, ParseResult, ParseTargetDomain
+from app.domains.capture.schemas import CaptureSubmitResultRead
+from app.services.intake import service as intake_service
+
+
+_DEFAULT_SOURCE_TYPE = "manual"
 
 
 def submit_capture(
@@ -44,3 +50,77 @@ def save_parse_result(
         parser_version=parser_version,
         parsed_payload_json=parsed_payload_json,
     )
+
+
+def submit_capture_and_process(
+    db: Session,
+    *,
+    raw_text: str,
+    source_type: str = _DEFAULT_SOURCE_TYPE,
+    source_ref: str | None = None,
+) -> CaptureSubmitResultRead:
+    validated_raw_text = _validate_raw_text(raw_text)
+    validated_source_type = _validate_source_type(source_type)
+    normalized_source_ref = _normalize_optional_text(source_ref)
+
+    try:
+        capture = intake_service.submit_capture(
+            db,
+            source_type=validated_source_type,
+            source_ref=normalized_source_ref,
+            raw_text=validated_raw_text,
+        )
+        outcome = intake_service.process_capture(db, capture=capture)
+        db.commit()
+        return _build_capture_submit_result(capture=capture, outcome=outcome)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _build_capture_submit_result(
+    *,
+    capture: CaptureRecord,
+    outcome: dict,
+) -> CaptureSubmitResultRead:
+    return CaptureSubmitResultRead(
+        capture_created=True,
+        capture_id=capture.id,
+        status=capture.status,
+        route=str(outcome["route"]),
+        target_domain=str(outcome.get("target_domain", ParseTargetDomain.UNKNOWN)),
+        pending_item_id=_as_optional_int(outcome.get("pending_item_id")),
+        formal_record_id=_as_optional_int(outcome.get("record_id")),
+    )
+
+
+def _validate_raw_text(raw_text: str) -> str:
+    if not raw_text.strip():
+        raise BadRequestError(
+            message="raw_text must not be empty.",
+            code="INVALID_CAPTURE_RAW_TEXT",
+        )
+    return raw_text
+
+
+def _validate_source_type(source_type: str) -> str:
+    normalized_source_type = _normalize_optional_text(source_type)
+    if normalized_source_type is None:
+        raise BadRequestError(
+            message="source_type must not be empty.",
+            code="INVALID_CAPTURE_SOURCE_TYPE",
+        )
+    return normalized_source_type
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(str(value).split())
+    return normalized or None
+
+
+def _as_optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)

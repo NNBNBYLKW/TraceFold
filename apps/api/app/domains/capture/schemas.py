@@ -3,16 +3,27 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CaptureSubmitRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_type: str
+    raw_text: str
+    source_type: str = Field(default="manual")
     source_ref: str | None = None
-    raw_text: str | None = None
-    raw_payload_json: dict[str, Any] | list[Any] | str | int | float | bool | None = None
+
+
+class CaptureSubmitResultRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capture_created: bool
+    capture_id: int
+    status: str
+    route: str
+    target_domain: str
+    pending_item_id: int | None = None
+    formal_record_id: int | None = None
 
 
 class CaptureRecordRead(BaseModel):
