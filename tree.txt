@@ -4520,6 +4520,7 @@ G:.
 |   |   |   +---api
 |   |   |   |   |   deps.py
 |   |   |   |   |   router.py
+|   |   |   |   |   schemas.py
 |   |   |   |   |   system.py
 |   |   |   |   |   __init__.py
 |   |   |   |   |
@@ -4527,6 +4528,8 @@ G:.
 |   |   |   |           deps.cpython-314.pyc
 |   |   |   |           router.cpython-312.pyc
 |   |   |   |           router.cpython-314.pyc
+|   |   |   |           schemas.cpython-312.pyc
+|   |   |   |           schemas.cpython-314.pyc
 |   |   |   |           system.cpython-312.pyc
 |   |   |   |           system.cpython-314.pyc
 |   |   |   |           __init__.cpython-312.pyc
@@ -4626,7 +4629,9 @@ G:.
 |   |   |   |   |           repository.cpython-314.pyc
 |   |   |   |   |           router.cpython-312.pyc
 |   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
 |   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
 |   |   |   |   |           service.cpython-314.pyc
 |   |   |   |   |           __init__.cpython-312.pyc
 |   |   |   |   |           __init__.cpython-314.pyc
@@ -4781,8 +4786,11 @@ G:.
 |   |   |   |       |   __init__.py
 |   |   |   |       |
 |   |   |   |       \---__pycache__
+|   |   |   |               parser.cpython-312.pyc
 |   |   |   |               parser.cpython-314.pyc
+|   |   |   |               service.cpython-312.pyc
 |   |   |   |               service.cpython-314.pyc
+|   |   |   |               __init__.cpython-312.pyc
 |   |   |   |               __init__.cpython-314.pyc
 |   |   |   |
 |   |   |   \---__pycache__
@@ -4848,10 +4856,12 @@ G:.
 |   |       |   |           test_knowledge_ai_summary.cpython-314-pytest-9.0.2.pyc
 |   |       |   |
 |   |       |   \---pending
+|   |       |       |   test_pending_actions_http.py
 |   |       |       |   test_pending_read.py
 |   |       |       |   test_pending_review_service.py
 |   |       |       |
 |   |       |       \---__pycache__
+|   |       |               test_pending_actions_http.cpython-314-pytest-9.0.2.pyc
 |   |       |               test_pending_read.cpython-314-pytest-9.0.2.pyc
 |   |       |               test_pending_review_service.cpython-314-pytest-9.0.2.pyc
 |   |       |               test_pending_review_service.cpython-314.pyc
@@ -4859,6 +4869,158 @@ G:.
 |   |       \---__pycache__
 |   |               conftest.cpython-314-pytest-9.0.2.pyc
 |   |               test_system.cpython-314-pytest-9.0.2.pyc
+|   |
+|   +---desktop
+|   |   |   .env.example
+|   |   |   pytest.ini
+|   |   |
+|   |   +---.pytest_cache
+|   |   |   |   .gitignore
+|   |   |   |   CACHEDIR.TAG
+|   |   |   |   README.md
+|   |   |   |
+|   |   |   \---v
+|   |   |       \---cache
+|   |   |               nodeids
+|   |   |
+|   |   +---app
+|   |   |   |   main.py
+|   |   |   |   __init__.py
+|   |   |   |
+|   |   |   +---clients
+|   |   |   |   |   status_client.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           status_client.cpython-314.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   +---core
+|   |   |   |   |   config.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           config.cpython-314.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   +---shell
+|   |   |   |   |   app.py
+|   |   |   |   |   notifications.py
+|   |   |   |   |   state.py
+|   |   |   |   |   tray.py
+|   |   |   |   |   window.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           app.cpython-314.pyc
+|   |   |   |           notifications.cpython-314.pyc
+|   |   |   |           state.cpython-314.pyc
+|   |   |   |           tray.cpython-314.pyc
+|   |   |   |           window.cpython-314.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   \---__pycache__
+|   |   |           __init__.cpython-314.pyc
+|   |   |
+|   |   \---tests
+|   |       |   test_app.py
+|   |       |   test_config.py
+|   |       |   test_desktop_final_consistency.py
+|   |       |   test_status_client.py
+|   |       |   test_tray.py
+|   |       |   test_window.py
+|   |       |
+|   |       \---__pycache__
+|   |               test_app.cpython-314-pytest-9.0.2.pyc
+|   |               test_config.cpython-314-pytest-9.0.2.pyc
+|   |               test_desktop_final_consistency.cpython-314-pytest-9.0.2.pyc
+|   |               test_status_client.cpython-314-pytest-9.0.2.pyc
+|   |               test_tray.cpython-314-pytest-9.0.2.pyc
+|   |               test_window.cpython-314-pytest-9.0.2.pyc
+|   |
+|   +---telegram
+|   |   |   .env.example
+|   |   |   pytest.ini
+|   |   |
+|   |   +---.pytest_cache
+|   |   |   |   .gitignore
+|   |   |   |   CACHEDIR.TAG
+|   |   |   |   README.md
+|   |   |   |
+|   |   |   \---v
+|   |   |       \---cache
+|   |   |               lastfailed
+|   |   |               nodeids
+|   |   |
+|   |   +---app
+|   |   |   |   formatting.py
+|   |   |   |   main.py
+|   |   |   |   observability.py
+|   |   |   |   __init__.py
+|   |   |   |
+|   |   |   +---bot
+|   |   |   |   |   app.py
+|   |   |   |   |   dispatch.py
+|   |   |   |   |   handlers.py
+|   |   |   |   |   models.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           app.cpython-314.pyc
+|   |   |   |           dispatch.cpython-314.pyc
+|   |   |   |           handlers.cpython-314.pyc
+|   |   |   |           models.cpython-314.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   +---clients
+|   |   |   |   |   telegram_api.py
+|   |   |   |   |   tracefold_api.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           telegram_api.cpython-314.pyc
+|   |   |   |           tracefold_api.cpython-314.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   +---core
+|   |   |   |   |   config.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           config.cpython-314.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
+|   |   |   \---__pycache__
+|   |   |           formatting.cpython-314.pyc
+|   |   |           observability.cpython-314.pyc
+|   |   |           __init__.cpython-314.pyc
+|   |   |
+|   |   \---tests
+|   |       |   test_api_client.py
+|   |       |   test_app.py
+|   |       |   test_capture_handler.py
+|   |       |   test_config.py
+|   |       |   test_dispatch.py
+|   |       |   test_formatting.py
+|   |       |   test_observability.py
+|   |       |   test_pending_handler.py
+|   |       |   test_summary_handler.py
+|   |       |   test_telegram_final_consistency.py
+|   |       |   test_tracefold_api_client.py
+|   |       |
+|   |       \---__pycache__
+|   |               test_api_client.cpython-314-pytest-9.0.2.pyc
+|   |               test_app.cpython-314-pytest-9.0.2.pyc
+|   |               test_capture_handler.cpython-314-pytest-9.0.2.pyc
+|   |               test_config.cpython-314-pytest-9.0.2.pyc
+|   |               test_dispatch.cpython-314-pytest-9.0.2.pyc
+|   |               test_final_consistency.cpython-314-pytest-9.0.2.pyc
+|   |               test_formatting.cpython-314-pytest-9.0.2.pyc
+|   |               test_observability.cpython-314-pytest-9.0.2.pyc
+|   |               test_pending_handler.cpython-314-pytest-9.0.2.pyc
+|   |               test_summary_handler.cpython-314-pytest-9.0.2.pyc
+|   |               test_telegram_final_consistency.cpython-314-pytest-9.0.2.pyc
+|   |               test_tracefold_api_client.cpython-314-pytest-9.0.2.pyc
 |   |
 |   \---web
 |       |   .env
@@ -5394,5 +5556,19 @@ G:.
         QUALITY_BASELINE.md
         RISK_DRIFT_WARNINGS.md
         ROADMAP_PHASE1.md
+        STEP7_ACCEPTANCE.md
+        STEP7_CH1_ACCEPTANCE_SMOKE.md
+        STEP7_CH1_SERVICE_PATH_GAP_ANALYSIS.md
+        STEP7_CH2_ACCEPTANCE_SMOKE.md
+        STEP7_CH2_TELEGRAM_ADAPTER_NOTES.md
+        STEP7_CH3_ACCEPTANCE_SMOKE.md
+        STEP7_CH3_DESKTOP_SHELL_NOTES.md
+        STEP7_ENTRY_CONTRACTS.md
+        STEP7_ERROR_AND_FEEDBACK.md
+        STEP7_FINAL_ACCEPTANCE.md
+        STEP7_FINAL_CONSISTENCY_GAP_ANALYSIS.md
+        STEP7_FINAL_REVIEW_CHECKLIST.md
+        STEP7_REVIEW_CHECKLIST.md
+        STEP7_SCOPE.md
         TASK_TEMPLATE.md
         阶段一规划

@@ -1,0 +1,1 @@
+"""Telegram adapter bot wiring."""

@@ -1,0 +1,1 @@
+"""Desktop shell skeleton components."""
