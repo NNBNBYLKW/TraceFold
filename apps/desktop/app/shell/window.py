@@ -19,7 +19,8 @@ class MainWindowSkeleton:
     load_state: str = "idle"
     last_error: str | None = None
     visible: bool = False
-    service_status_label: str = "Service: unknown"
+    workbench_status_label: str = "Current mode: not set"
+    service_status_label: str = "Service status: unknown"
     service_status_hint: str | None = None
 
     def open_workbench(self, *, url: str | None = None) -> WorkbenchLoadResult:
@@ -51,13 +52,22 @@ class MainWindowSkeleton:
         status: str,
         error_hint: str | None = None,
     ) -> dict[str, str | None]:
-        label = "Service: available" if status == "ok" else "Service: unavailable"
+        label = "Service status: available" if status == "ok" else "Service status: unavailable"
         self.service_status_label = label
         self.service_status_hint = error_hint
         return {
             "label": self.service_status_label,
             "hint": self.service_status_hint,
         }
+
+    def update_workbench_status(
+        self,
+        *,
+        active_mode_name: str | None = None,
+    ) -> dict[str, str]:
+        label = f"Current mode: {active_mode_name}" if active_mode_name else "Current mode: not set"
+        self.workbench_status_label = label
+        return {"label": self.workbench_status_label}
 
     @staticmethod
     def _validate_workbench_url(url: str) -> str | None:

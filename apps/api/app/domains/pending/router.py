@@ -16,6 +16,7 @@ from app.domains.pending.schemas import (
     PendingFixTextRequest,
     PendingListRead,
 )
+from app.domains.workbench import service as workbench_service
 
 router = APIRouter()
 
@@ -52,6 +53,7 @@ def get_pending_item(
     db: Session = Depends(get_db),
 ) -> ApiResponse[PendingDetailRead]:
     result = service.get_pending_read(db, pending_item_id)
+    workbench_service.record_pending_view_best_effort(db, pending_read=result)
     return success_response(data=result, message="Pending item fetched.")
 
 
@@ -66,6 +68,7 @@ def confirm_pending_item(
         pending_item_id=pending_item_id,
         note=payload.note,
     )
+    workbench_service.record_pending_action_best_effort(db, action_read=result)
     return success_response(data=result, message="Pending item confirmed.")
 
 
@@ -80,6 +83,7 @@ def discard_pending_item(
         pending_item_id=pending_item_id,
         note=payload.note,
     )
+    workbench_service.record_pending_action_best_effort(db, action_read=result)
     return success_response(data=result, message="Pending item discarded.")
 
 
@@ -94,4 +98,5 @@ def fix_pending_item(
         pending_item_id=pending_item_id,
         correction_text=payload.correction_text,
     )
+    workbench_service.record_pending_action_best_effort(db, action_read=result)
     return success_response(data=result, message="Pending item updated.")

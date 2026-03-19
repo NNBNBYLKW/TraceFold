@@ -10,6 +10,7 @@ from app.domains.ai_derivations.schemas import AiDerivationResultListRead
 from app.db.session import get_db
 from app.domains.knowledge import service
 from app.domains.knowledge.schemas import KnowledgeDetailRead, KnowledgeListRead
+from app.domains.workbench import service as workbench_service
 
 
 router = APIRouter()
@@ -47,6 +48,7 @@ def get_knowledge(
     db: Session = Depends(get_db),
 ) -> ApiResponse[KnowledgeDetailRead]:
     result = service.get_knowledge_read(db, knowledge_id)
+    workbench_service.record_knowledge_view_best_effort(db, knowledge_read=result)
     return success_response(data=result, message="Knowledge entry fetched.")
 
 

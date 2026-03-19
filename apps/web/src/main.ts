@@ -1,6 +1,9 @@
 import './style.css'
 
 import {
+  applyWorkbenchTemplate,
+  createWorkbenchShortcut,
+  createWorkbenchTemplate,
   fetchAiDerivationList,
   dismissAlert,
   fetchAlertList,
@@ -11,7 +14,13 @@ import {
   fetchHealthList,
   fetchKnowledgeDetail,
   fetchKnowledgeList,
+  fetchWorkbenchHome,
+  fetchWorkbenchPreferences,
+  fetchWorkbenchShortcuts,
   markAlertViewed,
+  updateWorkbenchShortcut,
+  updateWorkbenchTemplate,
+  deleteWorkbenchShortcut,
   fetchPendingDetail,
   fetchPendingList,
   rerunHealthAiSummary,
@@ -32,10 +41,25 @@ import type {
   PendingDetail,
   PendingListItem,
   PendingListResponse,
+  WorkbenchHomeData,
+  WorkbenchPreferences,
+  WorkbenchShortcut,
+  WorkbenchTemplate,
 } from './api.ts'
 
-type NavSection = 'dashboard' | 'capture' | 'pending' | 'expense' | 'knowledge' | 'health'
+type NavSection = 'workbench' | 'dashboard' | 'capture' | 'pending' | 'expense' | 'knowledge' | 'health'
 type SortOrder = 'asc' | 'desc'
+
+interface WorkbenchFlash {
+  kind: 'success' | 'error'
+  message: string
+}
+
+interface WorkbenchUiState {
+  editingTemplateId: number | null
+  editingShortcutId: number | null
+  flash: WorkbenchFlash | null
+}
 
 interface BaseListQuery {
   page: number
@@ -68,6 +92,7 @@ interface HealthListQuery extends BaseListQuery {
 }
 
 type Route =
+  | { kind: 'workbench'; section: NavSection; pageTitle: string; documentTitle: string }
   | { kind: 'dashboard'; section: NavSection; pageTitle: string; documentTitle: string }
   | { kind: 'capture'; section: NavSection; pageTitle: string; documentTitle: string }
   | { kind: 'pending-list'; section: NavSection; pageTitle: string; documentTitle: string }
@@ -113,6 +138,11 @@ if (!appElement) {
 const app = appElement
 
 let renderToken = 0
+const workbenchUiState: WorkbenchUiState = {
+  editingTemplateId: null,
+  editingShortcutId: null,
+  flash: null,
+}
 
 window.addEventListener('popstate', () => {
   void renderApp()
@@ -152,11 +182,18 @@ function parseRoute(pathname: string): Route {
   const parts = pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean)
 
   if (parts.length === 0) {
-    return { kind: 'redirect', to: '/dashboard' }
+    return { kind: 'redirect', to: '/workbench' }
   }
 
   if (parts.length === 1) {
     switch (parts[0]) {
+      case 'workbench':
+        return {
+          kind: 'workbench',
+          section: 'workbench',
+          pageTitle: 'Workbench',
+          documentTitle: 'Workbench',
+        }
       case 'dashboard':
         return {
           kind: 'dashboard',
@@ -180,7 +217,7 @@ function parseRoute(pathname: string): Route {
       case 'health':
         return { kind: 'health-list', section: 'health', pageTitle: 'Health', documentTitle: 'Health' }
       default:
-        return { kind: 'redirect', to: '/dashboard' }
+        return { kind: 'redirect', to: '/workbench' }
     }
   }
 
@@ -189,8 +226,8 @@ function parseRoute(pathname: string): Route {
       return {
         kind: 'pending-detail',
         section: 'pending',
-        pageTitle: 'Pending Detail',
-        documentTitle: 'Pending Detail',
+        pageTitle: 'Pending Item',
+        documentTitle: 'Pending Item',
         id: parts[1],
       }
     }
@@ -198,8 +235,8 @@ function parseRoute(pathname: string): Route {
       return {
         kind: 'expense-detail',
         section: 'expense',
-        pageTitle: 'Expense Detail',
-        documentTitle: 'Expense Detail',
+        pageTitle: 'Expense Record',
+        documentTitle: 'Expense Record',
         id: parts[1],
       }
     }
@@ -207,8 +244,8 @@ function parseRoute(pathname: string): Route {
       return {
         kind: 'knowledge-detail',
         section: 'knowledge',
-        pageTitle: 'Knowledge Detail',
-        documentTitle: 'Knowledge Detail',
+        pageTitle: 'Knowledge Record',
+        documentTitle: 'Knowledge Record',
         id: parts[1],
       }
     }
@@ -216,18 +253,20 @@ function parseRoute(pathname: string): Route {
       return {
         kind: 'health-detail',
         section: 'health',
-        pageTitle: 'Health Detail',
-        documentTitle: 'Health Detail',
+        pageTitle: 'Health Record',
+        documentTitle: 'Health Record',
         id: parts[1],
       }
     }
   }
 
-  return { kind: 'redirect', to: '/dashboard' }
+  return { kind: 'redirect', to: '/workbench' }
 }
 
 async function renderRoute(route: Exclude<Route, { kind: 'redirect' }>): Promise<string> {
   switch (route.kind) {
+    case 'workbench':
+      return renderWorkbenchPage()
     case 'dashboard':
       return renderDashboardPage()
     case 'capture':
@@ -260,6 +299,651 @@ async function renderDashboardPage(): Promise<string> {
   }
 }
 
+async function renderWorkbenchPage(): Promise<string> {
+  const [homeResult, shortcutsResult, preferencesResult] = await Promise.allSettled([
+    fetchWorkbenchHome(),
+    fetchWorkbenchShortcuts(),
+    fetchWorkbenchPreferences(),
+  ])
+
+  if (homeResult.status === 'rejected') {
+    return `
+      <section class="page-header">
+        <h1>Workbench</h1>
+        <p class="page-copy">Central entry layer for work modes, shortcuts, recent context, and summary.</p>
+      </section>
+      ${renderErrorState(toErrorMessage(homeResult.reason))}
+    `
+  }
+
+  return renderWorkbenchView(
+    homeResult.value,
+    shortcutsResult.status === 'fulfilled' ? shortcutsResult.value.items : [],
+    preferencesResult.status === 'fulfilled' ? preferencesResult.value : null,
+    {
+      shortcutsError: shortcutsResult.status === 'rejected' ? toErrorMessage(shortcutsResult.reason) : null,
+      preferencesError: preferencesResult.status === 'rejected' ? toErrorMessage(preferencesResult.reason) : null,
+    },
+  )
+}
+
+function renderWorkbenchView(
+  home: WorkbenchHomeData,
+  allShortcuts: WorkbenchShortcut[],
+  preferences: WorkbenchPreferences | null,
+  errors: { shortcutsError: string | null; preferencesError: string | null },
+): string {
+  const templates = home.templates
+  const activeTemplate = templates.find((template) => template.template_id === home.current_mode.template_id) ?? null
+  const defaultTemplate =
+    templates.find((template) => template.template_id === preferences?.default_template_id) ?? activeTemplate
+  const editingTemplate =
+    templates.find((template) => template.template_id === workbenchUiState.editingTemplateId) ?? null
+  const editingShortcut =
+    allShortcuts.find((shortcut) => shortcut.shortcut_id === workbenchUiState.editingShortcutId) ?? null
+
+  return `
+    <section class="page-header">
+      <h1>Workbench</h1>
+      <p class="page-copy">Step 8 home entry layer for current mode, templates, shortcuts, recent context, and summary.</p>
+    </section>
+    ${renderWorkbenchFlash()}
+    ${renderWorkbenchCurrentModeSection(home, activeTemplate, defaultTemplate, preferences, errors.preferencesError)}
+    ${renderWorkbenchTemplatesSection(home, editingTemplate)}
+    ${renderWorkbenchShortcutsSection(home, allShortcuts, editingShortcut, errors.shortcutsError)}
+    ${renderWorkbenchRecentSection(home)}
+    ${renderWorkbenchDashboardSummarySection(home)}
+  `
+}
+
+function renderWorkbenchFlash(): string {
+  if (!workbenchUiState.flash) {
+    return ''
+  }
+
+  if (workbenchUiState.flash.kind === 'error') {
+    return renderErrorState(workbenchUiState.flash.message)
+  }
+
+  return `
+    <section class="panel status-panel">
+      <p class="status-copy">${escapeHtml(workbenchUiState.flash.message)}</p>
+    </section>
+  `
+}
+
+function renderWorkbenchCurrentModeSection(
+  home: WorkbenchHomeData,
+  activeTemplate: WorkbenchTemplate | null,
+  defaultTemplate: WorkbenchTemplate | null,
+  preferences: WorkbenchPreferences | null,
+  preferencesError?: string | null,
+): string {
+  const currentModeHref = buildWorkbenchModeHref({
+    default_module: home.current_mode.default_module,
+    default_view_key: home.current_mode.default_view_key,
+    default_query_json: home.current_mode.default_query_json,
+  })
+
+  return `
+    <section class="panel page-section workbench-section">
+      <div class="section-header">
+        <h2>1. Current Mode</h2>
+        <p class="section-copy">Current mode only changes entry context. It does not change formal record semantics.</p>
+      </div>
+      <div class="workbench-mode-grid">
+        <article class="record-card">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>${escapeHtml(activeTemplate?.name ?? 'No active mode')}</h3>
+              <span class="record-meta">Active mode</span>
+            </div>
+            <div class="inline-list">
+              ${activeTemplate ? renderBadge(formatDomainLabel(activeTemplate.default_module)) : ''}
+              ${activeTemplate?.template_type ? renderBadge(formatStatusLabel(activeTemplate.template_type), true) : ''}
+            </div>
+          </div>
+          <p class="section-copy">${escapeHtml(activeTemplate?.description ?? 'Select a template to set the current work mode.')}</p>
+          <div class="field-grid">
+            ${renderField('Default View', activeTemplate?.default_view_key ?? 'list')}
+            ${renderField('Scoped Shortcuts', String(activeTemplate?.scoped_shortcut_ids.length ?? 0))}
+            ${renderField('Query Defaults', summarizeQuery(activeTemplate?.default_query_json))}
+          </div>
+          ${
+            currentModeHref
+              ? `<div class="filter-actions"><a class="record-action" href="${escapeHtml(currentModeHref)}" data-nav="true">Open current context</a></div>`
+              : ''
+          }
+        </article>
+        <article class="record-card">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>${escapeHtml(defaultTemplate?.name ?? 'No default mode')}</h3>
+              <span class="record-meta">Default mode</span>
+            </div>
+            ${
+              preferences
+                ? `<span class="record-meta">Updated ${escapeHtml(formatDateTime(preferences.updated_at))}</span>`
+                : ''
+            }
+          </div>
+          <p class="section-copy">${
+            defaultTemplate
+              ? `Default entry context remains API-defined and can be changed only through workbench APIs.`
+              : 'No default template is configured.'
+          }</p>
+          ${preferencesError ? `<p class="section-copy">${escapeHtml(preferencesError)}</p>` : ''}
+          <div class="field-grid">
+            ${renderField('Default Module', defaultTemplate ? formatDomainLabel(defaultTemplate.default_module) : 'Not set')}
+            ${renderField('Enabled', defaultTemplate ? formatBoolean(defaultTemplate.is_enabled) : 'No')}
+          </div>
+        </article>
+      </div>
+    </section>
+  `
+}
+
+function renderWorkbenchTemplatesSection(home: WorkbenchHomeData, editingTemplate: WorkbenchTemplate | null): string {
+  const builtinTemplates = home.templates.filter((template) => template.template_type === 'builtin')
+  const userTemplates = home.templates.filter((template) => template.template_type === 'user')
+
+  return `
+    <section class="panel page-section workbench-section">
+      <div class="section-header">
+        <h2>2. Templates</h2>
+        <p class="section-copy">Templates are named work modes. Builtin templates are read-only. User templates stay lightweight.</p>
+      </div>
+      <div class="workbench-card-grid">
+        ${builtinTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id)).join('')}
+        ${userTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id)).join('')}
+      </div>
+      ${renderWorkbenchTemplateForm(home.templates, editingTemplate)}
+    </section>
+  `
+}
+
+function renderWorkbenchTemplateCard(template: WorkbenchTemplate, activeTemplateId: number | null): string {
+  const isActive = template.template_id === activeTemplateId
+  return `
+    <article class="record-card${isActive ? ' record-card--priority' : ''}">
+      <div class="record-card__header">
+        <div class="record-card__title-group">
+          <h3>${escapeHtml(template.name)}</h3>
+          <span class="record-meta">${escapeHtml(template.description ?? 'No description')}</span>
+        </div>
+        <div class="inline-list">
+          ${isActive ? renderBadge('Active') : ''}
+          ${renderBadge(formatStatusLabel(template.template_type), true)}
+          ${renderBadge(formatDomainLabel(template.default_module))}
+          ${renderStatusBadge(template.is_enabled ? 'open' : 'dismissed')}
+        </div>
+      </div>
+      <div class="field-grid">
+        ${renderField('Default View', template.default_view_key ?? 'list')}
+        ${renderField('Query Defaults', summarizeQuery(template.default_query_json))}
+        ${renderField('Scoped Shortcuts', String(template.scoped_shortcut_ids.length))}
+      </div>
+      <div class="filter-actions">
+        <button class="primary-button" type="button" data-workbench-action="template-apply" data-template-id="${template.template_id}">
+          Apply
+        </button>
+        <button class="secondary-button" type="button" data-workbench-action="template-apply-default" data-template-id="${template.template_id}">
+          Apply as default
+        </button>
+        ${
+          template.template_type === 'user'
+            ? `
+                <button class="secondary-button" type="button" data-workbench-action="template-edit" data-template-id="${template.template_id}">
+                  Edit
+                </button>
+                <button
+                  class="secondary-button"
+                  type="button"
+                  data-workbench-action="template-toggle"
+                  data-template-id="${template.template_id}"
+                  data-enabled="${template.is_enabled ? 'true' : 'false'}"
+                >
+                  ${template.is_enabled ? 'Disable' : 'Enable'}
+                </button>
+              `
+            : ''
+        }
+      </div>
+    </article>
+  `
+}
+
+function renderWorkbenchTemplateForm(
+  templates: WorkbenchTemplate[],
+  editingTemplate: WorkbenchTemplate | null,
+): string {
+  const title = editingTemplate ? 'Edit user template' : 'Create user template'
+  return `
+    <section class="workbench-form-panel">
+      <div class="section-header">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="section-copy">Keep template defaults limited to existing formal read query semantics.</p>
+      </div>
+      <form class="filter-form" data-workbench-form="true" data-workbench-kind="template">
+        <input type="hidden" name="template_id" value="${editingTemplate?.template_id ?? ''}" />
+        <div class="filter-grid">
+          ${renderTextInput('name', 'Name', editingTemplate?.name ?? '')}
+          ${renderWorkbenchModuleSelect('default_module', editingTemplate?.default_module ?? 'dashboard')}
+          ${renderTextInput('default_view_key', 'Default view key', editingTemplate?.default_view_key ?? '')}
+          ${renderTextInput('sort_order', 'Sort order', String(editingTemplate?.sort_order ?? templates.length * 10 + 40))}
+          ${renderTextInput('scoped_shortcut_ids', 'Scoped shortcut IDs', (editingTemplate?.scoped_shortcut_ids ?? []).join(', '))}
+          ${renderTextInput('description', 'Description', editingTemplate?.description ?? '')}
+        </div>
+        <label class="filter-field">
+          <span>Default query JSON</span>
+          <textarea class="workbench-textarea" name="default_query_json">${escapeHtml(
+            editingTemplate?.default_query_json ? JSON.stringify(editingTemplate.default_query_json, null, 2) : '',
+          )}</textarea>
+        </label>
+        <label class="workbench-checkbox">
+          <input type="checkbox" name="is_enabled" ${editingTemplate?.is_enabled ?? true ? 'checked' : ''} />
+          <span>Enabled</span>
+        </label>
+        <div class="filter-actions">
+          <button class="primary-button" type="submit">${editingTemplate ? 'Save template' : 'Create template'}</button>
+          ${
+            editingTemplate
+              ? '<button class="secondary-button" type="button" data-workbench-action="template-cancel">Cancel edit</button>'
+              : ''
+          }
+        </div>
+      </form>
+    </section>
+  `
+}
+
+function renderWorkbenchShortcutsSection(
+  home: WorkbenchHomeData,
+  allShortcuts: WorkbenchShortcut[],
+  editingShortcut: WorkbenchShortcut | null,
+  shortcutsError?: string | null,
+): string {
+  return `
+    <section class="panel page-section workbench-section">
+      <div class="section-header">
+        <h2>3. Fixed Shortcuts</h2>
+        <p class="section-copy">Shortcuts enter stable contexts only. They do not run action chains.</p>
+      </div>
+      <div class="workbench-shortcut-highlight">
+        ${
+          home.pinned_shortcuts.length > 0
+            ? home.pinned_shortcuts.map((shortcut) => renderWorkbenchShortcutCard(shortcut, true)).join('')
+            : renderEmptyState('No pinned shortcuts for the current mode.')
+        }
+      </div>
+      ${shortcutsError ? `<p class="section-copy">${escapeHtml(shortcutsError)}</p>` : ''}
+      <div class="workbench-card-grid">
+        ${allShortcuts.map((shortcut) => renderWorkbenchShortcutCard(shortcut, false)).join('')}
+      </div>
+      ${renderWorkbenchShortcutForm(editingShortcut)}
+    </section>
+  `
+}
+
+function renderWorkbenchShortcutCard(shortcut: WorkbenchShortcut, highlighted: boolean): string {
+  const href = buildWorkbenchShortcutHref(shortcut)
+  return `
+    <article class="record-card${highlighted ? ' record-card--priority' : ''}">
+      <div class="record-card__header">
+        <div class="record-card__title-group">
+          <h3>${escapeHtml(shortcut.label)}</h3>
+          <span class="record-meta">${escapeHtml(shortcut.target_type)}</span>
+        </div>
+        <div class="inline-list">
+          ${renderStatusBadge(shortcut.is_enabled ? 'open' : 'dismissed')}
+          ${renderBadge(`Order ${shortcut.sort_order}`, true)}
+        </div>
+      </div>
+      <p class="section-copy">${escapeHtml(describeShortcutTarget(shortcut))}</p>
+      <div class="filter-actions">
+        ${
+          href
+            ? `<a class="record-action" href="${escapeHtml(href)}" data-nav="true">Open</a>`
+            : '<span class="record-meta">No target route</span>'
+        }
+        <button class="secondary-button" type="button" data-workbench-action="shortcut-edit" data-shortcut-id="${shortcut.shortcut_id}">
+          Edit
+        </button>
+        <button
+          class="secondary-button"
+          type="button"
+          data-workbench-action="shortcut-toggle"
+          data-shortcut-id="${shortcut.shortcut_id}"
+          data-enabled="${shortcut.is_enabled ? 'true' : 'false'}"
+        >
+          ${shortcut.is_enabled ? 'Disable' : 'Enable'}
+        </button>
+        <button class="secondary-button" type="button" data-workbench-action="shortcut-delete" data-shortcut-id="${shortcut.shortcut_id}">
+          Delete
+        </button>
+      </div>
+    </article>
+  `
+}
+
+function renderWorkbenchShortcutForm(editingShortcut: WorkbenchShortcut | null): string {
+  const payload = asRecord(editingShortcut?.target_payload_json)
+  const title = editingShortcut ? 'Edit shortcut' : 'Create shortcut'
+  return `
+    <section class="workbench-form-panel">
+      <div class="section-header">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="section-copy">Shortcut targets stay limited to route or module-view context.</p>
+      </div>
+      <form class="filter-form" data-workbench-form="true" data-workbench-kind="shortcut">
+        <input type="hidden" name="shortcut_id" value="${editingShortcut?.shortcut_id ?? ''}" />
+        <div class="filter-grid">
+          ${renderTextInput('label', 'Label', editingShortcut?.label ?? '')}
+          ${renderWorkbenchShortcutTypeSelect(editingShortcut?.target_type ?? 'module_view')}
+          ${renderTextInput('route', 'Route', asString(payload?.route))}
+          ${renderWorkbenchModuleSelect('module', asString(payload?.module) || 'dashboard')}
+          ${renderTextInput('view_key', 'View key', asString(payload?.view_key))}
+          ${renderTextInput('sort_order', 'Sort order', String(editingShortcut?.sort_order ?? 10))}
+        </div>
+        <label class="filter-field">
+          <span>Query JSON</span>
+          <textarea class="workbench-textarea" name="query_json">${escapeHtml(
+            payload?.query ? JSON.stringify(payload.query, null, 2) : '',
+          )}</textarea>
+        </label>
+        <label class="workbench-checkbox">
+          <input type="checkbox" name="is_enabled" ${editingShortcut?.is_enabled ?? true ? 'checked' : ''} />
+          <span>Enabled</span>
+        </label>
+        <div class="filter-actions">
+          <button class="primary-button" type="submit">${editingShortcut ? 'Save shortcut' : 'Create shortcut'}</button>
+          ${
+            editingShortcut
+              ? '<button class="secondary-button" type="button" data-workbench-action="shortcut-cancel">Cancel edit</button>'
+              : ''
+          }
+        </div>
+      </form>
+    </section>
+  `
+}
+
+function renderWorkbenchRecentSection(home: WorkbenchHomeData): string {
+  return `
+    <section class="panel page-section workbench-section">
+      <div class="section-header">
+        <h2>4. Recent Context</h2>
+        <p class="section-copy">Recent is for continuing work. It is not a history log or audit timeline.</p>
+      </div>
+      ${
+        home.recent_contexts.length > 0
+          ? `
+              <div class="activity-list">
+                ${home.recent_contexts.map((recent) => renderWorkbenchRecentCard(recent)).join('')}
+              </div>
+            `
+          : renderEmptyState('No recent work context yet.')
+      }
+    </section>
+  `
+}
+
+function renderWorkbenchRecentCard(recent: WorkbenchHomeData['recent_contexts'][number]): string {
+  return `
+    <article class="activity-card">
+      <div class="activity-card__body">
+        <div class="record-badges">
+          ${renderBadge(formatDomainLabel(recent.object_type))}
+          ${renderStatusBadge(recent.action_type)}
+        </div>
+        <p class="activity-card__target">${escapeHtml(recent.title_snapshot)}</p>
+        <div class="activity-card__meta">
+          <span>${escapeHtml(formatDateTime(recent.occurred_at))}</span>
+          <span>#${escapeHtml(recent.object_id)}</span>
+        </div>
+      </div>
+      <a class="record-action" href="${escapeHtml(recent.route_snapshot)}" data-nav="true">Resume</a>
+    </article>
+  `
+}
+
+function renderWorkbenchDashboardSummarySection(home: WorkbenchHomeData): string {
+  const dashboard = home.dashboard_summary
+  return `
+    <section class="panel page-section workbench-section">
+      <div class="section-header">
+        <h2>5. Dashboard Summary</h2>
+        <p class="section-copy">Summary stays summary. The workbench homepage does not replace the full dashboard.</p>
+      </div>
+      <div class="summary-grid">
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Pending</h3>
+            <a class="record-action" href="/pending" data-nav="true">Open</a>
+          </div>
+          <p class="summary-value">${dashboard.pending_summary.open_count}</p>
+          <p class="section-copy">${dashboard.pending_summary.resolved_in_last_7_days} resolved in the last 7 days.</p>
+        </article>
+        <article class="summary-card summary-card--alert">
+          <div class="summary-card__header">
+            <h3>Open alerts</h3>
+            <a class="record-action" href="/dashboard" data-nav="true">Dashboard</a>
+          </div>
+          <p class="summary-value">${dashboard.alert_summary.open_count}</p>
+          <p class="section-copy">Current high-signal alert count from the shared dashboard summary.</p>
+        </article>
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Expense</h3>
+            <a class="record-action" href="/expense" data-nav="true">Open</a>
+          </div>
+          <p class="summary-value">${dashboard.expense_summary.created_in_current_month}</p>
+          <p class="section-copy">Created this month.</p>
+        </article>
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Knowledge</h3>
+            <a class="record-action" href="/knowledge" data-nav="true">Open</a>
+          </div>
+          <p class="summary-value">${dashboard.knowledge_summary.created_in_last_7_days}</p>
+          <p class="section-copy">Created in the last 7 days.</p>
+        </article>
+        <article class="summary-card">
+          <div class="summary-card__header">
+            <h3>Health</h3>
+            <a class="record-action" href="/health" data-nav="true">Open</a>
+          </div>
+          <p class="summary-value">${dashboard.health_summary.created_in_last_7_days}</p>
+          <p class="section-copy">Created in the last 7 days.</p>
+        </article>
+      </div>
+    </section>
+  `
+}
+
+async function handleWorkbenchAction(button: HTMLButtonElement): Promise<void> {
+  const action = button.dataset.workbenchAction
+
+  try {
+    switch (action) {
+      case 'template-edit': {
+        workbenchUiState.editingTemplateId = Number.parseInt(button.dataset.templateId || '', 10)
+        workbenchUiState.flash = null
+        await renderApp()
+        return
+      }
+      case 'template-cancel': {
+        workbenchUiState.editingTemplateId = null
+        workbenchUiState.flash = null
+        await renderApp()
+        return
+      }
+      case 'template-apply': {
+        const templateId = Number.parseInt(button.dataset.templateId || '', 10)
+        await applyWorkbenchTemplate(templateId, { set_as_default: false })
+        workbenchUiState.flash = { kind: 'success', message: 'Template applied.' }
+        await renderApp()
+        return
+      }
+      case 'template-apply-default': {
+        const templateId = Number.parseInt(button.dataset.templateId || '', 10)
+        await applyWorkbenchTemplate(templateId, { set_as_default: true })
+        workbenchUiState.flash = { kind: 'success', message: 'Template applied as active and default.' }
+        await renderApp()
+        return
+      }
+      case 'template-toggle': {
+        const templateId = Number.parseInt(button.dataset.templateId || '', 10)
+        const enabled = button.dataset.enabled === 'true'
+        await updateWorkbenchTemplate(templateId, { is_enabled: !enabled })
+        workbenchUiState.flash = { kind: 'success', message: enabled ? 'Template disabled.' : 'Template enabled.' }
+        await renderApp()
+        return
+      }
+      case 'shortcut-edit': {
+        workbenchUiState.editingShortcutId = Number.parseInt(button.dataset.shortcutId || '', 10)
+        workbenchUiState.flash = null
+        await renderApp()
+        return
+      }
+      case 'shortcut-cancel': {
+        workbenchUiState.editingShortcutId = null
+        workbenchUiState.flash = null
+        await renderApp()
+        return
+      }
+      case 'shortcut-toggle': {
+        const shortcutId = Number.parseInt(button.dataset.shortcutId || '', 10)
+        const enabled = button.dataset.enabled === 'true'
+        await updateWorkbenchShortcut(shortcutId, { is_enabled: !enabled })
+        workbenchUiState.flash = { kind: 'success', message: enabled ? 'Shortcut disabled.' : 'Shortcut enabled.' }
+        await renderApp()
+        return
+      }
+      case 'shortcut-delete': {
+        const shortcutId = Number.parseInt(button.dataset.shortcutId || '', 10)
+        if (!window.confirm('Delete this shortcut?')) {
+          return
+        }
+        await deleteWorkbenchShortcut(shortcutId)
+        if (workbenchUiState.editingShortcutId === shortcutId) {
+          workbenchUiState.editingShortcutId = null
+        }
+        workbenchUiState.flash = { kind: 'success', message: 'Shortcut deleted.' }
+        await renderApp()
+        return
+      }
+      default:
+        return
+    }
+  } catch (error) {
+    workbenchUiState.flash = { kind: 'error', message: toErrorMessage(error) }
+    await renderApp()
+  }
+}
+
+async function handleWorkbenchSubmit(form: HTMLFormElement): Promise<void> {
+  const kind = form.dataset.workbenchKind
+  const formData = new FormData(form)
+
+  try {
+    if (kind === 'template') {
+      const templateId = parseOptionalNumber(String(formData.get('template_id') || ''))
+      const payload = buildTemplatePayload(formData)
+      if (templateId) {
+        await updateWorkbenchTemplate(templateId, payload)
+        workbenchUiState.flash = { kind: 'success', message: 'Template saved.' }
+      } else {
+        await createWorkbenchTemplate(payload)
+        workbenchUiState.flash = { kind: 'success', message: 'Template created.' }
+      }
+      workbenchUiState.editingTemplateId = null
+      await renderApp()
+      return
+    }
+
+    if (kind === 'shortcut') {
+      const shortcutId = parseOptionalNumber(String(formData.get('shortcut_id') || ''))
+      const payload = buildShortcutPayload(formData)
+      if (shortcutId) {
+        await updateWorkbenchShortcut(shortcutId, payload)
+        workbenchUiState.flash = { kind: 'success', message: 'Shortcut saved.' }
+      } else {
+        await createWorkbenchShortcut(payload)
+        workbenchUiState.flash = { kind: 'success', message: 'Shortcut created.' }
+      }
+      workbenchUiState.editingShortcutId = null
+      await renderApp()
+    }
+  } catch (error) {
+    workbenchUiState.flash = { kind: 'error', message: toErrorMessage(error) }
+    await renderApp()
+  }
+}
+
+function buildTemplatePayload(formData: FormData): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: requireFormValue(formData, 'name'),
+    default_module: requireFormValue(formData, 'default_module'),
+    sort_order: parseIntegerOrDefault(String(formData.get('sort_order') || ''), 0),
+    is_enabled: formData.has('is_enabled'),
+  }
+
+  const defaultViewKey = optionalFormValue(formData, 'default_view_key')
+  if (defaultViewKey) {
+    payload.default_view_key = defaultViewKey
+  }
+
+  const description = optionalFormValue(formData, 'description')
+  if (description) {
+    payload.description = description
+  }
+
+  const scopedShortcutIds = parseIdList(optionalFormValue(formData, 'scoped_shortcut_ids'))
+  if (scopedShortcutIds.length > 0) {
+    payload.scoped_shortcut_ids = scopedShortcutIds
+  }
+
+  const defaultQuery = parseOptionalJson(optionalFormValue(formData, 'default_query_json'))
+  if (defaultQuery !== undefined) {
+    payload.default_query_json = defaultQuery
+  }
+
+  return payload
+}
+
+function buildShortcutPayload(formData: FormData): Record<string, unknown> {
+  const targetType = requireFormValue(formData, 'target_type')
+  const payload: Record<string, unknown> = {
+    label: requireFormValue(formData, 'label'),
+    target_type: targetType,
+    sort_order: parseIntegerOrDefault(String(formData.get('sort_order') || ''), 0),
+    is_enabled: formData.has('is_enabled'),
+  }
+
+  const route = optionalFormValue(formData, 'route')
+  const module = optionalFormValue(formData, 'module')
+  const viewKey = optionalFormValue(formData, 'view_key')
+  const query = parseOptionalJson(optionalFormValue(formData, 'query_json'))
+
+  if (targetType === 'route') {
+    payload.target_payload_json = { route: route ?? '/workbench' }
+    return payload
+  }
+
+  const targetPayload: Record<string, unknown> = {
+    module: module ?? 'dashboard',
+  }
+  if (viewKey) {
+    targetPayload.view_key = viewKey
+  }
+  if (query !== undefined) {
+    targetPayload.query = query
+  }
+  payload.target_payload_json = targetPayload
+  return payload
+}
+
 async function renderPendingListPage(): Promise<string> {
   const query = parsePendingListQuery(new URLSearchParams(window.location.search))
 
@@ -276,7 +960,7 @@ async function renderPendingDetailPage(id: string): Promise<string> {
     const detail = await fetchPendingDetail(id)
     return renderPendingDetailView(detail)
   } catch (error) {
-    return renderDetailErrorView('Pending Detail', '/pending', 'Pending', toErrorMessage(error))
+    return renderDetailErrorView('Pending Item', '/pending', 'Pending', toErrorMessage(error))
   }
 }
 
@@ -296,7 +980,7 @@ async function renderExpenseDetailPage(id: string): Promise<string> {
     const detail = await fetchExpenseDetail(id)
     return renderExpenseDetailView(detail)
   } catch (error) {
-    return renderDetailErrorView('Expense Detail', '/expense', 'Expenses', toErrorMessage(error))
+    return renderDetailErrorView('Expense Record', '/expense', 'Expenses', toErrorMessage(error))
   }
 }
 
@@ -318,7 +1002,7 @@ async function renderKnowledgeDetailPage(id: string): Promise<string> {
   ])
 
   if (detailResult.status === 'rejected') {
-    return renderDetailErrorView('Knowledge Detail', '/knowledge', 'Knowledge', toErrorMessage(detailResult.reason))
+    return renderDetailErrorView('Knowledge Record', '/knowledge', 'Knowledge', toErrorMessage(detailResult.reason))
   }
 
   return renderKnowledgeDetailView(
@@ -353,7 +1037,7 @@ async function renderHealthDetailPage(id: string): Promise<string> {
   ])
 
   if (detailResult.status === 'rejected') {
-    return renderDetailErrorView('Health Detail', '/health', 'Health', toErrorMessage(detailResult.reason))
+    return renderDetailErrorView('Health Record', '/health', 'Health', toErrorMessage(detailResult.reason))
   }
 
   return renderHealthDetailView(
@@ -369,6 +1053,13 @@ function handleClick(event: MouseEvent): void {
   const target = event.target instanceof Element ? event.target : null
 
   if (!target) {
+    return
+  }
+
+  const workbenchActionButton = target.closest<HTMLButtonElement>('[data-workbench-action]')
+  if (workbenchActionButton) {
+    event.preventDefault()
+    void handleWorkbenchAction(workbenchActionButton)
     return
   }
 
@@ -440,7 +1131,17 @@ function handleClick(event: MouseEvent): void {
 function handleSubmit(event: SubmitEvent): void {
   const form = event.target instanceof HTMLFormElement ? event.target : null
 
-  if (!form || form.dataset.listForm !== 'true') {
+  if (!form) {
+    return
+  }
+
+  if (form.dataset.workbenchForm === 'true') {
+    event.preventDefault()
+    void handleWorkbenchSubmit(form)
+    return
+  }
+
+  if (form.dataset.listForm !== 'true') {
     return
   }
 
@@ -484,6 +1185,7 @@ function renderShell(activeSection: NavSection, content: string): string {
           <span class="brand-caption">Local-first workspace</span>
         </div>
         <nav class="workspace-nav" aria-label="Primary">
+          ${renderNavLink('Workbench', '/workbench', activeSection === 'workbench')}
           ${renderNavLink('Dashboard', '/dashboard', activeSection === 'dashboard')}
           ${renderNavLink('Capture', '/capture', activeSection === 'capture')}
           ${renderNavLink('Pending', '/pending', activeSection === 'pending')}
@@ -822,7 +1524,7 @@ function renderPendingDetailView(detail: PendingDetail): string {
   return `
     <section class="page-header">
       <a class="back-link" href="/pending" data-nav="true">Back to Pending</a>
-      <h1>Pending Detail</h1>
+      <h1>Pending Item</h1>
     </section>
     <section class="panel page-section">
       <div class="section-header">
@@ -834,8 +1536,8 @@ function renderPendingDetailView(detail: PendingDetail): string {
         ${renderField('Target Domain', formatDomainLabel(detail.target_domain))}
         ${renderField('Created At', formatDateTime(detail.created_at))}
         ${renderField('Resolved At', detail.resolved_at ? formatDateTime(detail.resolved_at) : null)}
-        ${renderField('source_capture_id', String(detail.source_capture_id))}
-        ${renderField('parse_result_id', String(detail.parse_result_id))}
+        ${renderField('Source Capture ID', String(detail.source_capture_id))}
+        ${renderField('Parse Result ID', String(detail.parse_result_id))}
         ${renderField('Reason', detail.reason, true)}
       </div>
     </section>
@@ -957,7 +1659,7 @@ function renderExpenseDetailView(detail: ExpenseDetail): string {
   return `
     <section class="page-header">
       <a class="back-link" href="/expense" data-nav="true">Back to Expenses</a>
-      <h1>Expense Detail</h1>
+      <h1>Expense Record</h1>
     </section>
     <section class="panel page-section">
       <div class="section-header">
@@ -984,7 +1686,7 @@ function renderKnowledgeDetailView(
   return `
     <section class="page-header">
       <a class="back-link" href="/knowledge" data-nav="true">Back to Knowledge</a>
-      <h1>Knowledge Detail</h1>
+      <h1>Knowledge Record</h1>
     </section>
     <section class="panel page-section">
       <div class="section-header">
@@ -998,12 +1700,12 @@ function renderKnowledgeDetailView(
     </section>
     <section class="panel page-section">
       <div class="section-header">
-        <h2>Source</h2>
+        <h2>Source Reference</h2>
       </div>
       <div class="field-grid">
-        ${renderField('source_capture_id', String(detail.source_capture_id))}
-        ${renderField('source_pending_id', detail.source_pending_id === null ? null : String(detail.source_pending_id))}
-        ${renderField('source_text', detail.source_text, true)}
+        ${renderField('Source Capture ID', String(detail.source_capture_id))}
+        ${renderField('Source Pending ID', detail.source_pending_id === null ? null : String(detail.source_pending_id))}
+        ${renderField('Source Text', detail.source_text, true)}
       </div>
     </section>
     ${renderKnowledgeAiSummarySection(detail.id, aiSummary, aiErrorMessage)}
@@ -1020,7 +1722,7 @@ function renderHealthDetailView(
   return `
     <section class="page-header">
       <a class="back-link" href="/health" data-nav="true">Back to Health</a>
-      <h1>Health Detail</h1>
+      <h1>Health Record</h1>
     </section>
     <section class="panel page-section">
       <div class="section-header">
@@ -1210,7 +1912,7 @@ function renderPendingRecords(items: PendingListItem[]): string {
           </div>
           <div class="field-grid">
             ${renderField('Reason Preview', item.reason_preview, true)}
-            ${renderField('source_capture_id', String(item.source_capture_id))}
+            ${renderField('Source Capture ID', String(item.source_capture_id))}
             ${renderField('Has Corrected Payload', formatBoolean(item.has_corrected_payload))}
           </div>
         </article>
@@ -1308,6 +2010,7 @@ function renderHealthAlertSection(
       <div class="section-header">
         <h2>${escapeHtml(options.heading)}</h2>
       </div>
+      <p class="section-copy">Rule alerts are reminders derived from formal records. They do not replace the formal record itself.</p>
       ${
         errorMessage
           ? renderErrorState(errorMessage)
@@ -1327,9 +2030,10 @@ function renderHealthAiSummarySection(
   return `
     <section class="panel page-section page-section--ai">
       <div class="section-header section-header--with-badge">
-        <h2>AI Summary</h2>
+        <h2>AI Derivation</h2>
         ${renderAiLabelBadge()}
       </div>
+      <p class="section-copy">AI derivations are generated from the formal record. They do not replace formal facts or rule alerts.</p>
       ${
         errorMessage
           ? renderErrorState(errorMessage)
@@ -1337,9 +2041,9 @@ function renderHealthAiSummarySection(
             ? renderHealthAiSummaryContent(aiSummary, healthId)
             : `
                 <div class="status-panel is-empty">
-                  <p class="status-copy">AI Summary is only available for subjective health records.</p>
+                  <p class="status-copy">AI derivation has not been generated for this health record yet. It is only available for subjective health records.</p>
                   <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
-                    Generate AI Summary
+                    Generate AI Derivation
                   </button>
                 </div>
               `
@@ -1356,9 +2060,10 @@ function renderKnowledgeAiSummarySection(
   return `
     <section class="panel page-section page-section--ai">
       <div class="section-header section-header--with-badge">
-        <h2>AI Summary</h2>
+        <h2>AI Derivation</h2>
         ${renderAiLabelBadge()}
       </div>
+      <p class="section-copy">AI derivations are generated from the formal record. They do not replace formal facts or rule alerts.</p>
       ${
         errorMessage
           ? renderErrorState(errorMessage)
@@ -1366,9 +2071,9 @@ function renderKnowledgeAiSummarySection(
             ? renderKnowledgeAiSummaryContent(aiSummary, knowledgeId)
             : `
                 <div class="status-panel is-empty">
-                  <p class="status-copy">AI Summary is not available for this knowledge entry yet.</p>
+                  <p class="status-copy">AI derivation has not been generated for this knowledge record yet.</p>
                   <button class="secondary-button" type="button" data-ai-action="rerun-knowledge-summary" data-record-id="${knowledgeId}">
-                    Generate AI Summary
+                    Generate AI Derivation
                   </button>
                 </div>
               `
@@ -1397,9 +2102,9 @@ function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthI
       </div>
       ${
         aiSummary.status === 'failed'
-          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI summary generation failed.')}</p>`
+          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed.')}</p>`
           : aiSummary.status === 'pending'
-            ? '<p class="section-copy">AI summary generation is in progress.</p>'
+            ? '<p class="section-copy">AI derivation is in progress.</p>'
             : `
                 <div class="field-grid">
                   ${renderField('Summary', summaryText, true)}
@@ -1417,7 +2122,7 @@ function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthI
       }
       <div class="alert-actions">
         <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
-          Rerun AI Summary
+          Rerun AI Derivation
         </button>
       </div>
     </article>
@@ -1443,9 +2148,9 @@ function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem, know
       </div>
       ${
         aiSummary.status === 'failed'
-          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI summary generation failed.')}</p>`
+          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed.')}</p>`
           : aiSummary.status === 'pending'
-            ? '<p class="section-copy">AI summary generation is in progress.</p>'
+            ? '<p class="section-copy">AI derivation is in progress.</p>'
             : `
                 <div class="field-grid">
                   ${renderField('Summary', summaryText, true)}
@@ -1465,7 +2170,7 @@ function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem, know
       }
       <div class="alert-actions">
         <button class="secondary-button" type="button" data-ai-action="rerun-knowledge-summary" data-record-id="${knowledgeId}">
-          Rerun AI Summary
+          Rerun AI Derivation
         </button>
       </div>
     </article>
@@ -1634,11 +2339,11 @@ function renderSourceSection(sourceCaptureId: number, sourcePendingId: number | 
   return `
     <section class="panel page-section">
       <div class="section-header">
-        <h2>Source</h2>
+        <h2>Source Reference</h2>
       </div>
       <div class="field-grid">
-        ${renderField('source_capture_id', String(sourceCaptureId))}
-        ${renderField('source_pending_id', sourcePendingId === null ? null : String(sourcePendingId))}
+        ${renderField('Source Capture ID', String(sourceCaptureId))}
+        ${renderField('Source Pending ID', sourcePendingId === null ? null : String(sourcePendingId))}
       </div>
     </section>
   `
@@ -1872,6 +2577,204 @@ function toDateTimeEnd(value: string): string {
 function buildUrl(path: string, params: URLSearchParams): string {
   const search = params.toString()
   return search ? `${path}?${search}` : path
+}
+
+function renderWorkbenchModuleSelect(name: string, value: string): string {
+  const options = [
+    ['dashboard', 'Dashboard'],
+    ['pending', 'Pending'],
+    ['expense', 'Expense'],
+    ['knowledge', 'Knowledge'],
+    ['health', 'Health'],
+    ['alerts', 'Alerts'],
+  ] as const
+
+  return `
+    <label class="filter-field">
+      <span>${escapeHtml(formatStatusLabel(name.replaceAll('_', ' ')))}</span>
+      <select name="${name}">
+        ${options
+          .map(
+            ([optionValue, label]) =>
+              `<option value="${optionValue}" ${optionValue === value ? 'selected' : ''}>${escapeHtml(label)}</option>`,
+          )
+          .join('')}
+      </select>
+    </label>
+  `
+}
+
+function renderWorkbenchShortcutTypeSelect(value: string): string {
+  return `
+    <label class="filter-field">
+      <span>Target type</span>
+      <select name="target_type">
+        <option value="module_view" ${value === 'module_view' ? 'selected' : ''}>Module view</option>
+        <option value="route" ${value === 'route' ? 'selected' : ''}>Route</option>
+      </select>
+    </label>
+  `
+}
+
+function buildWorkbenchModeHref(mode: {
+  default_module: string | null
+  default_view_key: string | null
+  default_query_json: unknown
+}): string | null {
+  if (!mode.default_module) {
+    return null
+  }
+  return buildWorkbenchContextHref(mode.default_module, mode.default_view_key, mode.default_query_json)
+}
+
+function buildWorkbenchShortcutHref(shortcut: WorkbenchShortcut): string | null {
+  const payload = asRecord(shortcut.target_payload_json)
+  if (!payload) {
+    return null
+  }
+
+  if (shortcut.target_type === 'route') {
+    const route = asString(payload.route)
+    return route ? route : null
+  }
+
+  return buildWorkbenchContextHref(asString(payload.module), asString(payload.view_key), payload.query)
+}
+
+function buildWorkbenchContextHref(
+  moduleValue: string | null,
+  _viewKey: string | null,
+  queryValue: unknown,
+): string | null {
+  if (!moduleValue) {
+    return null
+  }
+
+  const path = resolveWorkbenchModulePath(moduleValue)
+  if (!path) {
+    return null
+  }
+
+  const params = new URLSearchParams()
+  const query = asRecord(queryValue)
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== null && value !== undefined) {
+        params.set(key, String(value))
+      }
+    }
+  }
+  if (moduleValue === 'alerts') {
+    params.set('focusAlerts', 'true')
+  }
+  return buildUrl(path, params)
+}
+
+function resolveWorkbenchModulePath(moduleValue: string): string | null {
+  switch (moduleValue) {
+    case 'dashboard':
+      return '/dashboard'
+    case 'pending':
+      return '/pending'
+    case 'expense':
+      return '/expense'
+    case 'knowledge':
+      return '/knowledge'
+    case 'health':
+    case 'alerts':
+      return '/health'
+    default:
+      return null
+  }
+}
+
+function describeShortcutTarget(shortcut: WorkbenchShortcut): string {
+  const payload = asRecord(shortcut.target_payload_json)
+  if (!payload) {
+    return 'No target payload.'
+  }
+  if (shortcut.target_type === 'route') {
+    return `Route: ${asString(payload.route) || 'not set'}`
+  }
+  const parts = [formatDomainLabel(asString(payload.module) || 'dashboard')]
+  const viewKey = asString(payload.view_key)
+  if (viewKey) {
+    parts.push(`view ${viewKey}`)
+  }
+  const querySummary = summarizeQuery(payload.query)
+  if (querySummary !== 'None') {
+    parts.push(querySummary)
+  }
+  return parts.join(' · ')
+}
+
+function summarizeQuery(value: unknown): string {
+  const record = asRecord(value)
+  if (!record || Object.keys(record).length === 0) {
+    return 'None'
+  }
+  return Object.entries(record)
+    .map(([key, item]) => `${key}=${String(item)}`)
+    .join(', ')
+}
+
+function requireFormValue(formData: FormData, key: string): string {
+  const value = optionalFormValue(formData, key)
+  if (!value) {
+    throw new Error(`${formatStatusLabel(key.replaceAll('_', ' '))} is required.`)
+  }
+  return value
+}
+
+function optionalFormValue(formData: FormData, key: string): string | undefined {
+  const rawValue = formData.get(key)
+  if (rawValue === null) {
+    return undefined
+  }
+  const value = String(rawValue).trim()
+  return value ? value : undefined
+}
+
+function parseOptionalJson(value: string | undefined): unknown {
+  if (!value) {
+    return undefined
+  }
+  try {
+    return JSON.parse(value)
+  } catch {
+    throw new Error('JSON input is invalid.')
+  }
+}
+
+function parseIdList(value: string | undefined): number[] {
+  if (!value) {
+    return []
+  }
+  return value
+    .split(',')
+    .map((part) => Number.parseInt(part.trim(), 10))
+    .filter((item) => Number.isFinite(item))
+}
+
+function parseIntegerOrDefault(value: string, fallback: number): number {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function parseOptionalNumber(value: string): number | null {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return null
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
 }
 
 function formatDateTime(value: string): string {

@@ -67,8 +67,8 @@ def test_dashboard_command_returns_short_summary():
     result = handler.handle_update(_make_update("/dashboard"))
 
     assert result is not None
-    assert "Dashboard:" in result.text
-    assert "pending: 3" in result.text
+    assert "Dashboard summary:" in result.text
+    assert "Pending: 3" in result.text
     assert ("get_dashboard",) in api_client.calls
     assert api_client.capture_calls == []
 
@@ -80,7 +80,7 @@ def test_alerts_command_returns_short_summary():
     result = handler.handle_update(_make_update("/alerts"))
 
     assert result is not None
-    assert "Alerts:" in result.text
+    assert "Open rule alerts:" in result.text
     assert "#9 [high]" in result.text
     assert ("get_alerts",) in api_client.calls
 
@@ -103,7 +103,7 @@ def test_status_command_returns_minimal_status():
     result = handler.handle_update(_make_update("/status"))
 
     assert result is not None
-    assert result.text == "Status: ok."
+    assert result.text == "Service status: ok."
     assert ("get_status",) in api_client.calls
 
 

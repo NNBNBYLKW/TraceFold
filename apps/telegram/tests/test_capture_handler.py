@@ -47,7 +47,7 @@ def test_private_plain_text_submits_capture_and_returns_pending_feedback():
     )
 
     assert result is not None
-    assert result.text == "Recorded. Pending review item: #88"
+    assert result.text == "Recorded. Pending item: #88"
     assert api_client.calls == [
         {
             "raw_text": "今天午饭 25 元",
@@ -83,7 +83,7 @@ def test_capture_command_can_submit_and_render_formal_feedback():
     )
 
     assert result is not None
-    assert result.text == "Recorded. Added to expense."
+    assert result.text == "Recorded. Added to expense record."
 
 
 def test_capture_failure_returns_short_unavailable_feedback():
@@ -104,7 +104,7 @@ def test_capture_failure_returns_short_unavailable_feedback():
     )
 
     assert result is not None
-    assert result.text == "Service unavailable. Try again later."
+    assert result.text == "Service status unavailable. Try again later."
 
 
 def test_capture_validation_failure_returns_short_invalid_input_feedback():

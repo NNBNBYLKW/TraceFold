@@ -81,7 +81,7 @@ def test_pending_list_command_returns_short_summary():
     result = handler.handle_update(_make_update("/pending"))
 
     assert result is not None
-    assert "Open pending:" in result.text
+    assert "Open pending items:" in result.text
     assert "#12" in result.text
     assert ("get_pending_list", 5, 0, "pending") in api_client.calls
     assert api_client.capture_calls == []
@@ -94,8 +94,8 @@ def test_pending_detail_command_returns_action_context():
     result = handler.handle_update(_make_update("/pending 12"))
 
     assert result is not None
-    assert "Pending #12" in result.text
-    assert "domain: expense" in result.text
+    assert "Pending item #12" in result.text
+    assert "Target domain: expense" in result.text
     assert ("get_pending_detail", 12) in api_client.calls
 
 
@@ -106,7 +106,7 @@ def test_confirm_command_returns_short_success():
     result = handler.handle_update(_make_update("/confirm 12"))
 
     assert result is not None
-    assert result.text == "Confirmed pending #12. Status: confirmed."
+    assert result.text == "Confirmed pending item #12. Status: confirmed."
     assert ("confirm_pending", 12) in api_client.calls
 
 
@@ -147,7 +147,7 @@ def test_discard_command_returns_short_success():
     result = handler.handle_update(_make_update("/discard 12"))
 
     assert result is not None
-    assert result.text == "Discarded pending #12. Status: discarded."
+    assert result.text == "Discarded pending item #12. Status: discarded."
     assert ("discard_pending", 12) in api_client.calls
 
 
@@ -158,7 +158,7 @@ def test_fix_command_returns_short_success():
     result = handler.handle_update(_make_update("/fix 12 Lunch 28"))
 
     assert result is not None
-    assert result.text == "Updated pending #12. Status: pending."
+    assert result.text == "Updated pending item #12. Status: pending."
     assert ("fix_pending", 12, "Lunch 28") in api_client.calls
 
 
@@ -196,7 +196,7 @@ def test_pending_command_maps_service_unavailable():
     result = handler.handle_update(_make_update("/pending"))
 
     assert result is not None
-    assert result.text == "Service unavailable. Try again later."
+    assert result.text == "Service status unavailable. Try again later."
 
 
 def test_pending_commands_do_not_fall_back_to_capture_submission():

@@ -31,7 +31,7 @@ def test_capture_success_uses_short_consistent_text():
         },
     )
 
-    assert result.text == "Recorded. Added to expense."
+    assert result.text == "Recorded. Added to expense record."
 
 
 def test_pending_list_empty_state_is_short_and_consistent():
@@ -51,8 +51,8 @@ def test_dashboard_summary_renders_short_counts():
         },
     )
 
-    assert "Dashboard:" in result.text
-    assert "pending: 2" in result.text
+    assert "Dashboard summary:" in result.text
+    assert "Pending: 2" in result.text
 
 
 def test_alerts_summary_empty_state_is_short_and_consistent():
@@ -64,7 +64,7 @@ def test_alerts_summary_empty_state_is_short_and_consistent():
 def test_status_summary_is_short():
     result = render_status_summary(_message(), {"status": "ok"})
 
-    assert result.text == "Status: ok."
+    assert result.text == "Service status: ok."
 
 
 def test_error_mapping_hides_internal_error_text():

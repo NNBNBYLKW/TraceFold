@@ -102,3 +102,18 @@ def test_telegram_final_consistency_does_not_expose_force_insert_path():
     assert result is not None
     assert result.text == "This command is not available."
     assert api_client.calls == []
+
+
+def test_telegram_final_consistency_does_not_grow_template_or_workbench_commands():
+    api_client = RecordingTraceFoldApiClient()
+    handler = TelegramMessageHandler(tracefold_api=api_client)
+
+    template_result = handler.handle_update(_update("/template create"))
+    workbench_result = handler.handle_update(_update("/workbench"))
+
+    assert template_result is not None
+    assert workbench_result is not None
+    assert template_result.text == "This command is not available."
+    assert workbench_result.text == "This command is not available."
+    assert api_client.calls == []
+    assert not hasattr(handler, "_handle_template_command")

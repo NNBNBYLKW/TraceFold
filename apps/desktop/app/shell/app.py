@@ -23,20 +23,22 @@ class DesktopShellApp:
     ) -> None:
         self.settings = settings
         self.status_client = status_client
+        normalized_workbench_url = self._normalize_workbench_url(settings.web_workbench_url)
         self.window = window or MainWindowSkeleton(
             title="TraceFold Desktop Shell",
-            workbench_url=settings.web_workbench_url,
+            workbench_url=normalized_workbench_url,
         )
+        self.window.workbench_url = normalized_workbench_url
         self.tray = tray or TrayIntegrationSkeleton()
         self.notifications = notifications or NotificationBridgeSkeleton()
         self.state = state or DesktopShellState(
-            workbench_url=settings.web_workbench_url,
+            workbench_url=normalized_workbench_url,
             startup_mode=settings.startup_mode,
         )
 
     def startup_summary(self) -> dict[str, object]:
         return {
-            "web_workbench_url": self.settings.web_workbench_url,
+            "web_workbench_url": self.state.workbench_url,
             "api_base_url": self.settings.api_base_url,
             "startup_mode": self.settings.startup_mode,
             "debug": self.settings.debug,
@@ -103,6 +105,7 @@ class DesktopShellApp:
         self.state.service_status = status
         self.state.service_last_checked = checked_at
         self.state.service_error_hint = error_hint
+        self._refresh_workbench_status(status=status)
         window_status = self.window.update_service_status(
             status=status,
             error_hint=error_hint,
@@ -132,6 +135,23 @@ class DesktopShellApp:
             return self.open_workbench()
         return {"status": "ignored", "url": None, "error": None}
 
+    def _refresh_workbench_status(self, *, status: str) -> None:
+        active_mode_name: str | None = None
+        if status == "ok":
+            try:
+                home_payload = self.status_client.get_workbench_home()
+                current_mode = home_payload.get("current_mode")
+                if isinstance(current_mode, dict):
+                    template_name = current_mode.get("template_name")
+                    if isinstance(template_name, str) and template_name.strip():
+                        active_mode_name = template_name.strip()
+            except DesktopStatusClientError:
+                active_mode_name = None
+
+        self.state.active_mode_name = active_mode_name
+        workbench_status = self.window.update_workbench_status(active_mode_name=active_mode_name)
+        self.state.workbench_status_label = workbench_status["label"]
+
     def _maybe_publish_service_notification(
         self,
         *,
@@ -142,7 +162,7 @@ class DesktopShellApp:
             if self.state.last_notified_service_status == "unavailable":
                 return
             self.notifications.publish(
-                title="TraceFold unavailable",
+                title="TraceFold service unavailable",
                 body=error_hint or "Cannot reach TraceFold API.",
                 level="warning",
                 action_key="open_workbench",
@@ -151,3 +171,15 @@ class DesktopShellApp:
             return
 
         self.state.last_notified_service_status = status
+
+    @staticmethod
+    def _normalize_workbench_url(url: str) -> str:
+        normalized = (url or "").strip().rstrip("/")
+        if not normalized:
+            return normalized
+        if normalized.endswith("/workbench"):
+            return normalized
+        if normalized.startswith("http://") or normalized.startswith("https://"):
+            if normalized.count("/") <= 2:
+                return f"{normalized}/workbench"
+        return normalized

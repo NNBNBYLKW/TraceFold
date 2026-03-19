@@ -80,3 +80,27 @@ class TraceFoldStatusClient:
         if isinstance(payload.data, dict):
             return payload.data
         return {"status": "unknown"}
+
+    def get_workbench_home(self) -> dict[str, Any]:
+        try:
+            response = self._client.get("/workbench/home")
+        except httpx.HTTPError as exc:
+            raise DesktopStatusClientError("TraceFold API is unavailable.") from exc
+
+        try:
+            payload = StatusEnvelope.model_validate(response.json())
+        except ValueError as exc:
+            raise DesktopStatusClientError(
+                "TraceFold API returned an invalid response.",
+                status_code=response.status_code,
+            ) from exc
+
+        if not response.is_success or not payload.success:
+            raise DesktopStatusClientError(
+                payload.message or "Workbench check failed.",
+                status_code=response.status_code,
+            )
+
+        if isinstance(payload.data, dict):
+            return payload.data
+        return {"current_mode": None}

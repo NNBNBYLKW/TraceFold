@@ -24,5 +24,6 @@ def init_db() -> None:
     from app.domains.expense import models as expense_models  # noqa: F401
     from app.domains.knowledge import models as knowledge_models  # noqa: F401
     from app.domains.health import models as health_models  # noqa: F401
+    from app.domains.workbench import models as workbench_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

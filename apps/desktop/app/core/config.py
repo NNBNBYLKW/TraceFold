@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +18,24 @@ class DesktopShellSettings(BaseSettings):
     startup_mode: str = Field("window", alias="TRACEFOLD_DESKTOP_STARTUP_MODE")
     debug: bool = Field(False, alias="TRACEFOLD_DESKTOP_DEBUG")
     log_enabled: bool = Field(True, alias="TRACEFOLD_DESKTOP_LOG_ENABLED")
+
+    @field_validator("web_workbench_url", "api_base_url")
+    @classmethod
+    def validate_http_urls(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("URL must not be blank.")
+        if not (normalized.startswith("http://") or normalized.startswith("https://")):
+            raise ValueError("URL must start with http:// or https://.")
+        return normalized.rstrip("/")
+
+    @field_validator("startup_mode")
+    @classmethod
+    def validate_startup_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"window", "tray"}:
+            raise ValueError("startup_mode must be either 'window' or 'tray'.")
+        return normalized
 
 
 @lru_cache(maxsize=1)

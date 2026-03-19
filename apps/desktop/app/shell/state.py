@@ -5,6 +5,8 @@ from dataclasses import dataclass
 class DesktopShellState:
     workbench_url: str
     startup_mode: str
+    workbench_status_label: str = "Workbench: home"
+    active_mode_name: str | None = None
     service_status: str = "unknown"
     service_last_checked: str | None = None
     service_error_hint: str | None = None

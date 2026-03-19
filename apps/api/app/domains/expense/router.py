@@ -9,6 +9,7 @@ from app.core.responses import ApiResponse, success_response
 from app.db.session import get_db
 from app.domains.expense import service
 from app.domains.expense.schemas import ExpenseDetailRead, ExpenseListRead
+from app.domains.workbench import service as workbench_service
 
 
 router = APIRouter()
@@ -46,4 +47,5 @@ def get_expense(
     db: Session = Depends(get_db),
 ) -> ApiResponse[ExpenseDetailRead]:
     result = service.get_expense_read(db, expense_id)
+    workbench_service.record_expense_view_best_effort(db, expense_read=result)
     return success_response(data=result, message="Expense record fetched.")

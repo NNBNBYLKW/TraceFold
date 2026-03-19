@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.domains.alerts.schemas import AlertResultListRead
 from app.domains.health import service
 from app.domains.health.schemas import HealthDetailRead, HealthListRead
+from app.domains.workbench import service as workbench_service
 
 
 router = APIRouter()
@@ -48,6 +49,7 @@ def get_health_record(
     db: Session = Depends(get_db),
 ) -> ApiResponse[HealthDetailRead]:
     result = service.get_health_read(db, health_id)
+    workbench_service.record_health_view_best_effort(db, health_read=result)
     return success_response(data=result, message="Health record fetched.")
 
 

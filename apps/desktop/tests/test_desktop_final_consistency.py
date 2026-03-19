@@ -8,6 +8,7 @@ class RecordingStatusClient:
     def __init__(self, *, should_fail: bool = False) -> None:
         self.should_fail = should_fail
         self.calls = 0
+        self.home_calls = 0
         self.closed = False
 
     def get_status(self):
@@ -18,6 +19,12 @@ class RecordingStatusClient:
 
     def close(self):
         self.closed = True
+
+    def get_workbench_home(self):
+        self.home_calls += 1
+        if self.should_fail:
+            raise DesktopStatusClientError("TraceFold API is unavailable.")
+        return {"current_mode": {"template_name": "Home"}}
 
 
 def _settings() -> DesktopShellSettings:
@@ -49,9 +56,10 @@ def test_desktop_final_consistency_keeps_shell_only_paths():
 
     assert bootstrap["service_status"] == "unavailable"
     assert reopened["status"] == "ready"
-    assert reopened["url"] == "http://localhost:3000"
+    assert reopened["url"] == "http://localhost:3000/workbench"
     assert manual_status["status"] == "unavailable"
     assert status_client.calls == 2
+    assert status_client.home_calls == 0
     assert [item["label"] for item in menu] == [
         "Open TraceFold",
         "Hide Window",
@@ -63,3 +71,20 @@ def test_desktop_final_consistency_keeps_shell_only_paths():
     assert not hasattr(app, "confirm_pending")
     assert not hasattr(app, "force_insert")
     assert status_client.closed is True
+
+
+def test_desktop_final_consistency_uses_workbench_home_as_default_shell_entry():
+    status_client = RecordingStatusClient()
+    app = DesktopShellApp(
+        settings=_settings(),
+        status_client=status_client,
+    )
+
+    bootstrap = app.bootstrap()
+    opened = app.open_workbench()
+
+    assert bootstrap["service_status"] == "ok"
+    assert opened["url"] == "http://localhost:3000/workbench"
+    assert app.state.workbench_status_label == "Current mode: Home"
+    assert app.state.active_mode_name == "Home"
+    assert status_client.home_calls == 1

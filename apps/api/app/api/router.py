@@ -13,6 +13,7 @@ from app.domains.health.router import router as health_router
 from app.domains.knowledge.router import router as knowledge_router
 from app.domains.pending.router import router as pending_router
 from app.domains.system_tasks.router import router as system_tasks_router
+from app.domains.workbench.router import router as workbench_router
 
 
 api_router = APIRouter()
@@ -65,6 +66,12 @@ api_router.include_router(
     health_router,
     prefix="/health",
     tags=["health"],
+)
+
+api_router.include_router(
+    workbench_router,
+    prefix="/workbench",
+    tags=["workbench"],
 )
 
 api_router.include_router(

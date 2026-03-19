@@ -3,7 +3,7 @@ from __future__ import annotations
 from .bot.models import IncomingMessage, OutgoingMessage
 from .clients.tracefold_api import TraceFoldApiError
 
-_SERVICE_UNAVAILABLE_TEXT = "Service unavailable. Try again later."
+_SERVICE_UNAVAILABLE_TEXT = "Service status unavailable. Try again later."
 _INVALID_INPUT_TEXT = "Input is invalid."
 _EMPTY_TEXT_REQUIRED = "Text is required."
 _NO_OPEN_PENDING_TEXT = "No open pending items."
@@ -57,10 +57,10 @@ def render_capture_success(
     target_domain = capture_result.get("target_domain")
 
     if status == "pending" and pending_item_id is not None:
-        return _message(message, f"Recorded. Pending review item: #{pending_item_id}")
+        return _message(message, f"Recorded. Pending item: #{pending_item_id}")
 
     if status == "committed" and target_domain:
-        return _message(message, f"Recorded. Added to {target_domain}.")
+        return _message(message, f"Recorded. Added to {target_domain} record.")
 
     return _message(message, "Recorded.")
 
@@ -95,7 +95,7 @@ def render_pending_list(
     if not items:
         return _message(message, _NO_OPEN_PENDING_TEXT)
 
-    lines = ["Open pending:"]
+    lines = ["Open pending items:"]
     for item in items[:limit]:
         pending_id = item.get("id") or item.get("pending_item_id") or "?"
         target_domain = item.get("target_domain") or "unknown"
@@ -114,14 +114,14 @@ def render_pending_detail(message: IncomingMessage, item: dict) -> OutgoingMessa
     corrected = _shorten_text(_summarize_dict(item.get("corrected_payload_json")))
 
     lines = [
-        f"Pending #{pending_id}",
-        f"status: {status}",
-        f"domain: {target_domain}",
+        f"Pending item #{pending_id}",
+        f"Status: {status}",
+        f"Target domain: {target_domain}",
     ]
     if proposed:
-        lines.append(f"proposed: {proposed}")
+        lines.append(f"Proposed: {proposed}")
     if corrected:
-        lines.append(f"corrected: {corrected}")
+        lines.append(f"Corrected: {corrected}")
 
     return _message(message, "\n".join(lines))
 
@@ -140,7 +140,7 @@ def render_pending_action_success(
         "discard": "Discarded",
         "fix": "Updated",
     }.get(action, "Updated")
-    return _message(message, f"{action_label} pending #{pending_id}. Status: {status}.")
+    return _message(message, f"{action_label} pending item #{pending_id}. Status: {status}.")
 
 
 def render_pending_error(
@@ -171,17 +171,17 @@ def render_dashboard_summary(message: IncomingMessage, payload: dict) -> Outgoin
     health_count = _extract_count(payload, "health_summary", "count")
 
     lines = [
-        "Dashboard:",
-        f"pending: {pending_count}",
-        f"expense: {expense_count}",
-        f"knowledge: {knowledge_count}",
-        f"health: {health_count}",
+        "Dashboard summary:",
+        f"Pending: {pending_count}",
+        f"Expense records: {expense_count}",
+        f"Knowledge records: {knowledge_count}",
+        f"Health records: {health_count}",
     ]
 
     recent_activity = payload.get("recent_activity")
     recent_count = len(recent_activity) if isinstance(recent_activity, list) else 0
     if recent_count:
-        lines.append(f"recent: {recent_count}")
+        lines.append(f"Recent activity: {recent_count}")
 
     return _message(message, "\n".join(lines))
 
@@ -196,7 +196,7 @@ def render_alerts_summary(
     if not items:
         return _message(message, _NO_OPEN_ALERTS_TEXT)
 
-    lines = ["Alerts:"]
+    lines = ["Open rule alerts:"]
     for item in items[:limit]:
         alert_id = item.get("id") or item.get("alert_id") or "?"
         priority = item.get("priority") or item.get("severity") or "unknown"
@@ -216,8 +216,8 @@ def render_status_summary(message: IncomingMessage, payload: dict) -> OutgoingMe
     status = payload.get("status") or "unknown"
     detail = payload.get("message") or payload.get("detail")
     if detail:
-        return _message(message, f"Status: {status}. {_shorten_text(str(detail), 40)}")
-    return _message(message, f"Status: {status}.")
+        return _message(message, f"Service status: {status}. {_shorten_text(str(detail), 40)}")
+    return _message(message, f"Service status: {status}.")
 
 
 def render_status_error(
@@ -226,7 +226,7 @@ def render_status_error(
 ) -> OutgoingMessage:
     text = _map_api_error(
         error,
-        unavailable_text="Status unavailable.",
+        unavailable_text="Service status unavailable.",
         default_text="Status check failed.",
     )
     return _message(message, text)

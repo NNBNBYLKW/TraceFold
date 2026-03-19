@@ -17,6 +17,15 @@ G:.
 |   技术路线总览.txt
 |   软件最终需求.txt
 |
++---.pytest_cache
+|   |   .gitignore
+|   |   CACHEDIR.TAG
+|   |   README.md
+|   |
+|   \---v
+|       \---cache
+|               nodeids
+|
 +---.venv
 |   |   .gitignore
 |   |   pyvenv.cfg
@@ -4768,6 +4777,28 @@ G:.
 |   |   |   |   |           service.cpython-312.pyc
 |   |   |   |   |           service.cpython-314.pyc
 |   |   |   |   |
+|   |   |   |   +---workbench
+|   |   |   |   |   |   models.py
+|   |   |   |   |   |   repository.py
+|   |   |   |   |   |   router.py
+|   |   |   |   |   |   schemas.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           models.cpython-312.pyc
+|   |   |   |   |           models.cpython-314.pyc
+|   |   |   |   |           repository.cpython-312.pyc
+|   |   |   |   |           repository.cpython-314.pyc
+|   |   |   |   |           router.cpython-312.pyc
+|   |   |   |   |           router.cpython-314.pyc
+|   |   |   |   |           schemas.cpython-312.pyc
+|   |   |   |   |           schemas.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
 |   |   |   |   \---__pycache__
 |   |   |   |           __init__.cpython-312.pyc
 |   |   |   |           __init__.cpython-314.pyc
@@ -4800,6 +4831,7 @@ G:.
 |   |   |           __init__.cpython-314.pyc
 |   |   |
 |   |   +---scripts
+|   |   |   |   migrate_step8_workbench.py
 |   |   |   |   seed_step6_test_data.py
 |   |   |   |
 |   |   |   \---__pycache__
@@ -4855,16 +4887,26 @@ G:.
 |   |       |   |   \---__pycache__
 |   |       |   |           test_knowledge_ai_summary.cpython-314-pytest-9.0.2.pyc
 |   |       |   |
-|   |       |   \---pending
-|   |       |       |   test_pending_actions_http.py
-|   |       |       |   test_pending_read.py
-|   |       |       |   test_pending_review_service.py
+|   |       |   +---pending
+|   |       |   |   |   test_pending_actions_http.py
+|   |       |   |   |   test_pending_read.py
+|   |       |   |   |   test_pending_review_service.py
+|   |       |   |   |
+|   |       |   |   \---__pycache__
+|   |       |   |           test_pending_actions_http.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_pending_read.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_pending_review_service.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_pending_review_service.cpython-314.pyc
+|   |       |   |
+|   |       |   \---workbench
+|   |       |       |   test_workbench_api.py
+|   |       |       |   test_workbench_migration.py
+|   |       |       |   test_workbench_recent_recorder.py
 |   |       |       |
 |   |       |       \---__pycache__
-|   |       |               test_pending_actions_http.cpython-314-pytest-9.0.2.pyc
-|   |       |               test_pending_read.cpython-314-pytest-9.0.2.pyc
-|   |       |               test_pending_review_service.cpython-314-pytest-9.0.2.pyc
-|   |       |               test_pending_review_service.cpython-314.pyc
+|   |       |               test_workbench_api.cpython-314-pytest-9.0.2.pyc
+|   |       |               test_workbench_migration.cpython-314-pytest-9.0.2.pyc
+|   |       |               test_workbench_recent_recorder.cpython-314-pytest-9.0.2.pyc
 |   |       |
 |   |       \---__pycache__
 |   |               conftest.cpython-314-pytest-9.0.2.pyc
@@ -4881,6 +4923,7 @@ G:.
 |   |   |   |
 |   |   |   \---v
 |   |   |       \---cache
+|   |   |               lastfailed
 |   |   |               nodeids
 |   |   |
 |   |   +---app
@@ -4920,6 +4963,7 @@ G:.
 |   |   |   |           __init__.cpython-314.pyc
 |   |   |   |
 |   |   |   \---__pycache__
+|   |   |           main.cpython-314.pyc
 |   |   |           __init__.cpython-314.pyc
 |   |   |
 |   |   \---tests
@@ -5036,8 +5080,8 @@ G:.
 |       |   |   vite.svg
 |       |   |
 |       |   \---assets
-|       |           index-BbD3ulDS.css
-|       |           index-ClEgypPc.js
+|       |           index-BJeNMJ82.css
+|       |           index-DAT4KwbJ.js
 |       |
 |       +---node_modules
 |       |   |   .package-lock.json
@@ -5538,10 +5582,12 @@ G:.
 |       \---tests
 |           |   test_health_ai_ui_contract.py
 |           |   test_knowledge_ai_ui_contract.py
+|           |   test_workbench_home_contract.py
 |           |
 |           \---__pycache__
 |                   test_health_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
 |                   test_knowledge_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
+|                   test_workbench_home_contract.cpython-314-pytest-9.0.2.pyc
 |
 +---data
 |       tracefold-step6.db
@@ -5570,5 +5616,12 @@ G:.
         STEP7_FINAL_REVIEW_CHECKLIST.md
         STEP7_REVIEW_CHECKLIST.md
         STEP7_SCOPE.md
+        STEP8_ACCEPTANCE.md
+        STEP8_API_CONTRACTS.md
+        STEP8_DRIFT_WARNINGS.md
+        STEP8_SCOPE.md
+        STEP8_TASK1_API_WORKBENCH.md
+        STEP8_TASK2_WEB_WORKBENCH_HOME.md
+        STEP8_TASK3_ENTRY_ALIGNMENT.md
         TASK_TEMPLATE.md
         阶段一规划

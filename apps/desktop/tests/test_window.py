@@ -40,6 +40,6 @@ def test_window_can_hold_minimal_service_status_view_state():
         error_hint="Cannot reach TraceFold API.",
     )
 
-    assert snapshot["label"] == "Service: unavailable"
+    assert snapshot["label"] == "Service status: unavailable"
     assert snapshot["hint"] == "Cannot reach TraceFold API."
-    assert window.service_status_label == "Service: unavailable"
+    assert window.service_status_label == "Service status: unavailable"
