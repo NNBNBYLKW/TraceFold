@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import webbrowser
+from dataclasses import dataclass, field
+from typing import Callable
 from urllib.parse import urlparse
 
 
@@ -15,6 +17,11 @@ class WorkbenchLoadResult:
 class MainWindowSkeleton:
     title: str
     workbench_url: str
+    url_launcher: Callable[[str], bool] = field(
+        default=webbrowser.open,
+        repr=False,
+        compare=False,
+    )
     last_opened_url: str | None = None
     load_state: str = "idle"
     last_error: str | None = None
@@ -32,11 +39,21 @@ class MainWindowSkeleton:
             return WorkbenchLoadResult(status="error", error=validation_error)
 
         self.load_state = "loading"
-        self.last_opened_url = target_url
         self.last_error = None
-        self.visible = True
+        try:
+            launched = bool(self.url_launcher(target_url))
+        except Exception:
+            launched = False
 
-        # The shell only hosts or opens the existing workbench URL.
+        if not launched:
+            self.load_state = "error"
+            self.last_error = "Workbench URL could not be opened."
+            self.visible = False
+            return WorkbenchLoadResult(status="error", error=self.last_error)
+
+        # The shell only opens the existing workbench URL.
+        self.last_opened_url = target_url
+        self.visible = True
         self.load_state = "ready"
         return WorkbenchLoadResult(status="ready", url=target_url)
 
@@ -52,7 +69,14 @@ class MainWindowSkeleton:
         status: str,
         error_hint: str | None = None,
     ) -> dict[str, str | None]:
-        label = "Service status: available" if status == "ok" else "Service status: unavailable"
+        if status == "ok":
+            label = "Service status: available"
+        elif status == "invalid_response":
+            label = "Service status: invalid response"
+        elif status == "error":
+            label = "Service status: failed"
+        else:
+            label = "Service status: unavailable"
         self.service_status_label = label
         self.service_status_hint = error_hint
         return {

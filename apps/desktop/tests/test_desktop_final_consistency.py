@@ -2,6 +2,7 @@ from apps.desktop.app.clients.status_client import DesktopStatusClientError
 from apps.desktop.app.core.config import DesktopShellSettings
 from apps.desktop.app.shell.app import DesktopShellApp
 from apps.desktop.app.shell.notifications import NotificationBridgeSkeleton
+from apps.desktop.app.shell.window import MainWindowSkeleton
 
 
 class RecordingStatusClient:
@@ -39,12 +40,21 @@ def _settings() -> DesktopShellSettings:
     )
 
 
+def _window() -> MainWindowSkeleton:
+    return MainWindowSkeleton(
+        title="TraceFold Desktop Shell",
+        workbench_url="http://localhost:3000",
+        url_launcher=lambda url: True,
+    )
+
+
 def test_desktop_final_consistency_keeps_shell_only_paths():
     status_client = RecordingStatusClient(should_fail=True)
     notifications = NotificationBridgeSkeleton()
     app = DesktopShellApp(
         settings=_settings(),
         status_client=status_client,
+        window=_window(),
         notifications=notifications,
     )
 
@@ -78,6 +88,7 @@ def test_desktop_final_consistency_uses_workbench_home_as_default_shell_entry():
     app = DesktopShellApp(
         settings=_settings(),
         status_client=status_client,
+        window=_window(),
     )
 
     bootstrap = app.bootstrap()

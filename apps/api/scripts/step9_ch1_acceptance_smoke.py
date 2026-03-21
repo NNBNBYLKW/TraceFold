@@ -3,7 +3,8 @@ from __future__ import annotations
 """Minimal Step 9 Chapter 1 acceptance runner.
 
 This script reuses the current repo test and build commands. It is a repeatable
-smoke runner, not a new test framework and not a full external-runtime E2E rig.
+smoke runner, not a new test framework, not a daily startup entry, and not a
+full external-runtime E2E rig.
 """
 
 import subprocess

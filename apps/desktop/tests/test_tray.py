@@ -17,3 +17,13 @@ def test_tray_menu_items_stay_minimal_and_shell_oriented():
         "Hide Window",
         "Quit",
     ]
+
+
+def test_tray_tracks_menu_action_and_shell_action_separately():
+    tray = TrayIntegrationSkeleton()
+
+    tray.remember_menu_action("toggle_window")
+    tray.remember_shell_action("hide_window")
+
+    assert tray.last_menu_action == "toggle_window"
+    assert tray.last_shell_action == "hide_window"

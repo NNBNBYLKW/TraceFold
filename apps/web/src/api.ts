@@ -470,14 +470,19 @@ async function request<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
-    throw new ApiRequestError('TraceFold service is unavailable right now.')
+    throw new ApiRequestError(
+      'TraceFold API is unavailable. Check /api/healthz and VITE_API_BASE_URL.',
+    )
   }
 
   let payload: ApiResponse<T>
   try {
     payload = (await response.json()) as ApiResponse<T>
   } catch {
-    throw new ApiRequestError('TraceFold returned an invalid response.', response.status)
+    throw new ApiRequestError(
+      'TraceFold API returned an invalid response. Check the API process and try again.',
+      response.status,
+    )
   }
 
   if (!response.ok || !payload.success || payload.data === null) {
@@ -498,7 +503,9 @@ async function requestVoid(path: string, method: 'DELETE'): Promise<void> {
       },
     })
   } catch {
-    throw new ApiRequestError('TraceFold service is unavailable right now.')
+    throw new ApiRequestError(
+      'TraceFold API is unavailable. Check /api/healthz and VITE_API_BASE_URL.',
+    )
   }
 
   if (response.status === 204) {
@@ -509,7 +516,10 @@ async function requestVoid(path: string, method: 'DELETE'): Promise<void> {
   try {
     payload = (await response.json()) as ApiResponse<null>
   } catch {
-    throw new ApiRequestError('TraceFold returned an invalid response.', response.status)
+    throw new ApiRequestError(
+      'TraceFold API returned an invalid response. Check the API process and try again.',
+      response.status,
+    )
   }
 
   if (!response.ok || !payload.success) {

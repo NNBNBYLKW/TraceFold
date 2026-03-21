@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from apps.desktop.app.core.config import DesktopShellSettings
+from apps.desktop.app.core.config import DESKTOP_ENV_FILE, DesktopShellSettings
 
 
 def test_settings_load_from_environment(monkeypatch):
@@ -35,3 +35,10 @@ def test_settings_reject_non_http_urls(monkeypatch):
 
     with pytest.raises(ValidationError):
         DesktopShellSettings()
+
+
+def test_settings_model_config_points_at_desktop_env_file():
+    env_files = DesktopShellSettings.model_config.get("env_file")
+
+    assert isinstance(env_files, tuple)
+    assert str(DESKTOP_ENV_FILE) in env_files

@@ -10,7 +10,8 @@ class TrayMenuItem:
 class TrayIntegrationSkeleton:
     def __init__(self) -> None:
         self.visible = False
-        self.last_action: str | None = None
+        self.last_menu_action: str | None = None
+        self.last_shell_action: str | None = None
 
     def show(self) -> None:
         self.visible = True
@@ -26,5 +27,8 @@ class TrayIntegrationSkeleton:
             TrayMenuItem(key="quit", label="Quit"),
         ]
 
-    def remember_action(self, action: str) -> None:
-        self.last_action = action
+    def remember_menu_action(self, action: str) -> None:
+        self.last_menu_action = action
+
+    def remember_shell_action(self, action: str) -> None:
+        self.last_shell_action = action

@@ -16,4 +16,4 @@ def test_health_detail_ai_summary_section_stays_below_fact_rule_and_source_secti
     ai_position = block.index("renderHealthAiSummarySection(")
 
     assert detail_position < alerts_position < source_position < ai_position
-    assert "AI Summary" in source
+    assert "AI Derivation" in source

@@ -61,6 +61,12 @@ interface WorkbenchUiState {
   flash: WorkbenchFlash | null
 }
 
+interface FailureSignal {
+  message: string
+  recoveryHint: string | null
+  formalFactsNote: string | null
+}
+
 interface BaseListQuery {
   page: number
   pageSize: number
@@ -2041,7 +2047,7 @@ function renderHealthAiSummarySection(
             ? renderHealthAiSummaryContent(aiSummary, healthId)
             : `
                 <div class="status-panel is-empty">
-                  <p class="status-copy">AI derivation has not been generated for this health record yet. It is only available for subjective health records.</p>
+                  <p class="status-copy">AI derivation has not been generated for this health record yet. It is only available for subjective health records. The formal record remains available.</p>
                   <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
                     Generate AI Derivation
                   </button>
@@ -2071,7 +2077,7 @@ function renderKnowledgeAiSummarySection(
             ? renderKnowledgeAiSummaryContent(aiSummary, knowledgeId)
             : `
                 <div class="status-panel is-empty">
-                  <p class="status-copy">AI derivation has not been generated for this knowledge record yet.</p>
+                  <p class="status-copy">AI derivation has not been generated for this knowledge record yet. The formal record remains available.</p>
                   <button class="secondary-button" type="button" data-ai-action="rerun-knowledge-summary" data-record-id="${knowledgeId}">
                     Generate AI Derivation
                   </button>
@@ -2102,7 +2108,7 @@ function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthI
       </div>
       ${
         aiSummary.status === 'failed'
-          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed.')}</p>`
+          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed. The formal record remains available.')}</p>`
           : aiSummary.status === 'pending'
             ? '<p class="section-copy">AI derivation is in progress.</p>'
             : `
@@ -2148,7 +2154,7 @@ function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem, know
       </div>
       ${
         aiSummary.status === 'failed'
-          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed.')}</p>`
+          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed. The formal record remains available.')}</p>`
           : aiSummary.status === 'pending'
             ? '<p class="section-copy">AI derivation is in progress.</p>'
             : `
@@ -2366,9 +2372,12 @@ function renderEmptyState(message: string): string {
 }
 
 function renderErrorState(message: string): string {
+  const signal = classifyFailureSignal(message)
   return `
     <section class="panel status-panel is-error">
-      <p class="status-copy">${escapeHtml(message)}</p>
+      <p class="status-copy">${escapeHtml(signal.message)}</p>
+      ${signal.recoveryHint ? `<p class="section-copy">${escapeHtml(signal.recoveryHint)}</p>` : ''}
+      ${signal.formalFactsNote ? `<p class="section-copy">${escapeHtml(signal.formalFactsNote)}</p>` : ''}
       <button class="secondary-button" type="button" data-retry="true">Retry</button>
     </section>
   `
@@ -2886,5 +2895,55 @@ function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message
   }
-  return 'Request failed.'
+  return 'TraceFold request failed. Check the shared API and try again.'
+}
+
+function classifyFailureSignal(message: string): FailureSignal {
+  const normalized = message.toLowerCase()
+
+  if (normalized.includes('api is unavailable') || normalized.includes('service is unavailable')) {
+    return {
+      message,
+      recoveryHint: 'Check /api/healthz first. If the API is healthy, confirm the API base URL in .env.',
+      formalFactsNote: 'This entry-side failure does not change existing formal records.',
+    }
+  }
+
+  if (normalized.includes('invalid response')) {
+    return {
+      message,
+      recoveryHint: 'Check API health first, then inspect the API process or logs.',
+      formalFactsNote: 'This response failure does not change existing formal records.',
+    }
+  }
+
+  if (normalized.includes('workbench url could not be opened')) {
+    return {
+      message,
+      recoveryHint: 'Check the Desktop workbench URL and confirm the Web dev server is running.',
+      formalFactsNote: 'This shell-side failure does not change existing formal records.',
+    }
+  }
+
+  if (normalized.includes('workbench url is invalid') || normalized.includes('workbench url is not configured')) {
+    return {
+      message,
+      recoveryHint: 'Check the Desktop .env workbench URL setting.',
+      formalFactsNote: 'This shell-side configuration failure does not change existing formal records.',
+    }
+  }
+
+  if (normalized.includes('request failed with status')) {
+    return {
+      message,
+      recoveryHint: 'Check API health first. If the API is healthy, inspect the requested route or filters.',
+      formalFactsNote: 'Formal records remain unchanged unless a successful write already completed.',
+    }
+  }
+
+  return {
+    message,
+    recoveryHint: 'Retry once. If it still fails, check API health and the relevant .env settings.',
+    formalFactsNote: 'This entry-side failure does not imply formal facts are damaged.',
+  }
 }

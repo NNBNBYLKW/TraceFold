@@ -41,3 +41,16 @@ def test_status_client_maps_unavailable_error():
         client.get_status()
 
     assert str(exc_info.value) == "TraceFold API is unavailable."
+
+
+def test_status_client_maps_invalid_response_error():
+    client = TraceFoldStatusClient.create(
+        base_url="http://tracefold.test/api",
+        timeout_seconds=5.0,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"not-json")),
+    )
+
+    with pytest.raises(DesktopStatusClientError) as exc_info:
+        client.get_status()
+
+    assert str(exc_info.value) == "TraceFold API returned an invalid response."

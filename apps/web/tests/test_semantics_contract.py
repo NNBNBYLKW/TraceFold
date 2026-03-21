@@ -42,10 +42,17 @@ def test_current_mode_copy_keeps_workbench_role_thin() -> None:
 def test_web_failure_wording_distinguishes_unavailable_and_invalid_response() -> None:
     api_ts = Path("apps/web/src/api.ts").read_text(encoding="utf-8")
 
-    assert "TraceFold service is unavailable right now." in api_ts
-    assert "TraceFold returned an invalid response." in api_ts
+    assert "TraceFold API is unavailable. Check /api/healthz and VITE_API_BASE_URL." in api_ts
+    assert "TraceFold API returned an invalid response. Check the API process and try again." in api_ts
 
 
 def test_ai_derivation_empty_state_says_not_generated() -> None:
-    assert "AI derivation has not been generated for this knowledge record yet." in MAIN_TS
-    assert "AI derivation has not been generated for this health record yet." in MAIN_TS
+    assert "AI derivation has not been generated for this knowledge record yet. The formal record remains available." in MAIN_TS
+    assert "AI derivation has not been generated for this health record yet. It is only available for subjective health records. The formal record remains available." in MAIN_TS
+
+
+def test_failure_states_include_recovery_hints_and_formal_fact_safety_note() -> None:
+    assert "Check /api/healthz first. If the API is healthy, confirm the API base URL in .env." in MAIN_TS
+    assert "This entry-side failure does not change existing formal records." in MAIN_TS
+    assert "This response failure does not change existing formal records." in MAIN_TS
+    assert "AI derivation failed. The formal record remains available." in MAIN_TS
