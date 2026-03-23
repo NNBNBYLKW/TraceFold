@@ -4,18 +4,6 @@ PS G:\Windows\Documents\GitHub\TraceFold> tree /f /a
 G:.
 |   .env.example
 |   .gitignore
-|   step 1
-|   step 2
-|   step 3
-|   step 4
-|   step 5
-|   step 6
-|   step 7
-|   step 8
-|   step 9
-|   tree.txt
-|   技术路线总览.txt
-|   软件最终需求.txt
 |
 +---.pytest_cache
 |   |   .gitignore
@@ -24,6 +12,7 @@ G:.
 |   |
 |   \---v
 |       \---cache
+|               lastfailed
 |               nodeids
 |
 +---.venv
@@ -4833,9 +4822,11 @@ G:.
 |   |   +---scripts
 |   |   |   |   migrate_step8_workbench.py
 |   |   |   |   seed_step6_test_data.py
+|   |   |   |   step9_ch1_acceptance_smoke.py
 |   |   |   |
 |   |   |   \---__pycache__
 |   |   |           seed_step6_test_data.cpython-314.pyc
+|   |   |           step9_ch1_acceptance_smoke.cpython-314.pyc
 |   |   |
 |   |   \---tests
 |   |       |   conftest.py
@@ -4908,13 +4899,33 @@ G:.
 |   |       |               test_workbench_migration.cpython-314-pytest-9.0.2.pyc
 |   |       |               test_workbench_recent_recorder.cpython-314-pytest-9.0.2.pyc
 |   |       |
+|   |       +---system
+|   |       |   |   test_entry_failure_signal_contract.py
+|   |       |   |   test_entry_startup_baseline_contract.py
+|   |       |   |   test_entry_validation_baseline_contract.py
+|   |       |   |   test_phase1_closeout_contract.py
+|   |       |   |   test_phase1_non_goals_contract.py
+|   |       |   |   test_step9_ch1_acceptance_runner.py
+|   |       |   |   test_step9_ch1_system_wide_acceptance.py
+|   |       |   |
+|   |       |   \---__pycache__
+|   |       |           test_entry_failure_signal_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_entry_startup_baseline_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_entry_validation_baseline_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_phase1_closeout_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_phase1_non_goals_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_step9_ch1_acceptance_runner.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_step9_ch1_system_wide_acceptance.cpython-314-pytest-9.0.2.pyc
+|   |       |
 |   |       \---__pycache__
 |   |               conftest.cpython-314-pytest-9.0.2.pyc
 |   |               test_system.cpython-314-pytest-9.0.2.pyc
 |   |
 |   +---desktop
+|   |   |   .env
 |   |   |   .env.example
 |   |   |   pytest.ini
+|   |   |   __main__.py
 |   |   |
 |   |   +---.pytest_cache
 |   |   |   |   .gitignore
@@ -4966,23 +4977,37 @@ G:.
 |   |   |           main.cpython-314.pyc
 |   |   |           __init__.cpython-314.pyc
 |   |   |
-|   |   \---tests
-|   |       |   test_app.py
-|   |       |   test_config.py
-|   |       |   test_desktop_final_consistency.py
-|   |       |   test_status_client.py
-|   |       |   test_tray.py
-|   |       |   test_window.py
-|   |       |
-|   |       \---__pycache__
-|   |               test_app.cpython-314-pytest-9.0.2.pyc
-|   |               test_config.cpython-314-pytest-9.0.2.pyc
-|   |               test_desktop_final_consistency.cpython-314-pytest-9.0.2.pyc
-|   |               test_status_client.cpython-314-pytest-9.0.2.pyc
-|   |               test_tray.cpython-314-pytest-9.0.2.pyc
-|   |               test_window.cpython-314-pytest-9.0.2.pyc
+|   |   +---tests
+|   |   |   |   test_app.py
+|   |   |   |   test_config.py
+|   |   |   |   test_desktop_final_consistency.py
+|   |   |   |   test_launch.py
+|   |   |   |   test_lifecycle.py
+|   |   |   |   test_lifecycle_docs.py
+|   |   |   |   test_main.py
+|   |   |   |   test_status_client.py
+|   |   |   |   test_tray.py
+|   |   |   |   test_tray_docs.py
+|   |   |   |   test_window.py
+|   |   |   |
+|   |   |   \---__pycache__
+|   |   |           test_app.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_config.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_desktop_final_consistency.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_launch.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_lifecycle.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_lifecycle_docs.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_main.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_status_client.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_tray.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_tray_docs.cpython-314-pytest-9.0.2.pyc
+|   |   |           test_window.cpython-314-pytest-9.0.2.pyc
+|   |   |
+|   |   \---__pycache__
+|   |           __main__.cpython-314.pyc
 |   |
 |   +---telegram
+|   |   |   .env
 |   |   |   .env.example
 |   |   |   pytest.ini
 |   |   |
@@ -5036,6 +5061,7 @@ G:.
 |   |   |   |
 |   |   |   \---__pycache__
 |   |   |           formatting.cpython-314.pyc
+|   |   |           main.cpython-314.pyc
 |   |   |           observability.cpython-314.pyc
 |   |   |           __init__.cpython-314.pyc
 |   |   |
@@ -5081,7 +5107,7 @@ G:.
 |       |   |
 |       |   \---assets
 |       |           index-BJeNMJ82.css
-|       |           index-DAT4KwbJ.js
+|       |           index-DeFV3kw-.js
 |       |
 |       +---node_modules
 |       |   |   .package-lock.json
@@ -5582,11 +5608,13 @@ G:.
 |       \---tests
 |           |   test_health_ai_ui_contract.py
 |           |   test_knowledge_ai_ui_contract.py
+|           |   test_semantics_contract.py
 |           |   test_workbench_home_contract.py
 |           |
 |           \---__pycache__
 |                   test_health_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
 |                   test_knowledge_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
+|                   test_semantics_contract.cpython-314-pytest-9.0.2.pyc
 |                   test_workbench_home_contract.cpython-314-pytest-9.0.2.pyc
 |
 +---data
@@ -5594,34 +5622,110 @@ G:.
 |       tracefold.db
 |
 \---docs
-        ARCHITECTURE_RULES.md
-        DATA_MODEL_DRAFT.md
-        ENV_CONVENTIONS.md
-        MIGRATION_MIN_SPEC.md
-        PROJECT_BRIEF.md
-        QUALITY_BASELINE.md
-        RISK_DRIFT_WARNINGS.md
-        ROADMAP_PHASE1.md
-        STEP7_ACCEPTANCE.md
-        STEP7_CH1_ACCEPTANCE_SMOKE.md
-        STEP7_CH1_SERVICE_PATH_GAP_ANALYSIS.md
-        STEP7_CH2_ACCEPTANCE_SMOKE.md
-        STEP7_CH2_TELEGRAM_ADAPTER_NOTES.md
-        STEP7_CH3_ACCEPTANCE_SMOKE.md
-        STEP7_CH3_DESKTOP_SHELL_NOTES.md
-        STEP7_ENTRY_CONTRACTS.md
-        STEP7_ERROR_AND_FEEDBACK.md
-        STEP7_FINAL_ACCEPTANCE.md
-        STEP7_FINAL_CONSISTENCY_GAP_ANALYSIS.md
-        STEP7_FINAL_REVIEW_CHECKLIST.md
-        STEP7_REVIEW_CHECKLIST.md
-        STEP7_SCOPE.md
-        STEP8_ACCEPTANCE.md
-        STEP8_API_CONTRACTS.md
-        STEP8_DRIFT_WARNINGS.md
-        STEP8_SCOPE.md
-        STEP8_TASK1_API_WORKBENCH.md
-        STEP8_TASK2_WEB_WORKBENCH_HOME.md
-        STEP8_TASK3_ENTRY_ALIGNMENT.md
-        TASK_TEMPLATE.md
-        阶段一规划
+    |   ARCHITECTURE_RULES.md
+    |   ENV_CONVENTIONS.md
+    |   PHASE1_SUMMARY.md
+    |   POST_PHASE1_A3_TASK2_STARTUP_BASELINE.md
+    |   POST_PHASE1_A3_TASK4_VALIDATION_BASELINE.md
+    |   POST_PHASE1_DESKTOP_R2_ACCEPTANCE.md
+    |   TASK_TEMPLATE.md
+    |   TELEGRAM_BOT_SETUP_GUIDE.md
+    |   tree.txt
+    |   技术路线总览.txt
+    |   软件最终需求.txt
+    |
+    \---archive
+        \---phase1
+            +---anomalies
+            |       PHASE1_FINAL_ACCEPTANCE_PROMPT_DRAFT.md
+            |       ROADMAP_PHASE1_SOURCE_DRAFT.txt
+            |
+            +---baselines
+            |       DATA_MODEL_DRAFT.md
+            |       MIGRATION_MIN_SPEC.md
+            |       PROJECT_BRIEF.md
+            |       QUALITY_BASELINE.md
+            |       RISK_DRIFT_WARNINGS.md
+            |       ROADMAP_PHASE1.md
+            |
+            +---desktop_r2
+            |       POST_PHASE1_DESKTOP_R2_TASK1_ACCEPTANCE.md
+            |       POST_PHASE1_DESKTOP_R2_TASK1_LIFECYCLE_MODEL.md
+            |       POST_PHASE1_DESKTOP_R2_TASK1_SCOPE.md
+            |       POST_PHASE1_DESKTOP_R2_TASK2_ACCEPTANCE.md
+            |       POST_PHASE1_DESKTOP_R2_TASK2_SCOPE.md
+            |       POST_PHASE1_DESKTOP_R2_TASK2_TRAY_MODEL.md
+            |       POST_PHASE1_DESKTOP_R2_TASK3_ACCEPTANCE.md
+            |       POST_PHASE1_DESKTOP_R2_TASK3_LAUNCH_MODEL.md
+            |       POST_PHASE1_DESKTOP_R2_TASK3_SCOPE.md
+            |
+            +---post_phase1_a3
+            |       POST_PHASE1_A3_TASK1_ACCEPTANCE.md
+            |       POST_PHASE1_A3_TASK1_DESKTOP_RUNTIME_NOTES.md
+            |       POST_PHASE1_A3_TASK1_SCOPE.md
+            |       POST_PHASE1_A3_TASK2_RECOVERY_PATHS.md
+            |       POST_PHASE1_A3_TASK2_SCOPE.md
+            |       POST_PHASE1_A3_TASK3_FAILURE_SIGNALS.md
+            |       POST_PHASE1_A3_TASK3_RECOVERY_HINTS.md
+            |       POST_PHASE1_A3_TASK3_SCOPE.md
+            |       POST_PHASE1_A3_TASK4_SCOPE.md
+            |       POST_PHASE1_A3_TASK4_VALIDATION_NOTES.md
+            |
+            +---step7
+            |       STEP7_ACCEPTANCE.md
+            |       STEP7_CH1_ACCEPTANCE_SMOKE.md
+            |       STEP7_CH1_SERVICE_PATH_GAP_ANALYSIS.md
+            |       STEP7_CH2_ACCEPTANCE_SMOKE.md
+            |       STEP7_CH2_TELEGRAM_ADAPTER_NOTES.md
+            |       STEP7_CH3_ACCEPTANCE_SMOKE.md
+            |       STEP7_CH3_DESKTOP_SHELL_NOTES.md
+            |       STEP7_ENTRY_CONTRACTS.md
+            |       STEP7_ERROR_AND_FEEDBACK.md
+            |       STEP7_FINAL_ACCEPTANCE.md
+            |       STEP7_FINAL_CONSISTENCY_GAP_ANALYSIS.md
+            |       STEP7_FINAL_REVIEW_CHECKLIST.md
+            |       STEP7_REVIEW_CHECKLIST.md
+            |       STEP7_SCOPE.md
+            |
+            +---step8
+            |       STEP8_ACCEPTANCE.md
+            |       STEP8_API_CONTRACTS.md
+            |       STEP8_DRIFT_WARNINGS.md
+            |       STEP8_SCOPE.md
+            |       STEP8_TASK1_API_WORKBENCH.md
+            |       STEP8_TASK2_WEB_WORKBENCH_HOME.md
+            |       STEP8_TASK3_ENTRY_ALIGNMENT.md
+            |
+            \---step9
+                    STEP9_CH1_ACCEPTANCE_MATRIX.md
+                    STEP9_CH1_MANUAL_CHECKLIST.md
+                    STEP9_CH1_REPORT_TEMPLATE.md
+                    STEP9_CH1_SCOPE.md
+                    STEP9_CH2_DRIFT_RISK_REPORT.md
+                    STEP9_CH2_FIRST_WAVE_FIXES.md
+                    STEP9_CH2_SCOPE.md
+                    STEP9_CH2_TECH_DEBT_REGISTER.md
+                    STEP9_CH2_WEAK_BOUNDARY_INVENTORY.md
+                    STEP9_CH3_FIRST_WAVE_FIXES.md
+                    STEP9_CH3_INTERACTION_CONSISTENCY_INVENTORY.md
+                    STEP9_CH3_SCOPE.md
+                    STEP9_CH3_SEMANTICS_DICTIONARY.md
+                    STEP9_CH3_UI_STATE_AND_LAYER_GUIDE.md
+                    STEP9_CH4_ACCEPTABLE_TECH_DEBT.md
+                    STEP9_CH4_FAILURE_SCENARIO_MATRIX.md
+                    STEP9_CH4_FIRST_WAVE_HARDENING_FIXES.md
+                    STEP9_CH4_MINIMUM_RECOVERY_PATHS.md
+                    STEP9_CH4_MINIMUM_STABILITY_CHECKLIST.md
+                    STEP9_CH4_SCOPE.md
+                    STEP9_CH5_ALLOWED_EXCEPTIONS_AND_MINIMAL_SKELETONS.md
+                    STEP9_CH5_DRIFT_TRIGGER_TABLE.md
+                    STEP9_CH5_FIRST_WAVE_NON_GOAL_RELOCK_FIXES.md
+                    STEP9_CH5_PHASE1_NON_GOALS_REVIEW.md
+                    STEP9_CH5_SCOPE.md
+                    STEP9_CH6_FIRST_WAVE_CLOSEOUT_FIXES.md
+                    STEP9_CH6_PHASE1_ACCEPTABLE_GAPS_AND_TECH_DEBT.md
+                    STEP9_CH6_PHASE1_COMPLETED_CAPABILITIES.md
+                    STEP9_CH6_PHASE1_DEFINITION_OF_DONE.md
+                    STEP9_CH6_PHASE1_LOCKED_BOUNDARIES.md
+                    STEP9_CH6_POST_PHASE1_BASELINE.md
+                    STEP9_CH6_SCOPE.md
