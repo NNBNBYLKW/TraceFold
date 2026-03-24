@@ -10,7 +10,7 @@ def test_health_detail_ai_summary_section_stays_below_fact_rule_and_source_secti
     end = source.index("function renderDetailErrorView(")
     block = source[start:end]
 
-    detail_position = block.index("<h2>Detail</h2>")
+    detail_position = block.index("<h2>Formal Record</h2>")
     alerts_position = block.index("renderHealthAlertSection(")
     source_position = block.index("renderSourceSection(")
     ai_position = block.index("renderHealthAiSummarySection(")

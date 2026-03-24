@@ -54,6 +54,26 @@ class Settings(BaseSettings):
         default=True,
         alias="TRACEFOLD_API_ENABLE_DOCS",
     )
+    ai_provider: str = Field(
+        default="openai_compatible",
+        alias="TRACEFOLD_AI_PROVIDER",
+    )
+    ai_base_url: str = Field(
+        default="http://127.0.0.1:11434/v1",
+        alias="TRACEFOLD_AI_BASE_URL",
+    )
+    ai_api_key: str = Field(
+        default="",
+        alias="TRACEFOLD_AI_API_KEY",
+    )
+    ai_model: str = Field(
+        default="qwen3.5:9b",
+        alias="TRACEFOLD_AI_MODEL",
+    )
+    ai_timeout_seconds: int = Field(
+        default=60,
+        alias="TRACEFOLD_AI_TIMEOUT_SECONDS",
+    )
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,

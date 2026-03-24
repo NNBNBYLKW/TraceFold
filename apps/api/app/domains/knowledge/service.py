@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.error_codes import ErrorCode
+from app.core.exceptions import AppException, BadRequestError, DerivationFailedError, NotFoundError
+from app.core.logging import build_log_message, get_logger, log_event
 from app.domains.ai_derivations.schemas import AiDerivationResultListRead
-from app.domains.knowledge.ai_summary import (
-    rerun_knowledge_summary_for_entry,
-    run_knowledge_summary_on_entry_create,
-)
 from app.domains.knowledge import repository
 from app.domains.knowledge.models import KnowledgeEntry
 from app.domains.knowledge.schemas import KnowledgeDetailRead, KnowledgeListItemRead, KnowledgeListRead
@@ -20,6 +19,7 @@ _ALLOWED_SORT_FIELDS = {"created_at", "title"}
 _ALLOWED_SORT_ORDERS = {"asc", "desc"}
 _PREVIEW_LENGTH = 120
 _UNTITLED = "(untitled)"
+logger = get_logger(__name__)
 
 
 def create_knowledge_entry(
@@ -38,7 +38,9 @@ def create_knowledge_entry(
     )
     db.add(entry)
     db.flush()
-    run_knowledge_summary_on_entry_create(db, knowledge_entry=entry)
+    from app.domains.ai_derivations import service as ai_derivations_service
+
+    ai_derivations_service.generate_knowledge_summary_now(db, knowledge_entry=entry)
     return entry
 
 
@@ -81,6 +83,17 @@ def list_knowledge_reads(
 def get_knowledge_read(db: Session, knowledge_id: int) -> KnowledgeDetailRead:
     entry = repository.get_knowledge_entry_by_id(db, knowledge_id)
     if entry is None:
+        log_event(
+            logger,
+            level=30,
+            event="knowledge_read_failed",
+            domain="knowledge",
+            action="read",
+            target_type="knowledge_entry",
+            target_id=knowledge_id,
+            result="not_found",
+            error_code="KNOWLEDGE_NOT_FOUND",
+        )
         raise NotFoundError(
             message=f"Knowledge entry {knowledge_id} was not found.",
             code="KNOWLEDGE_NOT_FOUND",
@@ -112,9 +125,49 @@ def rerun_knowledge_summary(
         rerun_knowledge_summary_for_entry(db, knowledge_entry=entry)
         db.commit()
         return _build_ai_derivation_result_list_read(db, knowledge_id=entry.id)
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        raise
+        if isinstance(exc, AppException):
+            raise
+        logger.exception(
+            build_log_message(
+                "knowledge_ai_summary_rerun_failed",
+                domain="knowledge",
+                knowledge_id=knowledge_id,
+                error_code=ErrorCode.DERIVATION_FAILED,
+            )
+        )
+        raise DerivationFailedError(
+            message="Knowledge AI summary rerun failed.",
+            details={"target_domain": "knowledge", "target_id": knowledge_id},
+        ) from exc
+
+
+def rerun_knowledge_summary_for_entry(
+    db: Session,
+    *,
+    knowledge_entry: KnowledgeEntry,
+) -> None:
+    from app.domains.ai_derivations import service as ai_derivations_service
+
+    ai_derivations_service.generate_knowledge_summary_now(
+        db,
+        knowledge_entry=knowledge_entry,
+        raise_on_failure=False,
+    )
+
+
+def request_knowledge_summary_recompute(
+    db: Session,
+    *,
+    knowledge_id: int,
+) -> dict[str, Any]:
+    from app.domains.ai_derivations import service as ai_derivations_service
+
+    return ai_derivations_service.request_knowledge_summary_recompute(
+        db,
+        knowledge_id=knowledge_id,
+    )
 
 
 def _build_knowledge_list_item(entry: KnowledgeEntry) -> KnowledgeListItemRead:

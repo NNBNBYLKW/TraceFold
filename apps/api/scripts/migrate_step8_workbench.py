@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-"""Repo-style schema ensure for Step 8 workbench tables.
+"""Legacy Step 8 schema entry that now delegates to the formal migration path."""
 
-This script does not introduce a standalone migration framework. It only ensures
-the current SQLAlchemy metadata is registered and created through the existing
-repository bootstrap path.
-"""
+import sys
+from pathlib import Path
+
+
+API_ROOT = Path(__file__).resolve().parents[1]
+if str(API_ROOT) not in sys.path:
+    sys.path.insert(0, str(API_ROOT))
 
 from app.db.init_db import init_db
 
 
 def main() -> None:
     init_db()
-    print("Step 8 workbench schema ensured via repo-style bootstrap (not a standalone migration system).")
+    print("Database upgraded to the current schema baseline; Step 8 workbench tables are included.")
 
 
 if __name__ == "__main__":

@@ -27,11 +27,11 @@ def test_source_reference_labels_are_human_readable() -> None:
 
 
 def test_rule_alerts_and_ai_derivations_keep_distinct_layer_language() -> None:
-    assert "Rule alerts are reminders derived from formal records." in MAIN_TS
+    assert "Rule-based alerts are reminders derived from formal health records." in MAIN_TS
     assert "AI derivations are generated from the formal record." in MAIN_TS
     assert "They do not replace formal facts or rule alerts." in MAIN_TS
-    assert "AI Derivation" in MAIN_TS
-    assert "AI Summary" not in MAIN_TS
+    assert "AI-derived Summary" in MAIN_TS
+    assert "AI center" not in MAIN_TS
 
 
 def test_current_mode_copy_keeps_workbench_role_thin() -> None:
@@ -47,8 +47,9 @@ def test_web_failure_wording_distinguishes_unavailable_and_invalid_response() ->
 
 
 def test_ai_derivation_empty_state_says_not_generated() -> None:
-    assert "AI derivation has not been generated for this knowledge record yet. The formal record remains available." in MAIN_TS
-    assert "AI derivation has not been generated for this health record yet. It is only available for subjective health records. The formal record remains available." in MAIN_TS
+    assert "AI-derived summary is not available yet." in MAIN_TS
+    assert "The formal content remains available." in MAIN_TS
+    assert "It is only available for subjective health records. The formal record remains available." in MAIN_TS
 
 
 def test_failure_states_include_recovery_hints_and_formal_fact_safety_note() -> None:
@@ -56,3 +57,18 @@ def test_failure_states_include_recovery_hints_and_formal_fact_safety_note() -> 
     assert "This entry-side failure does not change existing formal records." in MAIN_TS
     assert "This response failure does not change existing formal records." in MAIN_TS
     assert "AI derivation failed. The formal record remains available." in MAIN_TS
+
+
+def test_knowledge_detail_copy_keeps_formal_and_ai_boundaries_clear() -> None:
+    assert "Formal content remains the record of truth for this knowledge entry." in MAIN_TS
+    assert "AI-derived summary is generated from the formal record. It does not replace the formal content." in MAIN_TS
+    assert "AI-derived summary generation failed. The formal content remains available." in MAIN_TS
+    assert "AI-derived summary is invalidated and should be recomputed before relying on it." in MAIN_TS
+    assert "AI-derived summary generation failed. The formal record remains available." in MAIN_TS
+
+
+def test_workbench_and_dashboard_distinguish_loading_empty_unavailable_and_degraded() -> None:
+    assert "Loading state is shown while the current route is still fetching its shared API inputs." in MAIN_TS
+    assert "Empty means the shared API responded successfully, but this page does not have records or summary data yet." in MAIN_TS
+    assert "Unavailable means the shared API route could not be reached or returned an unusable response." in MAIN_TS
+    assert "Degraded means /api/system/status reported a shared runtime warning even though reads may still succeed." in MAIN_TS

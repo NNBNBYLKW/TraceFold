@@ -1,29 +1,39 @@
 from __future__ import annotations
 
-from app.db.base import Base
-from app.db.session import engine
+import logging
+
+from app.core.logging import build_log_message, get_logger, log_event
+from app.db.migrations import upgrade_database
 
 
-def init_db() -> None:
+logger = get_logger(__name__)
+
+
+def init_db(database_url: str | None = None) -> None:
     """
-    Initialize database tables.
+    Upgrade the configured database to the current formal schema baseline.
 
     Rules:
-    - This function is responsible only for schema creation.
-    - It should not seed business data.
-    - Domain model modules must be imported before create_all() so that
-      SQLAlchemy metadata is fully registered.
+    - This function is a compatibility bootstrap entry used by app startup.
+    - Formal schema evolution is now owned by Alembic revisions under
+      `apps/api/migrations/`.
+    - This function must not seed business data.
+    - Direct `Base.metadata.create_all()` is reserved for isolated tests only.
     """
 
-    # Import domain models here to ensure they are registered on Base.metadata
-    from app.domains.ai_derivations import models as ai_derivations_models  # noqa: F401
-    from app.domains.alerts import models as alerts_models  # noqa: F401
-    from app.domains.capture import models as capture_models  # noqa: F401
-    from app.domains.system_tasks import models as system_tasks_models  # noqa: F401
-    from app.domains.pending import models as pending_models  # noqa: F401
-    from app.domains.expense import models as expense_models  # noqa: F401
-    from app.domains.knowledge import models as knowledge_models  # noqa: F401
-    from app.domains.health import models as health_models  # noqa: F401
-    from app.domains.workbench import models as workbench_models  # noqa: F401
-
-    Base.metadata.create_all(bind=engine)
+    try:
+        upgrade_database("head", database_url=database_url)
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="runtime_schema_bootstrap_completed",
+            target_revision="head",
+        )
+    except Exception:
+        logger.exception(
+            build_log_message(
+                "runtime_schema_bootstrap_failed",
+                target_revision="head",
+            )
+        )
+        raise

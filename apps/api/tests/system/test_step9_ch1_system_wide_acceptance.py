@@ -317,14 +317,12 @@ def test_chain_c_formal_facts_rules_and_ai_derivations_remain_separate_and_visib
     assert "content_json" not in knowledge_detail
 
     derivation_response = api_client.get(
-        "/api/ai-derivations",
-        params={"target_domain": "knowledge", "target_record_id": knowledge_entry.id},
+        "/api/ai-derivations/knowledge/{knowledge_id}".format(knowledge_id=knowledge_entry.id)
     )
     assert derivation_response.status_code == 200
-    derivations = derivation_response.json()["data"]["items"]
-    assert len(derivations) == 1
-    assert derivations[0]["derivation_type"] == "knowledge_summary"
-    assert derivations[0]["status"] == "completed"
+    derivation = derivation_response.json()["data"]
+    assert derivation["derivation_type"] == "knowledge_summary"
+    assert derivation["status"] == "ready"
 
     dashboard_response = api_client.get("/api/dashboard")
     assert dashboard_response.status_code == 200

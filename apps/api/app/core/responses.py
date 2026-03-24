@@ -34,6 +34,8 @@ class ErrorDetail(BaseModel):
 
     code: str
     details: dict[str, Any] | list[Any] | str | None = None
+    request_id: str | None = None
+    retryable: bool | None = None
 
 
 class ApiResponse(BaseModel, Generic[T]):
@@ -118,6 +120,8 @@ def error_response(
     message: str = "Request failed",
     code: str = "REQUEST_FAILED",
     details: dict[str, Any] | list[Any] | str | None = None,
+    request_id: str | None = None,
+    retryable: bool | None = None,
     meta: ResponseMeta | None = None,
 ) -> ApiResponse[None]:
     """
@@ -130,5 +134,10 @@ def error_response(
         message=message,
         data=None,
         meta=meta,
-        error=ErrorDetail(code=code, details=details),
+        error=ErrorDetail(
+            code=code,
+            details=details,
+            request_id=request_id,
+            retryable=retryable,
+        ),
     )

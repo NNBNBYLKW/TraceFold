@@ -355,9 +355,42 @@ a {
   gap: 0.8rem;
 }
 
+.status-panel.is-ready {
+  border-color: rgba(78, 127, 101, 0.34);
+  background: linear-gradient(180deg, rgba(240, 248, 242, 0.92), rgba(255, 255, 255, 0.88));
+}
+
+.status-panel.is-warning {
+  background: #f9f0dd;
+  border-color: #caa866;
+}
+
 .status-panel.is-error {
   background: var(--error-bg);
   border-color: var(--error-border);
+}
+
+.status-panel.is-empty {
+  background: rgba(239, 243, 240, 0.92);
+  border-color: rgba(148, 170, 154, 0.38);
+}
+
+.status-eyebrow {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.status-title {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #173126;
+}
+
+.status-detail-list {
+  display: grid;
+  gap: 0.45rem;
 }
 
 .status-copy,
@@ -590,7 +623,17 @@ a {
   color: #53645c;
 }
 
+.badge--status-acknowledged {
+  background: #e8ece8;
+  color: #53645c;
+}
+
 .badge--status-dismissed {
+  background: #f0ebe2;
+  color: #7a6a56;
+}
+
+.badge--status-resolved {
   background: #f0ebe2;
   color: #7a6a56;
 }
@@ -613,6 +656,11 @@ a {
 .badge--ai-status-failed {
   background: #f2d8d3;
   color: #8a4137;
+}
+
+.badge--ai-status-invalidated {
+  background: #ece5d6;
+  color: #7a6332;
 }
 
 .record-card--priority {

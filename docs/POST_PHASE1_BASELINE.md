@@ -1,0 +1,140 @@
+# Post-Phase-1 Baseline
+
+## Purpose
+
+This document is the current project-level baseline for TraceFold after Phase 1 closeout.
+
+Read this first when you need to answer:
+
+- what TraceFold is right now
+- which boundaries are still frozen
+- which backend and Web baselines are already formal
+- which documents are the current hot entrypoints
+
+This document is not an execution diary. Historical process evidence stays in `docs/archive/`.
+
+## Current Project Posture
+
+TraceFold is currently in a restrained Post-Phase-1 stage.
+
+The project remains:
+
+- a local-first personal data workbench / personal data platform
+- centered on one shared business chain
+- centered on the API service layer as the only business-logic authority
+- backed by SQLite as the single source of truth
+
+The main chain remains:
+
+`Capture -> Parse -> Pending -> Confirm -> Formal Record -> Query / Analysis / Derivation`
+
+## Frozen Product And Architecture Boundaries
+
+The current baseline still freezes these boundaries:
+
+- Web is the main business interface
+- Desktop is still a shell-level entry, not a desktop business client
+- Telegram is still a lightweight adapter, not a management surface
+- formal facts, rule alerts, AI derivations, and task runtime remain separate layers
+- AI stays in the derivation / explanation layer and must not mutate formal facts
+- task runtime stays an execution layer and must not become a second business center
+- Workbench / Template / Shortcut / Recent / Dashboard role boundaries remain locked
+
+Current non-goals still include:
+
+- multi-tenant or distributed expansion
+- cloud sync recentering
+- plugin-platform expansion
+- Telegram management workflows
+- Desktop-heavy business workflows
+- AI-led formal fact mutation
+- notification-platform or workflow-engine expansion
+
+## Current Formal Backend Baselines
+
+The backend side is currently considered formally established in these areas:
+
+- schema migration baseline
+- unified error / logging / runtime status baseline
+- minimal background task runtime baseline
+- rule evaluation and alert lifecycle baseline
+- AI derivation runtime baseline
+- demo seed baseline for fresh local databases
+- seeded integration smoke baseline for fresh demo DB recovery
+
+These are the operational baseline documents:
+
+- `docs/API_MIGRATION_BASELINE.md`
+- `docs/API_ERROR_LOGGING_STATUS_BASELINE.md`
+- `docs/API_TASK_RUNTIME_BASELINE.md`
+- `docs/API_RULE_ALERT_BASELINE.md`
+- `docs/API_AI_DERIVATION_BASELINE.md`
+- `docs/API_DEMO_SEED_BASELINE.md`
+- `docs/API_SEEDED_INTEGRATION_SMOKE.md`
+
+## Current Formal Web Consumption Baselines
+
+The Web side is currently considered formally established in these areas:
+
+- Workbench / Dashboard consumption of shared API summary and runtime status
+- Knowledge detail consumption of formal content plus `knowledge_summary`
+- Health page consumption of formal records plus rule alerts
+- shared state presentation for loading / empty / unavailable / degraded and derived-state feedback
+
+These are the Web baseline documents:
+
+- `docs/WEB_CONSUMPTION_BASELINE.md`
+- `docs/WEB_KNOWLEDGE_AI_PRESENTATION_BASELINE.md`
+- `docs/WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md`
+- `docs/WEB_SHARED_STATE_POLISH_BASELINE.md`
+
+## Desktop And Telegram Reality Check
+
+Desktop and Telegram remain intentionally narrow:
+
+- Desktop credibility has been improved at the shell level, but it is still not a desktop business client
+- Telegram can still capture and read lightweight status, but it is still not a management console
+
+The current hot supporting docs are:
+
+- `docs/POST_PHASE1_DESKTOP_R2_ACCEPTANCE.md`
+- `docs/TELEGRAM_BOT_SETUP_GUIDE.md`
+
+## Recommended Reading Order
+
+For current work, use this order:
+
+1. `docs/POST_PHASE1_BASELINE.md`
+2. `docs/DEVELOPMENT_ENTRYPOINTS.md`
+3. `docs/WEB_CONSUMPTION_BASELINE.md`
+4. `docs/PHASE1_SUMMARY.md`
+5. `docs/ARCHITECTURE_RULES.md`
+6. `docs/ENV_CONVENTIONS.md`
+7. The specific `docs/API_*_BASELINE.md` or `docs/WEB_*_BASELINE.md` relevant to the task
+8. `docs/archive/README.md` and then `docs/archive/phase1/**` only when historical traceability is needed
+
+## Hot Docs Vs Archive
+
+Keep using root-level baseline docs for:
+
+- current project posture
+- development and local integration entrypoints
+- backend capability baselines
+- Web consumption baselines
+- Desktop / Telegram operating boundaries
+
+Use archive docs for:
+
+- Step / Chapter execution evidence
+- one-off round or task acceptance materials
+- closeout-era checklists, inventories, recovery notes, and process scaffolding
+
+## Maintenance Guidance
+
+When a new task starts, prefer updating the smallest current baseline document that already owns that topic.
+
+Do not reopen archived execution materials as the default source of truth unless:
+
+- a current baseline doc is missing a needed fact
+- you need to trace why a boundary was frozen
+- you need historical acceptance evidence

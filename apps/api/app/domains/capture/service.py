@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError
+from app.core.logging import build_log_message, get_logger, log_event
 from app.domains.capture import repository
 from app.domains.capture.models import CaptureRecord, ParseResult, ParseTargetDomain
 from app.domains.capture.schemas import CaptureSubmitResultRead
@@ -10,6 +13,7 @@ from app.services.intake import service as intake_service
 
 
 _DEFAULT_SOURCE_TYPE = "manual"
+logger = get_logger(__name__)
 
 
 def submit_capture(
@@ -72,9 +76,29 @@ def submit_capture_and_process(
         )
         outcome = intake_service.process_capture(db, capture=capture)
         db.commit()
-        return _build_capture_submit_result(capture=capture, outcome=outcome)
+        result = _build_capture_submit_result(capture=capture, outcome=outcome)
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="capture_submit_completed",
+            domain="capture",
+            capture_id=capture.id,
+            source_type=validated_source_type,
+            route=result.route,
+            target_domain=result.target_domain,
+            pending_item_id=result.pending_item_id,
+            formal_record_id=result.formal_record_id,
+        )
+        return result
     except Exception:
         db.rollback()
+        logger.exception(
+            build_log_message(
+                "capture_submit_failed",
+                domain="capture",
+                source_type=validated_source_type,
+            )
+        )
         raise
 
 

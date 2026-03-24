@@ -51,3 +51,11 @@ def test_dashboard_summary_is_present_but_not_dominant() -> None:
     recent_position = MAIN_TS.index("4. Recent Context")
     dashboard_position = MAIN_TS.index("5. Dashboard Summary")
     assert dashboard_position > recent_position
+
+
+def test_workbench_formally_consumes_home_dashboard_and_runtime_status() -> None:
+    assert "fetchWorkbenchHome()" in MAIN_TS
+    assert "fetchDashboard()" in MAIN_TS
+    assert "fetchRuntimeStatus()" in MAIN_TS
+    assert "System status is ready." in MAIN_TS
+    assert "Workbench summary inputs are partially unavailable." in MAIN_TS

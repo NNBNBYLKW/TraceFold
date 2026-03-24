@@ -4497,6 +4497,9 @@ G:.
 |   +---api
 |   |   |   .env
 |   |   |   .env.example
+|   |   |   .tmp-seed-debug.db
+|   |   |   alembic.ini
+|   |   |   migration-script-smoke.db
 |   |   |   pytest.ini
 |   |   |   requirements.txt
 |   |   |   TESTING.md
@@ -4514,6 +4517,22 @@ G:.
 |   |   +---app
 |   |   |   |   main.py
 |   |   |   |   __init__.py
+|   |   |   |
+|   |   |   +---ai
+|   |   |   |   |   openai_compatible.py
+|   |   |   |   |   providers.py
+|   |   |   |   |   service.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           openai_compatible.cpython-312.pyc
+|   |   |   |           openai_compatible.cpython-314.pyc
+|   |   |   |           providers.cpython-312.pyc
+|   |   |   |           providers.cpython-314.pyc
+|   |   |   |           service.cpython-312.pyc
+|   |   |   |           service.cpython-314.pyc
+|   |   |   |           __init__.cpython-312.pyc
+|   |   |   |           __init__.cpython-314.pyc
 |   |   |   |
 |   |   |   +---api
 |   |   |   |   |   deps.py
@@ -4535,33 +4554,48 @@ G:.
 |   |   |   |
 |   |   |   +---core
 |   |   |   |   |   config.py
+|   |   |   |   |   error_codes.py
 |   |   |   |   |   exceptions.py
 |   |   |   |   |   logging.py
 |   |   |   |   |   responses.py
+|   |   |   |   |   runtime_status.py
 |   |   |   |   |   tasks.py
 |   |   |   |   |
 |   |   |   |   \---__pycache__
 |   |   |   |           config.cpython-312.pyc
 |   |   |   |           config.cpython-314.pyc
+|   |   |   |           error_codes.cpython-312.pyc
+|   |   |   |           error_codes.cpython-314.pyc
 |   |   |   |           exceptions.cpython-312.pyc
 |   |   |   |           exceptions.cpython-314.pyc
 |   |   |   |           logging.cpython-312.pyc
 |   |   |   |           logging.cpython-314.pyc
 |   |   |   |           responses.cpython-312.pyc
 |   |   |   |           responses.cpython-314.pyc
+|   |   |   |           runtime_status.cpython-312.pyc
+|   |   |   |           runtime_status.cpython-314.pyc
 |   |   |   |           tasks.cpython-312.pyc
 |   |   |   |           tasks.cpython-314.pyc
 |   |   |   |
 |   |   |   +---db
 |   |   |   |   |   base.py
+|   |   |   |   |   database_url.py
 |   |   |   |   |   init_db.py
+|   |   |   |   |   migrations.py
+|   |   |   |   |   model_registry.py
 |   |   |   |   |   session.py
 |   |   |   |   |
 |   |   |   |   \---__pycache__
 |   |   |   |           base.cpython-312.pyc
 |   |   |   |           base.cpython-314.pyc
+|   |   |   |           database_url.cpython-312.pyc
+|   |   |   |           database_url.cpython-314.pyc
 |   |   |   |           init_db.cpython-312.pyc
 |   |   |   |           init_db.cpython-314.pyc
+|   |   |   |           migrations.cpython-312.pyc
+|   |   |   |           migrations.cpython-314.pyc
+|   |   |   |           model_registry.cpython-312.pyc
+|   |   |   |           model_registry.cpython-314.pyc
 |   |   |   |           session.cpython-312.pyc
 |   |   |   |           session.cpython-314.pyc
 |   |   |   |
@@ -4747,6 +4781,19 @@ G:.
 |   |   |   |   |           __init__.cpython-312.pyc
 |   |   |   |   |           __init__.cpython-314.pyc
 |   |   |   |   |
+|   |   |   |   +---rules
+|   |   |   |   |   |   health_rules.py
+|   |   |   |   |   |   service.py
+|   |   |   |   |   |   __init__.py
+|   |   |   |   |   |
+|   |   |   |   |   \---__pycache__
+|   |   |   |   |           health_rules.cpython-312.pyc
+|   |   |   |   |           health_rules.cpython-314.pyc
+|   |   |   |   |           service.cpython-312.pyc
+|   |   |   |   |           service.cpython-314.pyc
+|   |   |   |   |           __init__.cpython-312.pyc
+|   |   |   |   |           __init__.cpython-314.pyc
+|   |   |   |   |
 |   |   |   |   +---system_tasks
 |   |   |   |   |   |   models.py
 |   |   |   |   |   |   repository.py
@@ -4799,6 +4846,14 @@ G:.
 |   |   |   |           common.cpython-312.pyc
 |   |   |   |           common.cpython-314.pyc
 |   |   |   |
+|   |   |   +---seed
+|   |   |   |   |   demo_data.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           demo_data.cpython-314.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
 |   |   |   +---services
 |   |   |   |   \---intake
 |   |   |   |       |   parser.py
@@ -4813,49 +4868,141 @@ G:.
 |   |   |   |               __init__.cpython-312.pyc
 |   |   |   |               __init__.cpython-314.pyc
 |   |   |   |
+|   |   |   +---tasks
+|   |   |   |   |   executors.py
+|   |   |   |   |   registry.py
+|   |   |   |   |   __init__.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           executors.cpython-312.pyc
+|   |   |   |           executors.cpython-314.pyc
+|   |   |   |           registry.cpython-312.pyc
+|   |   |   |           registry.cpython-314.pyc
+|   |   |   |           __init__.cpython-312.pyc
+|   |   |   |           __init__.cpython-314.pyc
+|   |   |   |
 |   |   |   \---__pycache__
 |   |   |           main.cpython-312.pyc
 |   |   |           main.cpython-314.pyc
 |   |   |           __init__.cpython-312.pyc
 |   |   |           __init__.cpython-314.pyc
 |   |   |
-|   |   +---scripts
-|   |   |   |   migrate_step8_workbench.py
-|   |   |   |   seed_step6_test_data.py
-|   |   |   |   step9_ch1_acceptance_smoke.py
+|   |   +---migrations
+|   |   |   |   env.py
+|   |   |   |   script.py.mako
+|   |   |   |
+|   |   |   +---versions
+|   |   |   |   |   20260323_0001_phase1_baseline.py
+|   |   |   |   |   20260323_0002_task_runtime_baseline.py
+|   |   |   |   |   20260323_0003_task_trigger_source_manual.py
+|   |   |   |   |   20260323_0004_rule_alert_lifecycle_baseline.py
+|   |   |   |   |   20260323_0005_ai_derivation_runtime_baseline.py
+|   |   |   |   |
+|   |   |   |   \---__pycache__
+|   |   |   |           20260323_0001_phase1_baseline.cpython-312.pyc
+|   |   |   |           20260323_0001_phase1_baseline.cpython-314.pyc
+|   |   |   |           20260323_0002_task_runtime_baseline.cpython-312.pyc
+|   |   |   |           20260323_0002_task_runtime_baseline.cpython-314.pyc
+|   |   |   |           20260323_0003_task_trigger_source_manual.cpython-312.pyc
+|   |   |   |           20260323_0003_task_trigger_source_manual.cpython-314.pyc
+|   |   |   |           20260323_0004_rule_alert_lifecycle_baseline.cpython-312.pyc
+|   |   |   |           20260323_0004_rule_alert_lifecycle_baseline.cpython-314.pyc
+|   |   |   |           20260323_0005_ai_derivation_runtime_baseline.cpython-312.pyc
+|   |   |   |           20260323_0005_ai_derivation_runtime_baseline.cpython-314.pyc
 |   |   |   |
 |   |   |   \---__pycache__
+|   |   |           env.cpython-312.pyc
+|   |   |           env.cpython-314.pyc
+|   |   |
+|   |   +---scripts
+|   |   |   |   migrate_step8_workbench.py
+|   |   |   |   run_migrations.py
+|   |   |   |   seed_demo_data.py
+|   |   |   |   seed_step6_test_data.py
+|   |   |   |   smoke_seeded_demo.py
+|   |   |   |   step9_ch1_acceptance_smoke.py
+|   |   |   |   __init__.py
+|   |   |   |
+|   |   |   \---__pycache__
+|   |   |           migrate_step8_workbench.cpython-314.pyc
+|   |   |           run_migrations.cpython-314.pyc
+|   |   |           seed_demo_data.cpython-314.pyc
 |   |   |           seed_step6_test_data.cpython-314.pyc
+|   |   |           smoke_seeded_demo.cpython-314.pyc
 |   |   |           step9_ch1_acceptance_smoke.cpython-314.pyc
+|   |   |           __init__.cpython-314.pyc
 |   |   |
 |   |   \---tests
 |   |       |   conftest.py
 |   |       |   test_system.py
 |   |       |
+|   |       +---ai
+|   |       |   |   test_openai_compatible_provider.py
+|   |       |   |
+|   |       |   \---__pycache__
+|   |       |           test_openai_compatible_provider.cpython-314-pytest-9.0.2.pyc
+|   |       |
+|   |       +---core
+|   |       |   |   test_error_responses.py
+|   |       |   |   test_runtime_status.py
+|   |       |   |
+|   |       |   \---__pycache__
+|   |       |           test_error_responses.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_error_responses.cpython-314.pyc
+|   |       |           test_runtime_status.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_runtime_status.cpython-314.pyc
+|   |       |
+|   |       +---db
+|   |       |   |   test_migrations.py
+|   |       |   |
+|   |       |   \---__pycache__
+|   |       |           test_migrations.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_migrations.cpython-314.pyc
+|   |       |
 |   |       +---domains
+|   |       |   +---ai_derivations
+|   |       |   |   |   test_derivation_api.py
+|   |       |   |   |   test_derivation_service.py
+|   |       |   |   |   test_derivation_task_flow.py
+|   |       |   |   |
+|   |       |   |   \---__pycache__
+|   |       |   |           test_derivation_api.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_derivation_api.cpython-314.pyc
+|   |       |   |           test_derivation_service.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_derivation_service.cpython-314.pyc
+|   |       |   |           test_derivation_task_flow.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_derivation_task_flow.cpython-314.pyc
+|   |       |   |
 |   |       |   +---alerts
 |   |       |   |   |   test_alert_consumption.py
+|   |       |   |   |   test_alert_service.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
 |   |       |   |           test_alert_consumption.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_alert_consumption.cpython-314.pyc
+|   |       |   |           test_alert_service.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_alert_service.cpython-314.pyc
 |   |       |   |
 |   |       |   +---capture
 |   |       |   |   |   test_capture_smoke.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
 |   |       |   |           test_capture_smoke.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_capture_smoke.cpython-314.pyc
 |   |       |   |
 |   |       |   +---dashboard
 |   |       |   |   |   test_dashboard.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
 |   |       |   |           test_dashboard.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_dashboard.cpython-314.pyc
 |   |       |   |
 |   |       |   +---enhancements
 |   |       |   |   |   test_enhancement_skeleton.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
 |   |       |   |           test_enhancement_skeleton.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_enhancement_skeleton.cpython-314.pyc
 |   |       |   |
 |   |       |   +---formal_read
 |   |       |   |   |   test_formal_read_layer.py
@@ -4870,13 +5017,16 @@ G:.
 |   |       |   |   |
 |   |       |   |   \---__pycache__
 |   |       |   |           test_health_ai_summary.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_health_ai_summary.cpython-314.pyc
 |   |       |   |           test_health_rules.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_health_rules.cpython-314.pyc
 |   |       |   |
 |   |       |   +---knowledge
 |   |       |   |   |   test_knowledge_ai_summary.py
 |   |       |   |   |
 |   |       |   |   \---__pycache__
 |   |       |   |           test_knowledge_ai_summary.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_knowledge_ai_summary.cpython-314.pyc
 |   |       |   |
 |   |       |   +---pending
 |   |       |   |   |   test_pending_actions_http.py
@@ -4885,9 +5035,21 @@ G:.
 |   |       |   |   |
 |   |       |   |   \---__pycache__
 |   |       |   |           test_pending_actions_http.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_pending_actions_http.cpython-314.pyc
 |   |       |   |           test_pending_read.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_pending_read.cpython-314.pyc
 |   |       |   |           test_pending_review_service.cpython-314-pytest-9.0.2.pyc
 |   |       |   |           test_pending_review_service.cpython-314.pyc
+|   |       |   |
+|   |       |   +---system_tasks
+|   |       |   |   |   test_task_api.py
+|   |       |   |   |   test_task_service.py
+|   |       |   |   |
+|   |       |   |   \---__pycache__
+|   |       |   |           test_task_api.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_task_api.cpython-314.pyc
+|   |       |   |           test_task_service.cpython-314-pytest-9.0.2.pyc
+|   |       |   |           test_task_service.cpython-314.pyc
 |   |       |   |
 |   |       |   \---workbench
 |   |       |       |   test_workbench_api.py
@@ -4896,8 +5058,11 @@ G:.
 |   |       |       |
 |   |       |       \---__pycache__
 |   |       |               test_workbench_api.cpython-314-pytest-9.0.2.pyc
+|   |       |               test_workbench_api.cpython-314.pyc
 |   |       |               test_workbench_migration.cpython-314-pytest-9.0.2.pyc
+|   |       |               test_workbench_migration.cpython-314.pyc
 |   |       |               test_workbench_recent_recorder.cpython-314-pytest-9.0.2.pyc
+|   |       |               test_workbench_recent_recorder.cpython-314.pyc
 |   |       |
 |   |       +---system
 |   |       |   |   test_entry_failure_signal_contract.py
@@ -4905,21 +5070,39 @@ G:.
 |   |       |   |   test_entry_validation_baseline_contract.py
 |   |       |   |   test_phase1_closeout_contract.py
 |   |       |   |   test_phase1_non_goals_contract.py
+|   |       |   |   test_runtime_status_api.py
+|   |       |   |   test_seeded_integration_smoke.py
+|   |       |   |   test_seed_demo_data.py
 |   |       |   |   test_step9_ch1_acceptance_runner.py
 |   |       |   |   test_step9_ch1_system_wide_acceptance.py
 |   |       |   |
 |   |       |   \---__pycache__
 |   |       |           test_entry_failure_signal_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_entry_failure_signal_contract.cpython-314.pyc
 |   |       |           test_entry_startup_baseline_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_entry_startup_baseline_contract.cpython-314.pyc
 |   |       |           test_entry_validation_baseline_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_entry_validation_baseline_contract.cpython-314.pyc
 |   |       |           test_phase1_closeout_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_phase1_closeout_contract.cpython-314.pyc
 |   |       |           test_phase1_non_goals_contract.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_phase1_non_goals_contract.cpython-314.pyc
+|   |       |           test_runtime_status_api.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_runtime_status_api.cpython-314.pyc
+|   |       |           test_seeded_integration_smoke.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_seeded_integration_smoke.cpython-314.pyc
+|   |       |           test_seed_demo_data.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_seed_demo_data.cpython-314.pyc
 |   |       |           test_step9_ch1_acceptance_runner.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_step9_ch1_acceptance_runner.cpython-314.pyc
 |   |       |           test_step9_ch1_system_wide_acceptance.cpython-314-pytest-9.0.2.pyc
+|   |       |           test_step9_ch1_system_wide_acceptance.cpython-314.pyc
 |   |       |
 |   |       \---__pycache__
 |   |               conftest.cpython-314-pytest-9.0.2.pyc
+|   |               conftest.cpython-314.pyc
 |   |               test_system.cpython-314-pytest-9.0.2.pyc
+|   |               test_system.cpython-314.pyc
 |   |
 |   +---desktop
 |   |   |   .env
@@ -5106,8 +5289,8 @@ G:.
 |       |   |   vite.svg
 |       |   |
 |       |   \---assets
-|       |           index-BJeNMJ82.css
-|       |           index-DeFV3kw-.js
+|       |           index-BsBYcup3.css
+|       |           index-Dv_7oVoD.js
 |       |
 |       +---node_modules
 |       |   |   .package-lock.json
@@ -5611,30 +5794,81 @@ G:.
 |           |   test_semantics_contract.py
 |           |   test_workbench_home_contract.py
 |           |
+|           +---health
+|           |   |   test_health_alerts_consumption.py
+|           |   |
+|           |   \---__pycache__
+|           |           test_health_alerts_consumption.cpython-314-pytest-9.0.2.pyc
+|           |
+|           +---knowledge
+|           |   |   test_knowledge_detail_ai_presentation.py
+|           |   |
+|           |   \---__pycache__
+|           |           test_knowledge_detail_ai_presentation.cpython-314-pytest-9.0.2.pyc
+|           |
+|           +---shared
+|           |   |   test_shared_state_polish.py
+|           |   |
+|           |   \---__pycache__
+|           |           test_shared_state_polish.cpython-314-pytest-9.0.2.pyc
+|           |
 |           \---__pycache__
 |                   test_health_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
+|                   test_health_ai_ui_contract.cpython-314.pyc
 |                   test_knowledge_ai_ui_contract.cpython-314-pytest-9.0.2.pyc
+|                   test_knowledge_ai_ui_contract.cpython-314.pyc
 |                   test_semantics_contract.cpython-314-pytest-9.0.2.pyc
+|                   test_semantics_contract.cpython-314.pyc
 |                   test_workbench_home_contract.cpython-314-pytest-9.0.2.pyc
+|                   test_workbench_home_contract.cpython-314.pyc
 |
 +---data
-|       tracefold-step6.db
+|       ai_local_tuning_smoke.db
+|       ai_local_tuning_smoke_small.db
+|       ai_local_tuning_smoke_small_v3.db
+|       ai_local_tuning_smoke_small_v4.db
+|       ai_provider_fix_smoke.db
+|       ai_provider_manual.db
+|       ai_provider_manual_v2.db
+|       seed_fix_repro.db
+|       seed_fix_smoke.db
 |       tracefold.db
+|       tracefold_01.db
+|       tracefold_ai_acceptance.db
+|       tracefold_ai_acceptance_clean.db
+|       tracefold_demo_acceptance.db
+|       tracefold_demo_acceptance_fresh.db
 |
 \---docs
+    |   API_AI_DERIVATION_BASELINE.md
+    |   API_AI_PROVIDER_MINIMAL.md
+    |   API_DEMO_SEED_BASELINE.md
+    |   API_ERROR_LOGGING_STATUS_BASELINE.md
+    |   API_MIGRATION_BASELINE.md
+    |   API_RULE_ALERT_BASELINE.md
+    |   API_SEEDED_INTEGRATION_SMOKE.md
+    |   API_TASK_RUNTIME_BASELINE.md
     |   ARCHITECTURE_RULES.md
+    |   DEVELOPMENT_ENTRYPOINTS.md
     |   ENV_CONVENTIONS.md
     |   PHASE1_SUMMARY.md
     |   POST_PHASE1_A3_TASK2_STARTUP_BASELINE.md
     |   POST_PHASE1_A3_TASK4_VALIDATION_BASELINE.md
+    |   POST_PHASE1_BASELINE.md
     |   POST_PHASE1_DESKTOP_R2_ACCEPTANCE.md
     |   TASK_TEMPLATE.md
     |   TELEGRAM_BOT_SETUP_GUIDE.md
     |   tree.txt
+    |   WEB_CONSUMPTION_BASELINE.md
+    |   WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md
+    |   WEB_KNOWLEDGE_AI_PRESENTATION_BASELINE.md
+    |   WEB_SHARED_STATE_POLISH_BASELINE.md
     |   技术路线总览.txt
     |   软件最终需求.txt
     |
     \---archive
+        |   README.md
+        |
         \---phase1
             +---anomalies
             |       PHASE1_FINAL_ACCEPTANCE_PROMPT_DRAFT.md

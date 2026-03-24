@@ -1,11 +1,13 @@
 import './style.css'
 
 import {
+  acknowledgeAlert,
+  ApiRequestError,
   applyWorkbenchTemplate,
   createWorkbenchShortcut,
   createWorkbenchTemplate,
+  fetchAiDerivationDetail,
   fetchAiDerivationList,
-  dismissAlert,
   fetchAlertList,
   fetchDashboard,
   fetchExpenseDetail,
@@ -14,17 +16,18 @@ import {
   fetchHealthList,
   fetchKnowledgeDetail,
   fetchKnowledgeList,
+  fetchRuntimeStatus,
   fetchWorkbenchHome,
   fetchWorkbenchPreferences,
   fetchWorkbenchShortcuts,
-  markAlertViewed,
   updateWorkbenchShortcut,
   updateWorkbenchTemplate,
   deleteWorkbenchShortcut,
   fetchPendingDetail,
   fetchPendingList,
   rerunHealthAiSummary,
-  rerunKnowledgeAiSummary,
+  resolveAlert,
+  requestAiDerivationRecompute,
 } from './api.ts'
 import type {
   AlertResultItem,
@@ -41,6 +44,7 @@ import type {
   PendingDetail,
   PendingListItem,
   PendingListResponse,
+  RuntimeStatusData,
   WorkbenchHomeData,
   WorkbenchPreferences,
   WorkbenchShortcut,
@@ -66,6 +70,14 @@ interface FailureSignal {
   recoveryHint: string | null
   formalFactsNote: string | null
 }
+
+interface KnowledgeAiSummaryState {
+  kind: 'ready' | 'pending' | 'failed' | 'invalidated' | 'not-generated' | 'unavailable'
+  derivation: AiDerivationResultItem | null
+  errorMessage?: string
+}
+
+type AlertActionType = 'acknowledge' | 'resolve'
 
 interface BaseListQuery {
   page: number
@@ -297,19 +309,23 @@ async function renderRoute(route: Exclude<Route, { kind: 'redirect' }>): Promise
 }
 
 async function renderDashboardPage(): Promise<string> {
-  try {
-    const dashboard = await fetchDashboard()
-    return renderDashboardView(dashboard)
-  } catch (error) {
-    return renderDashboardView(null, toErrorMessage(error))
-  }
+  const [dashboardResult, runtimeStatusResult] = await Promise.allSettled([fetchDashboard(), fetchRuntimeStatus()])
+
+  return renderDashboardView(
+    dashboardResult.status === 'fulfilled' ? dashboardResult.value : null,
+    dashboardResult.status === 'rejected' ? toErrorMessage(dashboardResult.reason) : null,
+    runtimeStatusResult.status === 'fulfilled' ? runtimeStatusResult.value : null,
+    runtimeStatusResult.status === 'rejected' ? toErrorMessage(runtimeStatusResult.reason) : null,
+  )
 }
 
 async function renderWorkbenchPage(): Promise<string> {
-  const [homeResult, shortcutsResult, preferencesResult] = await Promise.allSettled([
+  const [homeResult, dashboardResult, shortcutsResult, preferencesResult, runtimeStatusResult] = await Promise.allSettled([
     fetchWorkbenchHome(),
+    fetchDashboard(),
     fetchWorkbenchShortcuts(),
     fetchWorkbenchPreferences(),
+    fetchRuntimeStatus(),
   ])
 
   if (homeResult.status === 'rejected') {
@@ -318,26 +334,41 @@ async function renderWorkbenchPage(): Promise<string> {
         <h1>Workbench</h1>
         <p class="page-copy">Central entry layer for work modes, shortcuts, recent context, and summary.</p>
       </section>
-      ${renderErrorState(toErrorMessage(homeResult.reason))}
+      ${renderRuntimeStatusSection(
+        runtimeStatusResult.status === 'fulfilled' ? runtimeStatusResult.value : null,
+        runtimeStatusResult.status === 'rejected' ? toErrorMessage(runtimeStatusResult.reason) : null,
+      )}
+      ${renderUnavailableState('Workbench home is unavailable.', toErrorMessage(homeResult.reason))}
     `
   }
 
   return renderWorkbenchView(
     homeResult.value,
+    dashboardResult.status === 'fulfilled' ? dashboardResult.value : null,
     shortcutsResult.status === 'fulfilled' ? shortcutsResult.value.items : [],
     preferencesResult.status === 'fulfilled' ? preferencesResult.value : null,
+    runtimeStatusResult.status === 'fulfilled' ? runtimeStatusResult.value : null,
     {
+      dashboardError: dashboardResult.status === 'rejected' ? toErrorMessage(dashboardResult.reason) : null,
       shortcutsError: shortcutsResult.status === 'rejected' ? toErrorMessage(shortcutsResult.reason) : null,
       preferencesError: preferencesResult.status === 'rejected' ? toErrorMessage(preferencesResult.reason) : null,
+      runtimeStatusError: runtimeStatusResult.status === 'rejected' ? toErrorMessage(runtimeStatusResult.reason) : null,
     },
   )
 }
 
 function renderWorkbenchView(
   home: WorkbenchHomeData,
+  dashboard: DashboardData | null,
   allShortcuts: WorkbenchShortcut[],
   preferences: WorkbenchPreferences | null,
-  errors: { shortcutsError: string | null; preferencesError: string | null },
+  runtimeStatus: RuntimeStatusData | null,
+  errors: {
+    dashboardError: string | null
+    shortcutsError: string | null
+    preferencesError: string | null
+    runtimeStatusError: string | null
+  },
 ): string {
   const templates = home.templates
   const activeTemplate = templates.find((template) => template.template_id === home.current_mode.template_id) ?? null
@@ -354,11 +385,13 @@ function renderWorkbenchView(
       <p class="page-copy">Step 8 home entry layer for current mode, templates, shortcuts, recent context, and summary.</p>
     </section>
     ${renderWorkbenchFlash()}
+    ${renderRuntimeStatusSection(runtimeStatus, errors.runtimeStatusError)}
+    ${renderWorkbenchStateBanner(home, dashboard, errors.dashboardError)}
     ${renderWorkbenchCurrentModeSection(home, activeTemplate, defaultTemplate, preferences, errors.preferencesError)}
     ${renderWorkbenchTemplatesSection(home, editingTemplate)}
     ${renderWorkbenchShortcutsSection(home, allShortcuts, editingShortcut, errors.shortcutsError)}
     ${renderWorkbenchRecentSection(home)}
-    ${renderWorkbenchDashboardSummarySection(home)}
+    ${renderWorkbenchDashboardSummarySection(dashboard, errors.dashboardError)}
   `
 }
 
@@ -713,56 +746,80 @@ function renderWorkbenchRecentCard(recent: WorkbenchHomeData['recent_contexts'][
   `
 }
 
-function renderWorkbenchDashboardSummarySection(home: WorkbenchHomeData): string {
-  const dashboard = home.dashboard_summary
+function renderWorkbenchDashboardSummarySection(dashboard: DashboardData | null, errorMessage?: string | null): string {
   return `
     <section class="panel page-section workbench-section">
       <div class="section-header">
         <h2>5. Dashboard Summary</h2>
         <p class="section-copy">Summary stays summary. The workbench homepage does not replace the full dashboard.</p>
       </div>
-      <div class="summary-grid">
-        <article class="summary-card">
-          <div class="summary-card__header">
-            <h3>Pending</h3>
-            <a class="record-action" href="/pending" data-nav="true">Open</a>
-          </div>
-          <p class="summary-value">${dashboard.pending_summary.open_count}</p>
-          <p class="section-copy">${dashboard.pending_summary.resolved_in_last_7_days} resolved in the last 7 days.</p>
-        </article>
-        <article class="summary-card summary-card--alert">
-          <div class="summary-card__header">
-            <h3>Open alerts</h3>
-            <a class="record-action" href="/dashboard" data-nav="true">Dashboard</a>
-          </div>
-          <p class="summary-value">${dashboard.alert_summary.open_count}</p>
-          <p class="section-copy">Current high-signal alert count from the shared dashboard summary.</p>
-        </article>
-        <article class="summary-card">
-          <div class="summary-card__header">
-            <h3>Expense</h3>
-            <a class="record-action" href="/expense" data-nav="true">Open</a>
-          </div>
-          <p class="summary-value">${dashboard.expense_summary.created_in_current_month}</p>
-          <p class="section-copy">Created this month.</p>
-        </article>
-        <article class="summary-card">
-          <div class="summary-card__header">
-            <h3>Knowledge</h3>
-            <a class="record-action" href="/knowledge" data-nav="true">Open</a>
-          </div>
-          <p class="summary-value">${dashboard.knowledge_summary.created_in_last_7_days}</p>
-          <p class="section-copy">Created in the last 7 days.</p>
-        </article>
-        <article class="summary-card">
-          <div class="summary-card__header">
-            <h3>Health</h3>
-            <a class="record-action" href="/health" data-nav="true">Open</a>
-          </div>
-          <p class="summary-value">${dashboard.health_summary.created_in_last_7_days}</p>
-          <p class="section-copy">Created in the last 7 days.</p>
-        </article>
-      </div>
+      ${
+        errorMessage
+          ? renderUnavailableState(
+              'Dashboard summary is unavailable for the workbench right now.',
+              errorMessage,
+            )
+          : dashboard
+            ? isDashboardEmpty(dashboard)
+              ? renderPageStatePanel({
+                  tone: 'empty',
+                  eyebrow: 'Empty',
+                  title: 'Dashboard summary is currently empty.',
+                  message:
+                    'Empty means the shared API responded successfully, but this page does not have records or summary data yet.',
+                })
+              : `
+                  <div class="summary-grid">
+                    <article class="summary-card">
+                      <div class="summary-card__header">
+                        <h3>Pending</h3>
+                        <a class="record-action" href="/pending" data-nav="true">Open</a>
+                      </div>
+                      <p class="summary-value">${dashboard.pending_summary.open_count}</p>
+                      <p class="section-copy">${dashboard.pending_summary.resolved_in_last_7_days} resolved in the last 7 days.</p>
+                    </article>
+                    <article class="summary-card summary-card--alert">
+                      <div class="summary-card__header">
+                        <h3>Open alerts</h3>
+                        <a class="record-action" href="/dashboard" data-nav="true">Dashboard</a>
+                      </div>
+                      <p class="summary-value">${dashboard.alert_summary.open_count}</p>
+                      <p class="section-copy">Current high-signal alert count from the shared dashboard summary.</p>
+                    </article>
+                    <article class="summary-card">
+                      <div class="summary-card__header">
+                        <h3>Expense</h3>
+                        <a class="record-action" href="/expense" data-nav="true">Open</a>
+                      </div>
+                      <p class="summary-value">${dashboard.expense_summary.created_in_current_month}</p>
+                      <p class="section-copy">Created this month.</p>
+                    </article>
+                    <article class="summary-card">
+                      <div class="summary-card__header">
+                        <h3>Knowledge</h3>
+                        <a class="record-action" href="/knowledge" data-nav="true">Open</a>
+                      </div>
+                      <p class="summary-value">${dashboard.knowledge_summary.created_in_last_7_days}</p>
+                      <p class="section-copy">Created in the last 7 days.</p>
+                    </article>
+                    <article class="summary-card">
+                      <div class="summary-card__header">
+                        <h3>Health</h3>
+                        <a class="record-action" href="/health" data-nav="true">Open</a>
+                      </div>
+                      <p class="summary-value">${dashboard.health_summary.created_in_last_7_days}</p>
+                      <p class="section-copy">Created in the last 7 days.</p>
+                    </article>
+                  </div>
+                `
+            : renderPageStatePanel({
+                tone: 'empty',
+                eyebrow: 'Empty',
+                title: 'Dashboard summary is currently empty.',
+                message:
+                  'Empty means the shared API responded successfully, but this page does not have records or summary data yet.',
+              })
+      }
     </section>
   `
 }
@@ -1004,7 +1061,7 @@ async function renderKnowledgeListPage(): Promise<string> {
 async function renderKnowledgeDetailPage(id: string): Promise<string> {
   const [detailResult, aiResult] = await Promise.allSettled([
     fetchKnowledgeDetail(id),
-    fetchAiDerivationList({ target_domain: 'knowledge', target_record_id: id }),
+    fetchAiDerivationDetail('knowledge', id),
   ])
 
   if (detailResult.status === 'rejected') {
@@ -1013,8 +1070,7 @@ async function renderKnowledgeDetailPage(id: string): Promise<string> {
 
   return renderKnowledgeDetailView(
     detailResult.value,
-    aiResult.status === 'fulfilled' ? getKnowledgeSummaryDerivation(aiResult.value.items) : null,
-    aiResult.status === 'rejected' ? toErrorMessage(aiResult.reason) : undefined,
+    deriveKnowledgeAiSummaryState(aiResult),
   )
 }
 
@@ -1023,7 +1079,7 @@ async function renderHealthListPage(): Promise<string> {
 
   const [healthResult, alertResult] = await Promise.allSettled([
     fetchHealthList(buildHealthApiParams(query)),
-    fetchAlertList({ source_domain: 'health' }),
+    fetchAlertList({ domain: 'health' }),
   ])
 
   return renderHealthListView(
@@ -1038,7 +1094,7 @@ async function renderHealthListPage(): Promise<string> {
 async function renderHealthDetailPage(id: string): Promise<string> {
   const [detailResult, alertResult, aiResult] = await Promise.allSettled([
     fetchHealthDetail(id),
-    fetchAlertList({ source_domain: 'health', source_record_id: id }),
+    fetchAlertList({ domain: 'health', source_record_id: id }),
     fetchAiDerivationList({ target_domain: 'health', target_record_id: id }),
   ])
 
@@ -1074,11 +1130,11 @@ function handleClick(event: MouseEvent): void {
     const action = aiActionButton.dataset.aiAction
     const recordId = Number.parseInt(aiActionButton.dataset.recordId || '', 10)
     if (
-      (action === 'rerun-health-summary' || action === 'rerun-knowledge-summary') &&
+      (action === 'rerun-health-summary' || action === 'recompute-knowledge-summary') &&
       Number.isFinite(recordId)
     ) {
       event.preventDefault()
-      void handleAiDerivationAction(recordId, action)
+      void handleAiDerivationAction(aiActionButton, recordId, action)
     }
     return
   }
@@ -1087,9 +1143,9 @@ function handleClick(event: MouseEvent): void {
   if (alertActionButton) {
     const action = alertActionButton.dataset.alertAction
     const alertId = Number.parseInt(alertActionButton.dataset.alertId || '', 10)
-    if ((action === 'viewed' || action === 'dismissed') && Number.isFinite(alertId)) {
+    if ((action === 'acknowledge' || action === 'resolve') && Number.isFinite(alertId)) {
       event.preventDefault()
-      void handleAlertAction(alertId, action)
+      void handleAlertAction(alertActionButton, alertId, action)
     }
     return
   }
@@ -1240,43 +1296,79 @@ function renderPlaceholderPage(title: string, message: string): string {
 }
 
 async function handleAiDerivationAction(
+  button: HTMLButtonElement,
   recordId: number,
-  action: 'rerun-health-summary' | 'rerun-knowledge-summary',
+  action: 'rerun-health-summary' | 'recompute-knowledge-summary',
 ): Promise<void> {
+  const originalLabel = button.textContent || ''
+  button.disabled = true
+  button.textContent = action === 'recompute-knowledge-summary' ? 'Requesting recompute...' : 'Rerunning...'
+
   try {
     if (action === 'rerun-health-summary') {
       await rerunHealthAiSummary(recordId)
     } else {
-      await rerunKnowledgeAiSummary(recordId)
+      await requestAiDerivationRecompute('knowledge', recordId)
     }
     await renderApp()
   } catch (error) {
     window.alert(toErrorMessage(error))
+  } finally {
+    button.disabled = false
+    button.textContent = originalLabel
   }
 }
 
-async function handleAlertAction(alertId: number, action: 'viewed' | 'dismissed'): Promise<void> {
+async function handleAlertAction(
+  button: HTMLButtonElement,
+  alertId: number,
+  action: AlertActionType,
+): Promise<void> {
+  const originalLabel = button.textContent || ''
+  button.disabled = true
+  button.textContent = action === 'acknowledge' ? 'Acknowledging...' : 'Resolving...'
+
   try {
-    if (action === 'viewed') {
-      await markAlertViewed(alertId)
+    if (action === 'acknowledge') {
+      await acknowledgeAlert(alertId)
     } else {
-      await dismissAlert(alertId)
+      await resolveAlert(alertId)
     }
     await renderApp()
   } catch (error) {
     window.alert(toErrorMessage(error))
+  } finally {
+    button.disabled = false
+    button.textContent = originalLabel
   }
 }
 
-function renderDashboardView(dashboard: DashboardData | null, errorMessage?: string): string {
+function renderDashboardView(
+  dashboard: DashboardData | null,
+  errorMessage?: string | null,
+  runtimeStatus?: RuntimeStatusData | null,
+  runtimeStatusError?: string | null,
+): string {
   return `
     <section class="page-header">
       <h1>Dashboard</h1>
       <p class="page-copy">Workspace overview for pending review, formal records, and recent context.</p>
     </section>
+    ${renderRuntimeStatusSection(runtimeStatus ?? null, runtimeStatusError ?? null)}
+    ${
+      !errorMessage && dashboard && isDashboardEmpty(dashboard)
+        ? renderPageStatePanel({
+            tone: 'empty',
+            eyebrow: 'Empty',
+            title: 'Dashboard is currently empty.',
+            message:
+              'Empty means the shared API responded successfully, but this page does not have records or summary data yet.',
+          })
+        : ''
+    }
     ${
       errorMessage
-        ? renderErrorState(errorMessage)
+        ? renderUnavailableState('Dashboard is unavailable.', errorMessage)
         : dashboard
           ? `
               ${renderPendingSummarySection(dashboard)}
@@ -1630,6 +1722,7 @@ function renderHealthListView(
     <section class="panel page-section">
       <div class="section-header">
         <h2>Formal Records</h2>
+        <p class="section-copy">Formal health records remain the primary read layer for this page.</p>
       </div>
       ${
         errorMessage
@@ -1653,6 +1746,7 @@ function renderHealthListView(
   return `
     <section class="page-header">
       <h1>Health</h1>
+      <p class="page-copy">Formal health records with separate rule-based reminders.</p>
     </section>
     ${renderHealthFilters(query)}
     ${factsSection}
@@ -1686,8 +1780,7 @@ function renderExpenseDetailView(detail: ExpenseDetail): string {
 
 function renderKnowledgeDetailView(
   detail: KnowledgeDetail,
-  aiSummary: AiDerivationResultItem | null,
-  aiErrorMessage?: string,
+  aiSummaryState: KnowledgeAiSummaryState,
 ): string {
   return `
     <section class="page-header">
@@ -1696,7 +1789,8 @@ function renderKnowledgeDetailView(
     </section>
     <section class="panel page-section">
       <div class="section-header">
-        <h2>Content</h2>
+        <h2>Formal Content</h2>
+        <p class="section-copy">Formal content remains the record of truth for this knowledge entry.</p>
       </div>
       <div class="field-grid">
         ${renderField('Created At', formatDateTime(detail.created_at))}
@@ -1714,7 +1808,7 @@ function renderKnowledgeDetailView(
         ${renderField('Source Text', detail.source_text, true)}
       </div>
     </section>
-    ${renderKnowledgeAiSummarySection(detail.id, aiSummary, aiErrorMessage)}
+    ${renderKnowledgeAiSummarySection(detail.id, aiSummaryState)}
   `
 }
 
@@ -1732,7 +1826,8 @@ function renderHealthDetailView(
     </section>
     <section class="panel page-section">
       <div class="section-header">
-        <h2>Detail</h2>
+        <h2>Formal Record</h2>
+        <p class="section-copy">Formal health record values remain the record of truth for this page.</p>
       </div>
       <div class="field-grid">
         ${renderField('ID', String(detail.id))}
@@ -2010,20 +2105,44 @@ function renderHealthAlertSection(
     typeof options.sourceRecordId === 'number'
       ? alerts.filter((item) => item.source_record_id === options.sourceRecordId)
       : alerts
+  const openAlerts = filteredAlerts.filter((item) => item.status === 'open')
+  const acknowledgedAlerts = filteredAlerts.filter((item) => item.status === 'acknowledged')
+  const resolvedAlerts = filteredAlerts.filter((item) => item.status === 'resolved')
+  const otherAlerts = filteredAlerts.filter(
+    (item) => item.status !== 'open' && item.status !== 'acknowledged' && item.status !== 'resolved',
+  )
 
   return `
     <section class="panel page-section${options.emphasize ? ' page-section--alert-focus' : ''}" id="health-alerts">
       <div class="section-header">
         <h2>${escapeHtml(options.heading)}</h2>
       </div>
-      <p class="section-copy">Rule alerts are reminders derived from formal records. They do not replace the formal record itself.</p>
+      <p class="section-copy">Rule-based alerts are reminders derived from formal health records. They do not replace or rewrite the formal record itself.</p>
       ${
         errorMessage
-          ? renderErrorState(errorMessage)
+          ? renderUnavailableState('Health alerts are unavailable right now.', errorMessage)
           : filteredAlerts.length > 0
-            ? renderAlertRecords(filteredAlerts)
-            : renderEmptyState(options.emptyMessage)
+            ? `
+                ${renderAlertStatusGroup('Open Alerts', openAlerts, 'Open alerts still need attention. This does not mean the formal record was changed.')}
+                ${renderAlertStatusGroup('Acknowledged Alerts', acknowledgedAlerts, 'Acknowledged means the alert was seen. It does not mean the formal health record was modified.')}
+                ${renderAlertStatusGroup('Resolved Alerts', resolvedAlerts, 'Resolved means the reminder was handled. It does not mean the health fact was automatically corrected.')}
+                ${
+                  otherAlerts.length > 0
+                    ? renderAlertStatusGroup('Other Alert Lifecycle States', otherAlerts, 'Additional alert lifecycle states remain reminders rather than formal fact changes.')
+                    : ''
+                }
+              `
+            : renderEmptyState(options.emptyMessage, 'Health alerts are currently empty.')
       }
+    </section>
+  `
+}
+
+function renderAlertStatusGroup(title: string, alerts: AlertResultItem[], emptyMessage: string): string {
+  return `
+    <section class="subsection">
+      <h3>${escapeHtml(title)}</h3>
+      ${alerts.length > 0 ? renderAlertRecords(alerts) : `<p class="section-copy">${escapeHtml(emptyMessage)}</p>`}
     </section>
   `
 }
@@ -2042,17 +2161,17 @@ function renderHealthAiSummarySection(
       <p class="section-copy">AI derivations are generated from the formal record. They do not replace formal facts or rule alerts.</p>
       ${
         errorMessage
-          ? renderErrorState(errorMessage)
+          ? renderUnavailableState('AI-derived summary is unavailable right now.', errorMessage)
           : aiSummary
             ? renderHealthAiSummaryContent(aiSummary, healthId)
-            : `
-                <div class="status-panel is-empty">
-                  <p class="status-copy">AI derivation has not been generated for this health record yet. It is only available for subjective health records. The formal record remains available.</p>
-                  <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
-                    Generate AI Derivation
-                  </button>
-                </div>
-              `
+            : renderPageStatePanel({
+                tone: 'empty',
+                eyebrow: 'Not Generated',
+                title: 'AI-derived summary is not available yet.',
+                message:
+                  'It is only available for subjective health records. The formal record remains available.',
+                actions: `<button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">Generate AI-derived Summary</button>`,
+              })
       }
     </section>
   `
@@ -2060,32 +2179,41 @@ function renderHealthAiSummarySection(
 
 function renderKnowledgeAiSummarySection(
   knowledgeId: number,
-  aiSummary: AiDerivationResultItem | null,
-  errorMessage?: string,
+  aiSummaryState: KnowledgeAiSummaryState,
 ): string {
   return `
     <section class="panel page-section page-section--ai">
       <div class="section-header section-header--with-badge">
-        <h2>AI Derivation</h2>
+        <h2>AI-derived Summary</h2>
         ${renderAiLabelBadge()}
       </div>
-      <p class="section-copy">AI derivations are generated from the formal record. They do not replace formal facts or rule alerts.</p>
-      ${
-        errorMessage
-          ? renderErrorState(errorMessage)
-          : aiSummary
-            ? renderKnowledgeAiSummaryContent(aiSummary, knowledgeId)
-            : `
-                <div class="status-panel is-empty">
-                  <p class="status-copy">AI derivation has not been generated for this knowledge record yet. The formal record remains available.</p>
-                  <button class="secondary-button" type="button" data-ai-action="rerun-knowledge-summary" data-record-id="${knowledgeId}">
-                    Generate AI Derivation
-                  </button>
-                </div>
-              `
-      }
+      <p class="section-copy">AI-derived summary is generated from the formal record. It does not replace the formal content.</p>
+      ${renderKnowledgeAiSummaryBody(aiSummaryState, knowledgeId)}
     </section>
   `
+}
+
+function renderKnowledgeAiSummaryBody(
+  aiSummaryState: KnowledgeAiSummaryState,
+  knowledgeId: number,
+): string {
+  switch (aiSummaryState.kind) {
+    case 'unavailable':
+      return renderUnavailableState(
+        'AI-derived summary is unavailable right now.',
+        aiSummaryState.errorMessage || 'TraceFold AI derivation request failed.',
+      )
+    case 'not-generated':
+      return renderPageStatePanel({
+        tone: 'empty',
+        eyebrow: 'Not Generated',
+        title: 'AI-derived summary is not available yet.',
+        message: 'The formal content remains available.',
+        actions: `<button class="secondary-button" type="button" data-ai-action="recompute-knowledge-summary" data-record-id="${knowledgeId}">Generate AI-derived Summary</button>`,
+      })
+    default:
+      return renderKnowledgeAiSummaryContent(aiSummaryState.derivation, knowledgeId)
+  }
 }
 
 function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthId: number): string {
@@ -2108,9 +2236,14 @@ function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthI
       </div>
       ${
         aiSummary.status === 'failed'
-          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed. The formal record remains available.')}</p>`
-          : aiSummary.status === 'pending'
-            ? '<p class="section-copy">AI derivation is in progress.</p>'
+          ? `
+              <p class="section-copy">AI-derived summary generation failed. The formal record remains available.</p>
+              <p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed. The formal record remains available.')}</p>
+            `
+          : aiSummary.status === 'invalidated'
+            ? '<p class="section-copy">AI-derived summary is invalidated and should be recomputed before relying on it.</p>'
+            : aiSummary.status === 'pending' || aiSummary.status === 'running'
+              ? '<p class="section-copy">AI-derived summary recompute has been requested. Refresh the page if the status remains pending.</p>'
             : `
                 <div class="field-grid">
                   ${renderField('Summary', summaryText, true)}
@@ -2128,35 +2261,68 @@ function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthI
       }
       <div class="alert-actions">
         <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
-          Rerun AI Derivation
+          Recompute AI-derived Summary
         </button>
       </div>
     </article>
   `
 }
 
-function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem, knowledgeId: number): string {
+function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem | null, knowledgeId: number): string {
+  if (!aiSummary) {
+    return renderPageStatePanel({
+      tone: 'empty',
+      eyebrow: 'Not Generated',
+      title: 'AI-derived summary is not available yet.',
+      message: 'The formal content remains available.',
+      actions: `<button class="secondary-button" type="button" data-ai-action="recompute-knowledge-summary" data-record-id="${knowledgeId}">Generate AI-derived Summary</button>`,
+    })
+  }
+
   const content = asKnowledgeSummaryContent(aiSummary.content_json)
   const summaryText = content?.summary ?? null
   const keyPoints = content?.key_points ?? []
   const keywords = content?.keywords ?? []
+  const generationTime =
+    aiSummary.generated_at || aiSummary.invalidated_at || aiSummary.failed_at || aiSummary.updated_at || aiSummary.created_at
 
   return `
     <article class="record-card record-card--ai">
       <div class="record-card__header">
         <div class="record-card__title-group">
-          <h3>Supportive interpretation</h3>
-          <span class="record-meta">${escapeHtml(formatDateTime(aiSummary.generated_at || aiSummary.created_at))}</span>
+          <h3>Generated summary</h3>
+          <span class="record-meta">${escapeHtml(formatDateTime(generationTime))}</span>
         </div>
         <div class="record-badges">
           ${renderAiStatusBadge(aiSummary.status)}
         </div>
       </div>
+      <div class="field-grid">
+        ${renderField('Derivation Status', formatStatusLabel(aiSummary.status))}
+        ${renderField('Model Key', aiSummary.model_key || aiSummary.model_name)}
+        ${renderField('Model Version', aiSummary.model_version)}
+      </div>
       ${
         aiSummary.status === 'failed'
-          ? `<p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed. The formal record remains available.')}</p>`
-          : aiSummary.status === 'pending'
-            ? '<p class="section-copy">AI derivation is in progress.</p>'
+          ? `
+              <p class="section-copy">AI-derived summary generation failed. The formal content remains available.</p>
+              <p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed. The formal record remains available.')}</p>
+            `
+          : aiSummary.status === 'invalidated'
+            ? `
+                <p class="section-copy">AI-derived summary is invalidated and should be recomputed before relying on it.</p>
+                ${
+                  summaryText
+                    ? `
+                        <div class="field-grid">
+                          ${renderField('Last generated summary', summaryText, true)}
+                        </div>
+                      `
+                    : ''
+                }
+              `
+            : aiSummary.status === 'pending' || aiSummary.status === 'running'
+              ? '<p class="section-copy">AI-derived summary recompute has been requested. Refresh the page if the status remains pending.</p>'
             : `
                 <div class="field-grid">
                   ${renderField('Summary', summaryText, true)}
@@ -2175,8 +2341,8 @@ function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem, know
               `
       }
       <div class="alert-actions">
-        <button class="secondary-button" type="button" data-ai-action="rerun-knowledge-summary" data-record-id="${knowledgeId}">
-          Rerun AI Derivation
+        <button class="secondary-button" type="button" data-ai-action="recompute-knowledge-summary" data-record-id="${knowledgeId}">
+          Recompute AI-derived Summary
         </button>
       </div>
     </article>
@@ -2190,7 +2356,7 @@ function renderAlertRecords(items: AlertResultItem[]): string {
         <article class="record-card record-card--alert">
           <div class="record-card__header">
             <div class="record-card__title-group">
-              <h3>${escapeHtml(item.title)}</h3>
+              <h3>${escapeHtml(item.title || 'Rule alert')}</h3>
               <span class="record-meta">${escapeHtml(formatDateTime(item.triggered_at))}</span>
             </div>
             <a class="record-action" href="/health/${item.source_record_id}" data-nav="true">Open record</a>
@@ -2200,24 +2366,36 @@ function renderAlertRecords(items: AlertResultItem[]): string {
             ${renderStatusBadge(item.status)}
           </div>
           <div class="field-grid">
-            ${renderField('Rule Code', item.rule_code)}
+            ${renderField('Rule Key', item.rule_key || item.rule_code || null)}
             ${renderField('Source Record', `Health #${item.source_record_id}`)}
+            ${renderField('Status', formatStatusLabel(item.status))}
+            ${renderField('Severity', formatStatusLabel(item.severity))}
+            ${renderField('Triggered At', formatDateTime(item.triggered_at))}
+            ${
+              item.acknowledged_at
+                ? renderField('Acknowledged At', formatDateTime(item.acknowledged_at))
+                : ''
+            }
+            ${item.resolved_at ? renderField('Resolved At', formatDateTime(item.resolved_at)) : ''}
             ${renderField('Message', item.message, true)}
             ${renderField('Explanation', item.explanation, true)}
+            ${item.resolution_note ? renderField('Resolution Note', item.resolution_note, true) : ''}
           </div>
           ${
-            item.status === 'dismissed'
-              ? ''
-              : `
+            item.status === 'open'
+              ? `
                   <div class="alert-actions">
-                    ${
-                      item.status === 'open'
-                        ? `<button class="secondary-button" type="button" data-alert-action="viewed" data-alert-id="${item.id}">Mark viewed</button>`
-                        : ''
-                    }
-                    <button class="secondary-button" type="button" data-alert-action="dismissed" data-alert-id="${item.id}">Dismiss</button>
+                    <button class="secondary-button" type="button" data-alert-action="acknowledge" data-alert-id="${item.id}">Acknowledge Alert</button>
+                    <button class="secondary-button" type="button" data-alert-action="resolve" data-alert-id="${item.id}">Resolve Alert</button>
                   </div>
                 `
+              : item.status === 'acknowledged'
+                ? `
+                    <div class="alert-actions">
+                      <button class="secondary-button" type="button" data-alert-action="resolve" data-alert-id="${item.id}">Resolve Alert</button>
+                    </div>
+                  `
+                : ''
           }
         </article>
       `,
@@ -2292,7 +2470,13 @@ function renderSeverityBadge(value: string): string {
 }
 
 function renderStatusBadge(value: string): string {
-  return `<span class="badge badge--status badge--status-${escapeHtml(value)}">${escapeHtml(formatStatusLabel(value))}</span>`
+  const normalizedValue =
+    value === 'acknowledged'
+      ? 'acknowledged'
+      : value === 'resolved'
+        ? 'resolved'
+        : value
+  return `<span class="badge badge--status badge--status-${escapeHtml(normalizedValue)}">${escapeHtml(formatStatusLabel(value))}</span>`
 }
 
 function renderAiLabelBadge(): string {
@@ -2300,7 +2484,15 @@ function renderAiLabelBadge(): string {
 }
 
 function renderAiStatusBadge(value: string): string {
-  return `<span class="badge badge--ai-status badge--ai-status-${escapeHtml(value)}">${escapeHtml(formatStatusLabel(value))}</span>`
+  const normalizedValue =
+    value === 'ready'
+      ? 'completed'
+      : value === 'running'
+        ? 'pending'
+        : value === 'invalidated'
+          ? 'invalidated'
+          : value
+  return `<span class="badge badge--ai-status badge--ai-status-${escapeHtml(normalizedValue)}">${escapeHtml(formatStatusLabel(value))}</span>`
 }
 
 function renderPagination(path: string, page: number, pageSize: number, total: number): string {
@@ -2356,19 +2548,21 @@ function renderSourceSection(sourceCaptureId: number, sourcePendingId: number | 
 }
 
 function renderLoadingState(): string {
-  return `
-    <section class="panel status-panel">
-      <p class="status-copy">Loading...</p>
-    </section>
-  `
+  return renderPageStatePanel({
+    tone: 'loading',
+    eyebrow: 'Loading',
+    title: 'Loading shared page inputs.',
+    message: 'Loading state is shown while the current route is still fetching its shared API inputs.',
+  })
 }
 
-function renderEmptyState(message: string): string {
-  return `
-    <div class="status-panel is-empty">
-      <p class="status-copy">${escapeHtml(message)}</p>
-    </div>
-  `
+function renderEmptyState(message: string, title = 'This section is currently empty.'): string {
+  return renderPageStatePanel({
+    tone: 'empty',
+    eyebrow: 'Empty',
+    title,
+    message,
+  })
 }
 
 function renderErrorState(message: string): string {
@@ -2381,6 +2575,136 @@ function renderErrorState(message: string): string {
       <button class="secondary-button" type="button" data-retry="true">Retry</button>
     </section>
   `
+}
+
+function renderUnavailableState(title: string, message: string): string {
+  const signal = classifyFailureSignal(message)
+  return renderPageStatePanel({
+    tone: 'unavailable',
+    eyebrow: 'Unavailable',
+    title,
+    message:
+      'Unavailable means the shared API route could not be reached or returned an unusable response.',
+    details: [signal.message, signal.recoveryHint, signal.formalFactsNote].filter((value): value is string => Boolean(value)),
+    retry: true,
+  })
+}
+
+function renderDegradedState(title: string, message: string, details: string[]): string {
+  return renderPageStatePanel({
+    tone: 'degraded',
+    eyebrow: 'Degraded',
+    title,
+    message,
+    details,
+  })
+}
+
+function renderPageStatePanel(options: {
+  tone: 'loading' | 'empty' | 'degraded' | 'unavailable' | 'ready'
+  eyebrow: string
+  title: string
+  message: string
+  details?: string[]
+  retry?: boolean
+  actions?: string
+}): string {
+  const toneClass =
+    options.tone === 'degraded'
+      ? ' is-warning'
+      : options.tone === 'unavailable'
+        ? ' is-error'
+        : options.tone === 'ready'
+          ? ' is-ready'
+          : options.tone === 'empty'
+            ? ' is-empty'
+            : ''
+
+  return `
+    <section class="panel status-panel${toneClass}">
+      <span class="status-eyebrow">${escapeHtml(options.eyebrow)}</span>
+      <h2 class="status-title">${escapeHtml(options.title)}</h2>
+      <p class="status-copy">${escapeHtml(options.message)}</p>
+      ${
+        options.details && options.details.length > 0
+          ? `
+              <div class="status-detail-list">
+                ${options.details.map((detail) => `<p class="section-copy">${escapeHtml(detail)}</p>`).join('')}
+              </div>
+            `
+          : ''
+      }
+      ${options.actions ?? ''}
+      ${options.retry ? '<button class="secondary-button" type="button" data-retry="true">Retry</button>' : ''}
+    </section>
+  `
+}
+
+function renderRuntimeStatusSection(runtimeStatus: RuntimeStatusData | null, runtimeStatusError?: string | null): string {
+  if (runtimeStatusError) {
+    return renderUnavailableState('System status is unavailable.', runtimeStatusError)
+  }
+
+  if (!runtimeStatus) {
+    return renderPageStatePanel({
+      tone: 'empty',
+      eyebrow: 'Empty',
+      title: 'System status has not been loaded yet.',
+      message:
+        'Empty means the shared API responded successfully, but this page does not have records or summary data yet.',
+    })
+  }
+
+  const statusDetails = [
+    `API: ${formatStatusLabel(runtimeStatus.api_status)}`,
+    `Database: ${formatStatusLabel(runtimeStatus.db_status)}`,
+    `Migration: ${formatStatusLabel(runtimeStatus.migration_status)}`,
+    `Task runtime: ${formatStatusLabel(runtimeStatus.task_runtime_status)}`,
+    `Last checked: ${formatDateTime(runtimeStatus.last_checked_at)}`,
+  ]
+
+  if (isRuntimeStatusDegraded(runtimeStatus)) {
+    return renderDegradedState(
+      'System status is degraded.',
+      'Degraded means /api/system/status reported a shared runtime warning even though reads may still succeed.',
+      [
+        ...statusDetails,
+        ...runtimeStatus.degraded_reasons.map(
+          (reason) => `Degraded reason: ${formatStatusLabel(reason)}`,
+        ),
+      ],
+    )
+  }
+
+  return renderPageStatePanel({
+    tone: 'ready',
+    eyebrow: 'Ready',
+    title: 'System status is ready.',
+    message: 'The shared API, database, migrations, and task runtime are available for workbench and dashboard reads.',
+    details: statusDetails,
+  })
+}
+
+function renderWorkbenchStateBanner(
+  home: WorkbenchHomeData,
+  dashboard: DashboardData | null,
+  dashboardError?: string | null,
+): string {
+  if (dashboardError) {
+    return renderUnavailableState('Workbench summary inputs are partially unavailable.', dashboardError)
+  }
+
+  if (!isWorkbenchEmpty(home, dashboard)) {
+    return ''
+  }
+
+  return renderPageStatePanel({
+    tone: 'empty',
+    eyebrow: 'Empty',
+    title: 'Workbench is currently empty.',
+    message:
+      'Empty means the shared API responded successfully, but this page does not have records or summary data yet.',
+  })
 }
 
 function renderField(label: string, value: string | null, wide = false): string {
@@ -2798,6 +3122,37 @@ function formatBoolean(value: boolean): string {
   return value ? 'Yes' : 'No'
 }
 
+function isDashboardEmpty(dashboard: DashboardData): boolean {
+  return (
+    dashboard.pending_summary.open_count === 0 &&
+    dashboard.alert_summary.open_count === 0 &&
+    dashboard.quick_links.length === 0 &&
+    dashboard.expense_summary.created_in_current_month === 0 &&
+    dashboard.knowledge_summary.created_in_last_30_days === 0 &&
+    dashboard.health_summary.created_in_last_7_days === 0 &&
+    dashboard.recent_activity.length === 0
+  )
+}
+
+function isWorkbenchEmpty(home: WorkbenchHomeData, dashboard: DashboardData | null): boolean {
+  return (
+    home.templates.length === 0 &&
+    home.pinned_shortcuts.length === 0 &&
+    home.recent_contexts.length === 0 &&
+    (dashboard ? isDashboardEmpty(dashboard) : true)
+  )
+}
+
+function isRuntimeStatusDegraded(runtimeStatus: RuntimeStatusData): boolean {
+  return (
+    runtimeStatus.api_status === 'degraded' ||
+    runtimeStatus.db_status === 'unavailable' ||
+    runtimeStatus.migration_status !== 'ok' ||
+    runtimeStatus.task_runtime_status === 'degraded' ||
+    runtimeStatus.degraded_reasons.length > 0
+  )
+}
+
 function formatStatusLabel(value: string): string {
   return value
     .split('_')
@@ -2827,8 +3182,29 @@ function getHealthSummaryDerivation(items: AiDerivationResultItem[]): AiDerivati
   return items.find((item) => item.derivation_type === 'health_summary') ?? null
 }
 
-function getKnowledgeSummaryDerivation(items: AiDerivationResultItem[]): AiDerivationResultItem | null {
-  return items.find((item) => item.derivation_type === 'knowledge_summary') ?? null
+function deriveKnowledgeAiSummaryState(
+  result: PromiseSettledResult<AiDerivationResultItem>,
+): KnowledgeAiSummaryState {
+  if (result.status === 'fulfilled') {
+    const derivation = result.value
+    if (derivation.status === 'invalidated') {
+      return { kind: 'invalidated', derivation }
+    }
+    if (derivation.status === 'failed') {
+      return { kind: 'failed', derivation }
+    }
+    if (derivation.status === 'pending' || derivation.status === 'running') {
+      return { kind: 'pending', derivation }
+    }
+    return { kind: 'ready', derivation }
+  }
+
+  const message = toErrorMessage(result.reason)
+  if (result.reason instanceof ApiRequestError && result.reason.statusCode === 404) {
+    return { kind: 'not-generated', derivation: null }
+  }
+
+  return { kind: 'unavailable', derivation: null, errorMessage: message }
 }
 
 function asHealthSummaryContent(

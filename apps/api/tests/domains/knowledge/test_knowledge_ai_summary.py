@@ -84,7 +84,7 @@ def test_knowledge_summary_is_generated_automatically_after_knowledge_write(db: 
 
     assert len(results.items) == 1
     assert results.items[0].derivation_type == "knowledge_summary"
-    assert results.items[0].status == "completed"
+    assert results.items[0].status == "ready"
 
 
 def test_knowledge_summary_content_json_uses_strict_three_field_schema(db: Session) -> None:
@@ -138,7 +138,7 @@ def test_manual_rerun_overwrites_current_knowledge_summary_without_history_chain
 
     assert len(rerun_result.items) == 1
     assert rerun_result.items[0].id == existing.id
-    assert rerun_result.items[0].status == "completed"
+    assert rerun_result.items[0].status == "ready"
     assert rerun_result.items[0].content_json["summary"] == "Updated knowledge summary."
 
 
@@ -208,8 +208,46 @@ def test_manual_single_rerun_endpoint_is_available_for_knowledge_ai_summary(
     items = response.json()["data"]["items"]
     assert len(items) == 1
     assert items[0]["derivation_type"] == "knowledge_summary"
-    assert items[0]["status"] == "completed"
+    assert items[0]["status"] == "ready"
     assert items[0]["content_json"]["summary"] == "Endpoint knowledge summary."
+
+
+def test_knowledge_summary_endpoint_returns_uniform_derivation_failure_payload(
+    api_client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = create_knowledge_entry(
+        db,
+        source_capture_id=_create_capture(db).id,
+        source_pending_id=None,
+        payload={
+            "title": "Failure endpoint note",
+            "content": "This entry is only here to exercise the service-level failure mapping.",
+            "source_text": "Captured for failure mapping.",
+        },
+    )
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.domains.knowledge.service.rerun_knowledge_summary_for_entry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("knowledge derivation boom")),
+    )
+
+    response = api_client.post(f"/api/knowledge/{entry.id}/ai/knowledge-summary/rerun")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "success": False,
+        "message": "Knowledge AI summary rerun failed.",
+        "data": None,
+        "meta": None,
+        "error": {
+            "code": "DERIVATION_FAILED",
+            "details": {"target_domain": "knowledge", "target_id": entry.id},
+            "retryable": False,
+        },
+    }
 
 
 def _create_capture(db: Session):

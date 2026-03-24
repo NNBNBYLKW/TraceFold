@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.core.exceptions import AppException, BadRequestError, IllegalStateError, NotFoundError
+from app.core.logging import build_log_message, get_logger, log_event
 from app.domains.capture import repository as capture_repository
 from app.domains.capture.models import CaptureRecord, CaptureStatus, ParseTargetDomain
 from app.domains.expense.service import create_expense_record
@@ -44,6 +46,7 @@ _ALLOWED_TARGET_DOMAINS = {
     ParseTargetDomain.UNKNOWN,
 }
 _PREVIEW_LENGTH = 120
+logger = get_logger(__name__)
 
 
 def create_pending(
@@ -261,9 +264,27 @@ def fix_pending_item(
 
         db.commit()
         db.refresh(pending_item)
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="pending_fixed",
+            domain="pending",
+            pending_item_id=pending_item.id,
+            target_domain=pending_item.target_domain,
+            source_capture_id=pending_item.capture_id,
+            status=pending_item.status,
+        )
         return pending_item
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if not isinstance(exc, AppException):
+            logger.exception(
+                build_log_message(
+                    "pending_fix_failed",
+                    domain="pending",
+                    pending_item_id=pending_item_id,
+                )
+            )
         raise
 
 
@@ -279,7 +300,7 @@ def confirm_pending_item(
         capture = _get_capture_for_pending_or_raise(db, pending_item)
         effective_payload = _select_effective_payload(pending_item)
 
-        _write_fact_record(
+        record_id = _write_fact_record(
             db,
             pending_item=pending_item,
             capture=capture,
@@ -312,9 +333,28 @@ def confirm_pending_item(
 
         db.commit()
         db.refresh(pending_item)
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="pending_confirmed",
+            domain="pending",
+            pending_item_id=pending_item.id,
+            target_domain=pending_item.target_domain,
+            source_capture_id=pending_item.capture_id,
+            formal_record_id=record_id,
+            status=pending_item.status,
+        )
         return pending_item
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if not isinstance(exc, AppException):
+            logger.exception(
+                build_log_message(
+                    "pending_confirm_failed",
+                    domain="pending",
+                    pending_item_id=pending_item_id,
+                )
+            )
         raise
 
 
@@ -355,9 +395,27 @@ def discard_pending_item(
 
         db.commit()
         db.refresh(pending_item)
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="pending_discarded",
+            domain="pending",
+            pending_item_id=pending_item.id,
+            target_domain=pending_item.target_domain,
+            source_capture_id=pending_item.capture_id,
+            status=pending_item.status,
+        )
         return pending_item
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if not isinstance(exc, AppException):
+            logger.exception(
+                build_log_message(
+                    "pending_discard_failed",
+                    domain="pending",
+                    pending_item_id=pending_item_id,
+                )
+            )
         raise
 
 
@@ -406,9 +464,27 @@ def force_insert_pending_item(
 
         db.commit()
         db.refresh(pending_item)
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="pending_force_inserted",
+            domain="pending",
+            pending_item_id=pending_item.id,
+            target_domain=pending_item.target_domain,
+            source_capture_id=pending_item.capture_id,
+            status=pending_item.status,
+        )
         return pending_item
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if not isinstance(exc, AppException):
+            logger.exception(
+                build_log_message(
+                    "pending_force_insert_failed",
+                    domain="pending",
+                    pending_item_id=pending_item_id,
+                )
+            )
         raise
 
 
@@ -528,7 +604,16 @@ def _get_capture_for_pending_or_raise(db: Session, pending_item: PendingItem) ->
 
 def _ensure_pending_is_actionable(pending_item: PendingItem) -> None:
     if pending_item.status in ResolvedPendingStatuses:
-        raise ConflictError(
+        log_event(
+            logger,
+            level=logging.WARNING,
+            event="pending_illegal_state_transition_attempt",
+            domain="pending",
+            pending_item_id=pending_item.id,
+            current_status=pending_item.status,
+            attempted_action="review",
+        )
+        raise IllegalStateError(
             message=(
                 f"Pending item {pending_item.id} is already resolved with status "
                 f"{pending_item.status} and cannot be reviewed again."
@@ -536,7 +621,16 @@ def _ensure_pending_is_actionable(pending_item: PendingItem) -> None:
             code="PENDING_ALREADY_RESOLVED",
         )
     if pending_item.status != PendingStatus.OPEN:
-        raise ConflictError(
+        log_event(
+            logger,
+            level=logging.WARNING,
+            event="pending_illegal_state_transition_attempt",
+            domain="pending",
+            pending_item_id=pending_item.id,
+            current_status=pending_item.status,
+            attempted_action="review",
+        )
+        raise IllegalStateError(
             message=(
                 f"Pending item {pending_item.id} must be in status "
                 f"{PendingStatus.OPEN} before review actions can be applied."
@@ -579,33 +673,33 @@ def _write_fact_record(
     pending_item: PendingItem,
     capture: CaptureRecord,
     payload: dict[str, Any],
-) -> None:
+) -> int:
     if pending_item.target_domain == ParseTargetDomain.EXPENSE:
-        create_expense_record(
+        record = create_expense_record(
             db,
             source_capture_id=capture.id,
             source_pending_id=pending_item.id,
             payload=payload,
         )
-        return
+        return record.id
 
     if pending_item.target_domain == ParseTargetDomain.KNOWLEDGE:
-        create_knowledge_entry(
+        record = create_knowledge_entry(
             db,
             source_capture_id=capture.id,
             source_pending_id=pending_item.id,
             payload=payload,
         )
-        return
+        return record.id
 
     if pending_item.target_domain == ParseTargetDomain.HEALTH:
-        create_health_record(
+        record = create_health_record(
             db,
             source_capture_id=capture.id,
             source_pending_id=pending_item.id,
             payload=payload,
         )
-        return
+        return record.id
 
     raise BadRequestError(
         message=f"Pending item {pending_item.id} has unsupported target domain {pending_item.target_domain}.",

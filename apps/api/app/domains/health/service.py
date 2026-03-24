@@ -4,13 +4,21 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.error_codes import ErrorCode
+from app.core.exceptions import (
+    AppException,
+    BadRequestError,
+    DerivationFailedError,
+    NotFoundError,
+    RuleEvaluationFailedError,
+)
+from app.core.logging import build_log_message, get_logger, log_event
 from app.domains.ai_derivations.schemas import AiDerivationResultListRead
 from app.domains.alerts.schemas import AlertResultListRead
 from app.domains.health import repository
 from app.domains.health.ai_summary import rerun_health_summary_for_record, run_health_summary_on_record_create
 from app.domains.health.models import HealthRecord
-from app.domains.health.rules import execute_health_rules_for_record, run_health_rules_on_record_create
+from app.domains.rules import service as rules_service
 from app.domains.health.schemas import HealthDetailRead, HealthListItemRead, HealthListRead
 
 
@@ -18,6 +26,7 @@ _DEFAULT_SORT_BY = "created_at"
 _ALLOWED_SORT_FIELDS = {"created_at", "metric_type"}
 _ALLOWED_SORT_ORDERS = {"asc", "desc"}
 _PREVIEW_LENGTH = 120
+logger = get_logger(__name__)
 
 
 def create_health_record(
@@ -36,7 +45,7 @@ def create_health_record(
     )
     db.add(record)
     db.flush()
-    run_health_rules_on_record_create(db, health_record=record)
+    rules_service.evaluate_health_alerts_for_record(db, health_record=record)
     run_health_summary_on_record_create(db, health_record=record)
     return record
 
@@ -80,6 +89,17 @@ def list_health_reads(
 def get_health_read(db: Session, health_id: int) -> HealthDetailRead:
     record = repository.get_health_record_by_id(db, health_id)
     if record is None:
+        log_event(
+            logger,
+            level=30,
+            event="health_read_failed",
+            domain="health",
+            action="read",
+            target_type="health_record",
+            target_id=health_id,
+            result="not_found",
+            error_code="HEALTH_NOT_FOUND",
+        )
         raise NotFoundError(
             message=f"Health record {health_id} was not found.",
             code="HEALTH_NOT_FOUND",
@@ -108,12 +128,25 @@ def rerun_health_rules(
                 code="HEALTH_NOT_FOUND",
             )
 
-        execute_health_rules_for_record(db, health_record=record)
+        result = rules_service.evaluate_health_alerts_for_record(db, health_record=record)
         db.commit()
-        return _build_alert_result_list_read(db, health_id=record.id)
-    except Exception:
+        return result
+    except Exception as exc:
         db.rollback()
-        raise
+        if isinstance(exc, AppException):
+            raise
+        logger.exception(
+            build_log_message(
+                "health_rules_rerun_failed",
+                domain="health",
+                health_id=health_id,
+                error_code=ErrorCode.RULE_EVALUATION_FAILED,
+            )
+        )
+        raise RuleEvaluationFailedError(
+            message="Health rule rerun failed.",
+            details={"target_domain": "health", "target_id": health_id},
+        ) from exc
 
 
 def rerun_health_summary(
@@ -132,9 +165,22 @@ def rerun_health_summary(
         rerun_health_summary_for_record(db, health_record=record)
         db.commit()
         return _build_ai_derivation_result_list_read(db, health_id=record.id)
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        raise
+        if isinstance(exc, AppException):
+            raise
+        logger.exception(
+            build_log_message(
+                "health_ai_summary_rerun_failed",
+                domain="health",
+                health_id=health_id,
+                error_code=ErrorCode.DERIVATION_FAILED,
+            )
+        )
+        raise DerivationFailedError(
+            message="Health AI summary rerun failed.",
+            details={"target_domain": "health", "target_id": health_id},
+        ) from exc
 
 
 def _build_health_list_item(record: HealthRecord) -> HealthListItemRead:
@@ -149,11 +195,12 @@ def _build_health_list_item(record: HealthRecord) -> HealthListItemRead:
 
 
 def _build_alert_result_list_read(db: Session, *, health_id: int) -> AlertResultListRead:
-    from app.domains.alerts.service import list_alert_reads
+    from app.domains.alerts.service import list_alert_reads_for_source
 
-    return list_alert_reads(
+    return list_alert_reads_for_source(
         db,
-        source_domain="health",
+        domain="health",
+        source_record_type="health_record",
         source_record_id=health_id,
     )
 

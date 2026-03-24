@@ -189,7 +189,10 @@ def test_force_insert_writes_fact_and_marks_pending_forced(db: Session) -> None:
     assert capture.status == CaptureStatus.COMMITTED
 
 
-def test_resolved_pending_cannot_be_operated_again(db: Session) -> None:
+def test_resolved_pending_cannot_be_operated_again(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pending_item = _create_pending_fixture(
         db,
         target_domain=ParseTargetDomain.EXPENSE,
@@ -199,6 +202,18 @@ def test_resolved_pending_cannot_be_operated_again(db: Session) -> None:
         capture_status=CaptureStatus.COMMITTED,
         capture_finalized_at=datetime.utcnow(),
     )
+    logged_events: list[dict[str, object]] = []
+
+    def capture_log_event(logger, *, level, event, **fields) -> None:
+        logged_events.append(
+            {
+                "level": level,
+                "event": event,
+                **fields,
+            }
+        )
+
+    monkeypatch.setattr("app.domains.pending.service.log_event", capture_log_event)
 
     with pytest.raises(ConflictError) as exc_info:
         fix_pending_item(
@@ -209,6 +224,16 @@ def test_resolved_pending_cannot_be_operated_again(db: Session) -> None:
 
     assert exc_info.value.code == "PENDING_ALREADY_RESOLVED"
     assert db.query(PendingReviewAction).count() == 0
+    assert logged_events == [
+        {
+            "level": 30,
+            "event": "pending_illegal_state_transition_attempt",
+            "domain": "pending",
+            "pending_item_id": pending_item.id,
+            "current_status": PendingStatus.CONFIRMED,
+            "attempted_action": "review",
+        }
+    ]
 
 
 def test_confirm_invalid_proposed_payload_rolls_back_without_dirty_write(db: Session) -> None:

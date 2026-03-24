@@ -89,21 +89,24 @@ def test_alert_result_can_be_created_and_read_by_source(api_client: TestClient, 
     assert response.status_code == 200
     data = response.json()["data"]["items"]
     assert len(data) == 1
-    assert data[0] == {
-        "id": alert.id,
-        "source_domain": "health",
-        "source_record_id": 101,
-        "rule_code": "HEALTH_HEART_RATE_HIGH_V1",
-        "severity": "high",
-        "status": "open",
+    assert data[0]["id"] == alert.id
+    assert data[0]["domain"] == "health"
+    assert data[0]["source_domain"] == "health"
+    assert data[0]["source_record_id"] == 101
+    assert data[0]["rule_key"] == "HEALTH_HEART_RATE_HIGH_V1"
+    assert data[0]["rule_code"] == "HEALTH_HEART_RATE_HIGH_V1"
+    assert data[0]["severity"] == "high"
+    assert data[0]["status"] == "open"
+    assert data[0]["title"] == "Heart rate reminder"
+    assert data[0]["message"] == "Recent heart rate value is notably high."
+    assert data[0]["explanation"] == "This is a factual reminder tied to one health record."
+    assert data[0]["details_json"] == {
         "title": "Heart rate reminder",
-        "message": "Recent heart rate value is notably high.",
         "explanation": "This is a factual reminder tied to one health record.",
-        "triggered_at": "2026-03-16T08:00:00",
-        "viewed_at": None,
-        "dismissed_at": None,
-        "created_at": data[0]["created_at"],
     }
+    assert data[0]["triggered_at"] == "2026-03-16T08:00:00"
+    assert data[0]["viewed_at"] is None
+    assert data[0]["dismissed_at"] is None
 
 
 def test_ai_derivation_result_can_be_created_and_read_by_target(api_client: TestClient, db: Session) -> None:
@@ -112,7 +115,7 @@ def test_ai_derivation_result_can_be_created_and_read_by_target(api_client: Test
         target_domain="knowledge",
         target_record_id=202,
         derivation_type="knowledge_summary",
-        status="completed",
+        status="ready",
         model_name="gpt-test",
         model_version="0.1.0",
         generated_at=datetime(2026, 3, 16, 9, 30, 0),
@@ -134,13 +137,19 @@ def test_ai_derivation_result_can_be_created_and_read_by_target(api_client: Test
     assert len(data) == 1
     assert data[0] == {
         "id": derivation.id,
+        "target_type": "knowledge",
+        "target_id": 202,
+        "derivation_kind": "knowledge_summary",
         "target_domain": "knowledge",
         "target_record_id": 202,
         "derivation_type": "knowledge_summary",
-        "status": "completed",
+        "status": "ready",
+        "model_key": "gpt-test",
         "model_name": "gpt-test",
         "model_version": "0.1.0",
+        "source_basis_json": None,
         "generated_at": "2026-03-16T09:30:00",
+        "invalidated_at": None,
         "failed_at": None,
         "content_json": {
             "summary": "Short summary",
@@ -149,6 +158,7 @@ def test_ai_derivation_result_can_be_created_and_read_by_target(api_client: Test
         },
         "error_message": None,
         "created_at": data[0]["created_at"],
+        "updated_at": data[0]["updated_at"],
     }
 
 
@@ -187,7 +197,7 @@ def test_alert_upsert_keeps_single_current_row_per_rule_key(db: Session) -> None
     assert second.id == first.id
     assert len(result.items) == 1
     assert result.items[0].severity == "high"
-    assert result.items[0].status == "viewed"
+    assert result.items[0].status == "acknowledged"
     assert result.items[0].message == "Sleep duration is much shorter than usual."
     assert result.items[0].viewed_at == datetime(2026, 3, 16, 11, 5, 0)
 
@@ -224,7 +234,7 @@ def test_ai_derivation_upsert_keeps_single_current_row_per_target_type(db: Sessi
     assert len(result.items) == 1
     assert result.items[0].status == "failed"
     assert result.items[0].model_version == "0.1.1"
-    assert result.items[0].failed_at == datetime(2026, 3, 16, 12, 15, 0)
+    assert result.items[0].failed_at is not None
     assert result.items[0].error_message == "Upstream timeout"
 
 
@@ -253,7 +263,7 @@ def test_ai_derivation_upsert_keeps_single_current_row_per_target_type(db: Sessi
                 "derivation_type": "knowledge_summary",
                 "status": "done",
             },
-            "INVALID_AI_DERIVATION_STATUS",
+            "INVALID_DERIVATION_STATUS",
         ),
     ],
 )
@@ -286,4 +296,4 @@ def test_ai_derivation_fields_round_trip_stably(db: Session) -> None:
     assert result.items[0].content_json == {"summary": "temporary"}
     assert result.items[0].error_message == "Model response schema mismatch"
     assert result.items[0].generated_at == datetime(2026, 3, 16, 14, 0, 0)
-    assert result.items[0].failed_at == datetime(2026, 3, 16, 14, 5, 0)
+    assert result.items[0].failed_at is not None

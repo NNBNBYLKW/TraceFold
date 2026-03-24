@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.logging import build_log_message, get_logger
 from app.domains.alerts import repository as alerts_repository
 from app.domains.alerts.models import AlertResult, AlertStatus
 from app.domains.dashboard.schemas import (
@@ -38,6 +39,7 @@ _RECENT_ACTIVITY_LIMIT = 10
 _RECENT_METRIC_TYPES_LIMIT = 5
 _RECENT_ALERTS_LIMIT = 5
 _PREVIEW_LENGTH = 120
+logger = get_logger(__name__)
 
 _FORMAL_ACTIVITY_TYPE = "formal_record_created"
 _PENDING_ACTIVITY_TYPE = "pending_review_action"
@@ -63,92 +65,118 @@ def get_dashboard_read(
     now: datetime | None = None,
     activity_limit: int = _RECENT_ACTIVITY_LIMIT,
 ) -> DashboardRead:
-    reference_now = now or _utcnow()
-    last_7_days = reference_now - timedelta(days=7)
-    last_30_days = reference_now - timedelta(days=30)
-    current_month_start = reference_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    try:
+        reference_now = now or _utcnow()
+        last_7_days = reference_now - timedelta(days=7)
+        last_30_days = reference_now - timedelta(days=30)
+        current_month_start = reference_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    expense_records_current_month = expense_repository.list_expense_records_created_between(
-        db,
-        created_from=current_month_start,
-        created_to=reference_now,
-    )
-    latest_expense_record = _first_or_none(expense_repository.list_recent_expense_records(db, limit=1))
-    latest_knowledge_entry = _first_or_none(knowledge_repository.list_recent_knowledge_entries(db, limit=1))
-    latest_health_record = _first_or_none(health_repository.list_recent_health_records(db, limit=1))
+        expense_records_current_month = expense_repository.list_expense_records_created_between(
+            db,
+            created_from=current_month_start,
+            created_to=reference_now,
+        )
+        latest_expense_record = _first_or_none(expense_repository.list_recent_expense_records(db, limit=1))
+        latest_knowledge_entry = _first_or_none(knowledge_repository.list_recent_knowledge_entries(db, limit=1))
+        latest_health_record = _first_or_none(health_repository.list_recent_health_records(db, limit=1))
 
-    return DashboardRead(
-        pending_summary=PendingSummaryRead(
-            open_count=pending_repository.count_pending_items(db, status=PendingStatus.OPEN),
-            open_count_by_target_domain=dict(
-                pending_repository.count_pending_items_by_target_domain(db, status=PendingStatus.OPEN)
+        return DashboardRead(
+            pending_summary=PendingSummaryRead(
+                open_count=pending_repository.count_pending_items(db, status=PendingStatus.OPEN),
+                open_count_by_target_domain=dict(
+                    pending_repository.count_pending_items_by_target_domain(db, status=PendingStatus.OPEN)
+                ),
+                opened_in_last_7_days=pending_repository.count_pending_items(
+                    db,
+                    status=PendingStatus.OPEN,
+                    created_from=last_7_days,
+                ),
+                resolved_in_last_7_days=pending_repository.count_pending_items(
+                    db,
+                    resolved_from=last_7_days,
+                    resolved_only=True,
+                ),
+                href=_PENDING_HREF,
             ),
-            opened_in_last_7_days=pending_repository.count_pending_items(
-                db,
-                status=PendingStatus.OPEN,
-                created_from=last_7_days,
-            ),
-            resolved_in_last_7_days=pending_repository.count_pending_items(
-                db,
-                resolved_from=last_7_days,
-                resolved_only=True,
-            ),
-            href=_PENDING_HREF,
-        ),
-        alert_summary=AlertSummaryRead(
-            open_count=alerts_repository.count_alert_results(
-                db,
-                source_domain="health",
-                status=AlertStatus.OPEN,
-            ),
-            recent_open_items=[
-                _build_alert_summary_item(result)
-                for result in alerts_repository.list_alert_results(
+            alert_summary=AlertSummaryRead(
+                open_count=alerts_repository.count_alert_results(
                     db,
                     source_domain="health",
                     status=AlertStatus.OPEN,
-                    limit=_RECENT_ALERTS_LIMIT,
-                )
-            ],
-            href=_HEALTH_ALERTS_HREF,
-        ),
-        quick_links=list(_QUICK_LINKS),
-        expense_summary=ExpenseSummaryRead(
-            created_in_current_month=len(expense_records_current_month),
-            amount_by_currency_current_month=_sum_expense_amounts_by_currency(expense_records_current_month),
-            latest_expense_created_at=(
-                latest_expense_record.created_at if latest_expense_record is not None else None
+                ),
+                recent_open_items=[
+                    _build_alert_summary_item(result)
+                    for result in alerts_repository.list_alert_results(
+                        db,
+                        source_domain="health",
+                        status=AlertStatus.OPEN,
+                        limit=_RECENT_ALERTS_LIMIT,
+                    )
+                ],
+                href=_HEALTH_ALERTS_HREF,
             ),
-            href=_EXPENSE_HREF,
-        ),
-        knowledge_summary=KnowledgeSummaryRead(
-            created_in_last_7_days=knowledge_repository.count_knowledge_entries_created_since(
-                db,
-                created_from=last_7_days,
+            quick_links=list(_QUICK_LINKS),
+            expense_summary=ExpenseSummaryRead(
+                created_in_current_month=len(expense_records_current_month),
+                amount_by_currency_current_month=_sum_expense_amounts_by_currency(expense_records_current_month),
+                latest_expense_created_at=(
+                    latest_expense_record.created_at if latest_expense_record is not None else None
+                ),
+                href=_EXPENSE_HREF,
             ),
-            created_in_last_30_days=knowledge_repository.count_knowledge_entries_created_since(
-                db,
-                created_from=last_30_days,
+            knowledge_summary=KnowledgeSummaryRead(
+                created_in_last_7_days=knowledge_repository.count_knowledge_entries_created_since(
+                    db,
+                    created_from=last_7_days,
+                ),
+                created_in_last_30_days=knowledge_repository.count_knowledge_entries_created_since(
+                    db,
+                    created_from=last_30_days,
+                ),
+                latest_knowledge_created_at=(
+                    latest_knowledge_entry.created_at if latest_knowledge_entry is not None else None
+                ),
+                href=_KNOWLEDGE_HREF,
             ),
-            latest_knowledge_created_at=(
-                latest_knowledge_entry.created_at if latest_knowledge_entry is not None else None
+            health_summary=HealthSummaryRead(
+                created_in_last_7_days=health_repository.count_health_records_created_since(
+                    db,
+                    created_from=last_7_days,
+                ),
+                latest_health_created_at=latest_health_record.created_at if latest_health_record is not None else None,
+                recent_metric_types=health_repository.list_recent_metric_types(
+                    db,
+                    limit=_RECENT_METRIC_TYPES_LIMIT,
+                ),
+                href=_HEALTH_HREF,
             ),
-            href=_KNOWLEDGE_HREF,
-        ),
-        health_summary=HealthSummaryRead(
-            created_in_last_7_days=health_repository.count_health_records_created_since(
-                db,
-                created_from=last_7_days,
-            ),
-            latest_health_created_at=latest_health_record.created_at if latest_health_record is not None else None,
-            recent_metric_types=health_repository.list_recent_metric_types(
-                db,
-                limit=_RECENT_METRIC_TYPES_LIMIT,
-            ),
-            href=_HEALTH_HREF,
-        ),
-        recent_activity=_build_recent_activity(db, limit=activity_limit),
-    )
+            recent_activity=_build_recent_activity(db, limit=activity_limit),
+        )
+    except Exception:
+        logger.exception(
+            build_log_message(
+                "dashboard_summary_failed",
+                domain="dashboard",
+            )
+        )
+        raise
+
+
+def build_dashboard_refresh_result(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    dashboard = get_dashboard_read(db, now=now)
+    return {
+        "pending_open_count": dashboard.pending_summary.open_count,
+        "health_open_alert_count": dashboard.alert_summary.open_count,
+        "expense_current_month_count": dashboard.expense_summary.created_in_current_month,
+        "knowledge_last_7_days_count": dashboard.knowledge_summary.created_in_last_7_days,
+        "health_last_7_days_count": dashboard.health_summary.created_in_last_7_days,
+        "recent_activity_count": len(dashboard.recent_activity),
+        "refreshed_at": _utcnow().isoformat(),
+    }
 
 
 def _build_recent_activity(
@@ -367,4 +395,4 @@ def _first_or_none(items: list[Any]) -> Any | None:
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC).replace(tzinfo=None)

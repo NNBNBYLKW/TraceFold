@@ -231,12 +231,12 @@ def test_rerun_matching_rule_updates_current_result_instead_of_inserting_duplica
     assert len(results.items) == 1
     assert results.items[0].id == existing.id
     assert results.items[0].status == "open"
-    assert results.items[0].viewed_at is None
-    assert results.items[0].dismissed_at is None
+    assert results.items[0].acknowledged_at is None
+    assert results.items[0].resolved_at is None
     assert results.items[0].triggered_at > datetime(2026, 3, 16, 8, 0, 0)
 
 
-def test_rerun_removes_alert_when_record_no_longer_matches_any_rule(db: Session) -> None:
+def test_rerun_invalidates_alert_when_record_no_longer_matches_any_rule(db: Session) -> None:
     record = create_health_record(
         db,
         source_capture_id=_create_capture(db).id,
@@ -248,8 +248,10 @@ def test_rerun_removes_alert_when_record_no_longer_matches_any_rule(db: Session)
     record.value_text = "95"
     results = rerun_health_rules(db, health_id=record.id)
 
-    assert results.items == []
-    assert list_alert_reads(db, source_domain="health", source_record_id=record.id).items == []
+    assert len(results.items) == 1
+    assert results.items[0].status == "invalidated"
+    assert results.items[0].resolution_note == "Rule no longer matches the current formal record."
+    assert list_alert_reads(db, source_domain="health", source_record_id=record.id).items[0].status == "invalidated"
 
 
 def test_automatic_rule_execution_runs_after_health_record_write(db: Session) -> None:
@@ -297,9 +299,43 @@ def test_manual_single_rerun_endpoint_is_available(api_client: TestClient, db: S
 
     assert response.status_code == 200
     items = response.json()["data"]["items"]
-    assert len(items) == 1
-    assert items[0]["rule_code"] == "HEALTH_HEART_RATE_HIGH_V1"
-    assert items[0]["severity"] == "high"
+    assert len(items) == 2
+    assert any(item["rule_key"] == "HEALTH_HEART_RATE_HIGH_V1" and item["status"] == "open" for item in items)
+    assert any(item["rule_key"] == "HEALTH_HEART_RATE_INFO_V1" and item["status"] == "invalidated" for item in items)
+
+
+def test_health_rules_endpoint_returns_uniform_rule_failure_payload(
+    api_client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = create_health_record(
+        db,
+        source_capture_id=_create_capture(db).id,
+        source_pending_id=None,
+        payload={"metric_type": "heart_rate", "value_text": "105"},
+    )
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.domains.rules.service.health_rules.evaluate_health_rule_match",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("rules engine boom")),
+    )
+
+    response = api_client.post(f"/api/health/{record.id}/rules/rerun")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "success": False,
+        "message": "Health rule rerun failed.",
+        "data": None,
+        "meta": None,
+        "error": {
+            "code": "RULE_EVALUATION_FAILED",
+            "details": {"target_domain": "health", "target_id": record.id},
+            "retryable": False,
+        },
+    }
 
 
 def _create_capture(db: Session):

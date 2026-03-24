@@ -104,7 +104,7 @@ def test_only_subjective_health_records_generate_health_summary(db: Session) -> 
 
     assert len(subjective_results.items) == 1
     assert subjective_results.items[0].derivation_type == "health_summary"
-    assert subjective_results.items[0].status == "completed"
+    assert subjective_results.items[0].status == "ready"
     assert hard_metric_results.items == []
 
 
@@ -169,7 +169,7 @@ def test_manual_rerun_overwrites_current_health_summary_without_history_chain(
 
     assert len(rerun_result.items) == 1
     assert rerun_result.items[0].id == existing.id
-    assert rerun_result.items[0].status == "completed"
+    assert rerun_result.items[0].status == "ready"
     assert rerun_result.items[0].content_json["summary"] == "Updated rerun summary."
     assert list_ai_derivation_reads(db, target_domain="health", target_record_id=record.id).items[0].id == existing.id
 
@@ -246,7 +246,7 @@ def test_manual_single_rerun_endpoint_is_available_for_health_ai_summary(
     items = response.json()["data"]["items"]
     assert len(items) == 1
     assert items[0]["derivation_type"] == "health_summary"
-    assert items[0]["status"] == "completed"
+    assert items[0]["status"] == "ready"
     assert items[0]["content_json"]["summary"] == "Endpoint rerun summary."
 
 

@@ -103,17 +103,21 @@ def test_health_alerts_can_be_read_for_health_module(api_client: TestClient, db:
     )
     db.commit()
 
-    response = api_client.get("/api/alerts", params={"source_domain": "health"})
+    response = api_client.get("/api/alerts", params={"domain": "health", "limit": 10})
 
     assert response.status_code == 200
-    items = response.json()["data"]["items"]
+    payload = response.json()["data"]
+    items = payload["items"]
+    assert payload["total"] == 2
     assert [item["id"] for item in items] == [older_high.id, newer_info.id]
     assert [item["source_record_id"] for item in items] == [21, 22]
+    assert items[0]["domain"] == "health"
+    assert items[0]["rule_key"] == "HEALTH_HEART_RATE_HIGH_V1"
     assert items[0]["severity"] == "high"
     assert items[1]["severity"] == "info"
 
 
-def test_alert_viewed_and_dismissed_status_transitions_are_supported(api_client: TestClient, db: Session) -> None:
+def test_alert_acknowledge_and_resolve_status_transitions_are_supported(api_client: TestClient, db: Session) -> None:
     alert = upsert_alert_result(
         db,
         source_domain="health",
@@ -128,12 +132,19 @@ def test_alert_viewed_and_dismissed_status_transitions_are_supported(api_client:
     )
     db.commit()
 
-    viewed_response = api_client.post(f"/api/alerts/{alert.id}/viewed")
-    dismissed_response = api_client.post(f"/api/alerts/{alert.id}/dismissed")
+    detail_response = api_client.get(f"/api/alerts/{alert.id}")
+    acknowledge_response = api_client.post(f"/api/alerts/{alert.id}/acknowledge")
+    resolve_response = api_client.post(
+        f"/api/alerts/{alert.id}/resolve",
+        json={"resolution_note": "Reviewed and handled."},
+    )
 
-    assert viewed_response.status_code == 200
-    assert viewed_response.json()["data"]["status"] == "viewed"
-    assert viewed_response.json()["data"]["viewed_at"] is not None
-    assert dismissed_response.status_code == 200
-    assert dismissed_response.json()["data"]["status"] == "dismissed"
-    assert dismissed_response.json()["data"]["dismissed_at"] is not None
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["status"] == "open"
+    assert acknowledge_response.status_code == 200
+    assert acknowledge_response.json()["data"]["status"] == "acknowledged"
+    assert acknowledge_response.json()["data"]["acknowledged_at"] is not None
+    assert resolve_response.status_code == 200
+    assert resolve_response.json()["data"]["status"] == "resolved"
+    assert resolve_response.json()["data"]["resolved_at"] is not None
+    assert resolve_response.json()["data"]["resolution_note"] == "Reviewed and handled."

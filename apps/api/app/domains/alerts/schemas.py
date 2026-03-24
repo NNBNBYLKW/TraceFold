@@ -1,29 +1,50 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 
-class AlertResultRead(BaseModel):
+class AlertRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: int
-    source_domain: str
-    source_record_id: int
-    rule_code: str
+    domain: str
+    rule_key: str
     severity: str
     status: str
-    title: str
+    source_record_type: str
+    source_record_id: int
+    title: str | None = None
     message: str
+    details_json: dict[str, Any] | list[Any] | str | int | float | bool | None = None
+    source_domain: str | None = None
+    rule_code: str | None = None
     explanation: str | None = None
     triggered_at: datetime
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
     viewed_at: datetime | None = None
     dismissed_at: datetime | None = None
+    resolution_note: str | None = None
     created_at: datetime
+    updated_at: datetime
 
 
-class AlertResultListRead(BaseModel):
+class AlertListRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: list[AlertResultRead]
+    items: list[AlertRead]
+    limit: int
+    total: int
+
+
+class AlertResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resolution_note: str | None = None
+
+
+AlertResultRead = AlertRead
+AlertResultListRead = AlertListRead

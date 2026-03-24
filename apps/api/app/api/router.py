@@ -76,6 +76,6 @@ api_router.include_router(
 
 api_router.include_router(
     system_tasks_router,
-    prefix="/system-tasks",
-    tags=["system-tasks"],
+    prefix="/tasks",
+    tags=["tasks"],
 )

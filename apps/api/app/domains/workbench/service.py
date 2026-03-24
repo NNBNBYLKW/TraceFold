@@ -45,7 +45,7 @@ _QUERY_WHITELIST_BY_MODULE = {
     "knowledge": _QUERY_BASE_KEYS | {"keyword", "has_source_text"},
     "health": _QUERY_BASE_KEYS | {"metric_type", "keyword"},
     "pending": _QUERY_BASE_KEYS | {"status", "target_domain"},
-    "alerts": {"source_domain", "source_record_id", "status"},
+    "alerts": {"domain", "rule_key", "status"},
 }
 _BUILTIN_TEMPLATES = (
     {

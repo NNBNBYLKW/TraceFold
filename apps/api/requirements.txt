@@ -3,6 +3,7 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 sqlalchemy
+alembic
 python-dotenv
 pytest
 httpx

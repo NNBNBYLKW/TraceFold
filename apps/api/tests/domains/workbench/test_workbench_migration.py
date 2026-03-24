@@ -7,22 +7,20 @@ from sqlalchemy import create_engine, inspect
 from app.db import init_db as init_db_module
 
 
-def test_step8_workbench_schema_is_created_by_init_db(monkeypatch, tmp_path: Path) -> None:
-    engine = create_engine(
-        f"sqlite:///{tmp_path / 'workbench-migration.db'}",
-        future=True,
-        connect_args={"check_same_thread": False},
-    )
-    monkeypatch.setattr(init_db_module, "engine", engine)
+def test_step8_workbench_schema_is_created_by_init_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "workbench-migration.db"
+    database_url = f"sqlite:///{db_path}"
 
-    init_db_module.init_db()
+    init_db_module.init_db(database_url=database_url)
 
-    inspector = inspect(engine)
-    table_names = set(inspector.get_table_names())
+    engine = create_engine(database_url, future=True, connect_args={"check_same_thread": False})
+    try:
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+    finally:
+        engine.dispose()
 
     assert "workbench_templates" in table_names
     assert "workbench_shortcuts" in table_names
     assert "workbench_recent_contexts" in table_names
     assert "workbench_preferences" in table_names
-
-    engine.dispose()

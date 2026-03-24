@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from sqlalchemy.orm import Session
 
+from app.core.logging import get_logger, log_event
 from app.domains.capture import repository as capture_repository
 from app.domains.capture.models import (
     CaptureRecord,
@@ -17,6 +19,9 @@ from app.domains.health.service import create_health_record
 from app.domains.knowledge.service import create_knowledge_entry
 from app.domains.pending import repository as pending_repository
 from app.services.intake.parser import parse_raw_text
+
+
+logger = get_logger(__name__)
 
 
 def submit_capture(
@@ -59,6 +64,16 @@ def parse_capture(
 
     capture.status = CaptureStatus.PARSED
     db.flush()
+    log_event(
+        logger,
+        level=logging.INFO,
+        event="capture_parsed",
+        domain="capture",
+        capture_id=capture.id,
+        parse_result_id=result.id,
+        target_domain=result.target_domain,
+        confidence_level=result.confidence_level,
+    )
     return result
 
 
@@ -98,6 +113,17 @@ def process_capture(
 
         capture.status = CaptureStatus.PENDING
         db.flush()
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="capture_routed_to_pending",
+            domain="capture",
+            capture_id=capture.id,
+            parse_result_id=parse_result.id,
+            pending_item_id=pending_item.id,
+            target_domain=target_domain,
+            confidence_level=confidence_level,
+        )
 
         return {
             "route": "pending",
@@ -150,6 +176,18 @@ def process_capture(
 
         capture.status = CaptureStatus.PENDING
         db.flush()
+        log_event(
+            logger,
+            level=logging.INFO,
+            event="capture_routed_to_pending",
+            domain="capture",
+            capture_id=capture.id,
+            parse_result_id=parse_result.id,
+            pending_item_id=pending_item.id,
+            target_domain=ParseTargetDomain.UNKNOWN,
+            confidence_level=confidence_level,
+            reason="unsupported_target_domain",
+        )
 
         return {
             "route": "pending",
@@ -163,6 +201,17 @@ def process_capture(
     capture.status = CaptureStatus.COMMITTED
     capture.finalized_at = datetime.utcnow()
     db.flush()
+    log_event(
+        logger,
+        level=logging.INFO,
+        event="capture_committed_directly",
+        domain="capture",
+        capture_id=capture.id,
+        parse_result_id=parse_result.id,
+        target_domain=target_domain,
+        record_id=created_record_id,
+        confidence_level=confidence_level,
+    )
 
     return {
         "route": "committed",

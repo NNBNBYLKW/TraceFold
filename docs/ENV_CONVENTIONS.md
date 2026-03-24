@@ -66,6 +66,7 @@ Phase 1 只把以下范围作为强执行主线：
 当前已确定的命名空间规则：
 
 - API 使用 `TRACEFOLD_API_`
+- AI provider integration 使用 `TRACEFOLD_AI_`
 - Web 预留使用 `TRACEFOLD_WEB_`
 - Desktop 预留使用 `TRACEFOLD_DESKTOP_`
 - Bot 预留使用 `TRACEFOLD_BOT_`
@@ -124,6 +125,22 @@ API 环境变量统一使用前缀：
 - `TRACEFOLD_API_PORT`
 - `TRACEFOLD_API_DB_URL`
 - `TRACEFOLD_API_LOG_LEVEL`
+
+### AI provider integration
+
+Post-Phase-1 的最小真实 AI provider 集成使用前缀：
+
+- `TRACEFOLD_AI_`
+
+这些变量仍然只允许由 API 服务端读取，不允许暴露到前端。当前正式接入对象只有 `knowledge_summary`，默认 provider 口径是 OpenAI-compatible + 本地 Ollama。
+
+示例：
+
+- `TRACEFOLD_AI_PROVIDER`
+- `TRACEFOLD_AI_BASE_URL`
+- `TRACEFOLD_AI_API_KEY`
+- `TRACEFOLD_AI_MODEL`
+- `TRACEFOLD_AI_TIMEOUT_SECONDS`
 
 ### Web（预留）
 
@@ -414,6 +431,7 @@ owner 的含义是：
 - `TRACEFOLD_WEB_API_BASE_URL`
 - `TRACEFOLD_DESKTOP_WEB_URL`
 - `TRACEFOLD_BOT_API_BASE_URL`
+- `TRACEFOLD_AI_BASE_URL`
 
 ### 10.3 外部集成类
 
@@ -423,6 +441,7 @@ owner 的含义是：
 
 - `TRACEFOLD_BOT_TELEGRAM_TOKEN`
 - `OPENAI_API_KEY`
+- `TRACEFOLD_AI_API_KEY`
 
 ### 10.4 功能开关类
 
@@ -452,6 +471,11 @@ Phase 1 当前推荐只先确定 API 的最小必要变量。
 | `TRACEFOLD_API_DB_URL` | api | 是 | 是 | `sqlite:///../../data/tracefold.db` | API 使用的数据库连接 |
 | `TRACEFOLD_API_LOG_LEVEL` | api | 是 | 否 | `INFO` | API 日志级别 |
 | `TRACEFOLD_API_ENABLE_DOCS` | api | 否 | 否 | `true` | 是否启用 OpenAPI 文档 |
+| `TRACEFOLD_AI_PROVIDER` | api | 否 | 否 | `openai_compatible` | 当前 AI provider 类型 |
+| `TRACEFOLD_AI_BASE_URL` | api | 否 | 否 | `http://127.0.0.1:11434/v1` | OpenAI-compatible provider 基础地址 |
+| `TRACEFOLD_AI_API_KEY` | api | 否 | 是 | `` | Provider API key；本地 Ollama 可留空 |
+| `TRACEFOLD_AI_MODEL` | api | 否 | 否 | `qwen3.5:9b` | 当前 knowledge_summary 使用的 provider 模型 |
+| `TRACEFOLD_AI_TIMEOUT_SECONDS` | api | 否 | 否 | `60` | Provider 请求超时秒数 |
 
 说明：
 
@@ -473,6 +497,11 @@ TRACEFOLD_API_PORT=8000
 TRACEFOLD_API_DB_URL=sqlite:///../../data/tracefold.db
 TRACEFOLD_API_LOG_LEVEL=INFO
 TRACEFOLD_API_ENABLE_DOCS=true
+TRACEFOLD_AI_PROVIDER=openai_compatible
+TRACEFOLD_AI_BASE_URL=http://127.0.0.1:11434/v1
+TRACEFOLD_AI_API_KEY=
+TRACEFOLD_AI_MODEL=qwen3.5:9b
+TRACEFOLD_AI_TIMEOUT_SECONDS=60
 ```
 
 ---

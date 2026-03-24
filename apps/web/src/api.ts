@@ -158,6 +158,17 @@ export interface WorkbenchHomeData {
   dashboard_summary: DashboardData
 }
 
+export interface RuntimeStatusData {
+  api_status: string
+  db_status: string
+  migration_head: string | null
+  schema_version: string | null
+  migration_status: string
+  degraded_reasons: string[]
+  task_runtime_status: string
+  last_checked_at: string
+}
+
 export interface WorkbenchTemplateList {
   items: WorkbenchTemplate[]
 }
@@ -268,37 +279,61 @@ export interface HealthDetail {
 
 export interface AiDerivationResultItem {
   id: number
+  target_type: string
+  target_id: number
+  derivation_kind: string
   target_domain: string
   target_record_id: number
   derivation_type: string
   status: string
+  model_key: string | null
   model_name: string | null
   model_version: string | null
+  source_basis_json: unknown
   generated_at: string | null
+  invalidated_at: string | null
   failed_at: string | null
   content_json: unknown
   error_message: string | null
   created_at: string
+  updated_at: string
 }
 
 export interface AiDerivationResultList {
   items: AiDerivationResultItem[]
 }
 
+export interface AiDerivationTaskSubmission {
+  task_id: number
+  task_type: string
+  target_type: string
+  target_id: number
+  derivation_kind: string
+  derivation_status: string
+}
+
 export interface AlertResultItem {
   id: number
+  domain: string
+  rule_key: string
+  source_record_type: string
   source_domain: string
   source_record_id: number
   rule_code: string
   severity: string
   status: string
-  title: string
+  title: string | null
   message: string
+  details_json: unknown
   explanation: string | null
   triggered_at: string
+  acknowledged_at: string | null
+  resolved_at: string | null
   viewed_at: string | null
   dismissed_at: string | null
+  resolution_note: string | null
   created_at: string
+  updated_at: string
 }
 
 export interface AlertResultList {
@@ -311,6 +346,10 @@ export async function fetchDashboard(): Promise<DashboardData> {
 
 export async function fetchWorkbenchHome(): Promise<WorkbenchHomeData> {
   return request<WorkbenchHomeData>('/api/workbench/home')
+}
+
+export async function fetchRuntimeStatus(): Promise<RuntimeStatusData> {
+  return request<RuntimeStatusData>('/api/system/status')
 }
 
 export async function fetchWorkbenchTemplates(): Promise<WorkbenchTemplateList> {
@@ -419,8 +458,26 @@ export async function fetchAiDerivationList(
   return request<AiDerivationResultList>('/api/ai-derivations', params)
 }
 
+export async function fetchAiDerivationDetail(
+  targetType: string,
+  targetId: string | number,
+): Promise<AiDerivationResultItem> {
+  return request<AiDerivationResultItem>(`/api/ai-derivations/${targetType}/${targetId}`)
+}
+
+export async function requestAiDerivationRecompute(
+  targetType: string,
+  targetId: number,
+): Promise<AiDerivationTaskSubmission> {
+  return request<AiDerivationTaskSubmission>(`/api/ai-derivations/${targetType}/${targetId}/recompute`, undefined, 'POST')
+}
+
 export async function fetchAlertList(params: Record<string, string>): Promise<AlertResultList> {
   return request<AlertResultList>('/api/alerts', params)
+}
+
+export async function fetchAlertDetail(id: number): Promise<AlertResultItem> {
+  return request<AlertResultItem>(`/api/alerts/${id}`)
 }
 
 export async function rerunHealthAiSummary(id: number): Promise<AiDerivationResultList> {
@@ -431,12 +488,12 @@ export async function rerunKnowledgeAiSummary(id: number): Promise<AiDerivationR
   return request<AiDerivationResultList>(`/api/knowledge/${id}/ai/knowledge-summary/rerun`, undefined, 'POST')
 }
 
-export async function markAlertViewed(id: number): Promise<AlertResultItem> {
-  return request<AlertResultItem>(`/api/alerts/${id}/viewed`, undefined, 'POST')
+export async function acknowledgeAlert(id: number): Promise<AlertResultItem> {
+  return request<AlertResultItem>(`/api/alerts/${id}/acknowledge`, undefined, 'POST')
 }
 
-export async function dismissAlert(id: number): Promise<AlertResultItem> {
-  return request<AlertResultItem>(`/api/alerts/${id}/dismissed`, undefined, 'POST')
+export async function resolveAlert(id: number): Promise<AlertResultItem> {
+  return request<AlertResultItem>(`/api/alerts/${id}/resolve`, undefined, 'POST')
 }
 
 async function request<T>(

@@ -7,37 +7,44 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
+from app.db.database_url import resolve_database_url
 
 
-def _build_engine() -> Engine:
+def build_engine(database_url: str | None = None) -> Engine:
     """
-    Create the global SQLAlchemy engine.
+    Create a SQLAlchemy engine using the shared API DB configuration.
 
     For SQLite, `check_same_thread=False` is required when the connection
     may be used across different threads in the app runtime.
     """
+    resolved_database_url = resolve_database_url(database_url or settings.api_db_url)
     connect_args: dict[str, object] = {}
 
-    if settings.api_db_url.startswith("sqlite"):
+    if resolved_database_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
 
     return create_engine(
-        settings.api_db_url,
+        resolved_database_url,
         echo=False,
         future=True,
         connect_args=connect_args,
     )
 
 
-engine: Engine = _build_engine()
+def build_session_local(database_url: str | None = None):
+    engine = build_engine(database_url)
+    return sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+        class_=Session,
+    )
 
-SessionLocal = sessionmaker(
-    bind=engine,
-    autoflush=False,
-    autocommit=False,
-    expire_on_commit=False,
-    class_=Session,
-)
+
+engine: Engine = build_engine()
+
+SessionLocal = build_session_local()
 
 
 def get_db() -> Generator[Session, None, None]:
