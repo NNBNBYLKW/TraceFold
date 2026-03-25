@@ -7,7 +7,6 @@ import {
   createWorkbenchShortcut,
   createWorkbenchTemplate,
   fetchAiDerivationDetail,
-  fetchAiDerivationList,
   fetchAlertList,
   fetchDashboard,
   fetchExpenseDetail,
@@ -25,7 +24,6 @@ import {
   deleteWorkbenchShortcut,
   fetchPendingDetail,
   fetchPendingList,
-  rerunHealthAiSummary,
   resolveAlert,
   requestAiDerivationRecompute,
 } from './api.ts'
@@ -329,17 +327,17 @@ async function renderWorkbenchPage(): Promise<string> {
   ])
 
   if (homeResult.status === 'rejected') {
-    return `
-      <section class="page-header">
-        <h1>Workbench</h1>
-        <p class="page-copy">Central entry layer for work modes, shortcuts, recent context, and summary.</p>
-      </section>
+    return renderPageShell(`
+      ${renderPageHeaderBlock({
+        title: 'Workbench',
+        copy: 'Central entry layer for work modes, shortcuts, recent context, and summary.',
+      })}
       ${renderRuntimeStatusSection(
         runtimeStatusResult.status === 'fulfilled' ? runtimeStatusResult.value : null,
         runtimeStatusResult.status === 'rejected' ? toErrorMessage(runtimeStatusResult.reason) : null,
       )}
       ${renderUnavailableState('Workbench home is unavailable.', toErrorMessage(homeResult.reason))}
-    `
+    `)
   }
 
   return renderWorkbenchView(
@@ -379,20 +377,20 @@ function renderWorkbenchView(
   const editingShortcut =
     allShortcuts.find((shortcut) => shortcut.shortcut_id === workbenchUiState.editingShortcutId) ?? null
 
-  return `
-    <section class="page-header">
-      <h1>Workbench</h1>
-      <p class="page-copy">Step 8 home entry layer for current mode, templates, shortcuts, recent context, and summary.</p>
-    </section>
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Workbench',
+      copy: 'Entry layer for current mode, what matters now, and where to go next.',
+    })}
     ${renderWorkbenchFlash()}
-    ${renderRuntimeStatusSection(runtimeStatus, errors.runtimeStatusError)}
     ${renderWorkbenchStateBanner(home, dashboard, errors.dashboardError)}
     ${renderWorkbenchCurrentModeSection(home, activeTemplate, defaultTemplate, preferences, errors.preferencesError)}
-    ${renderWorkbenchTemplatesSection(home, editingTemplate)}
+    ${renderWorkbenchDashboardSummarySection(dashboard, errors.dashboardError)}
     ${renderWorkbenchShortcutsSection(home, allShortcuts, editingShortcut, errors.shortcutsError)}
     ${renderWorkbenchRecentSection(home)}
-    ${renderWorkbenchDashboardSummarySection(dashboard, errors.dashboardError)}
-  `
+    ${renderWorkbenchTemplatesSection(home, editingTemplate)}
+    ${renderRuntimeStatusSection(runtimeStatus, errors.runtimeStatusError)}
+  `)
 }
 
 function renderWorkbenchFlash(): string {
@@ -424,12 +422,13 @@ function renderWorkbenchCurrentModeSection(
     default_query_json: home.current_mode.default_query_json,
   })
 
-  return `
-    <section class="panel page-section workbench-section">
-      <div class="section-header">
-        <h2>1. Current Mode</h2>
-        <p class="section-copy">Current mode only changes entry context. It does not change formal record semantics.</p>
-      </div>
+  return renderSectionShell(
+    {
+      title: '1. Current Mode',
+      copy: 'Current mode only changes entry context. It does not change formal record semantics.',
+      className: 'workbench-section section-shell--primary',
+    },
+    `
       <div class="workbench-mode-grid">
         <article class="record-card">
           <div class="record-card__header">
@@ -478,27 +477,28 @@ function renderWorkbenchCurrentModeSection(
           </div>
         </article>
       </div>
-    </section>
-  `
+    `,
+  )
 }
 
 function renderWorkbenchTemplatesSection(home: WorkbenchHomeData, editingTemplate: WorkbenchTemplate | null): string {
   const builtinTemplates = home.templates.filter((template) => template.template_type === 'builtin')
   const userTemplates = home.templates.filter((template) => template.template_type === 'user')
 
-  return `
-    <section class="panel page-section workbench-section">
-      <div class="section-header">
-        <h2>2. Templates</h2>
-        <p class="section-copy">Templates are named work modes. Builtin templates are read-only. User templates stay lightweight.</p>
-      </div>
+  return renderSectionShell(
+    {
+      title: '5. Templates',
+      copy: 'Templates are named work modes. Builtin templates are read-only. User templates stay lightweight.',
+      className: 'workbench-section section-shell--primary',
+    },
+    `
       <div class="workbench-card-grid">
         ${builtinTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id)).join('')}
         ${userTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id)).join('')}
       </div>
       ${renderWorkbenchTemplateForm(home.templates, editingTemplate)}
-    </section>
-  `
+    `,
+  )
 }
 
 function renderWorkbenchTemplateCard(template: WorkbenchTemplate, activeTemplateId: number | null): string {
@@ -602,12 +602,13 @@ function renderWorkbenchShortcutsSection(
   editingShortcut: WorkbenchShortcut | null,
   shortcutsError?: string | null,
 ): string {
-  return `
-    <section class="panel page-section workbench-section">
-      <div class="section-header">
-        <h2>3. Fixed Shortcuts</h2>
-        <p class="section-copy">Shortcuts enter stable contexts only. They do not run action chains.</p>
-      </div>
+  return renderSectionShell(
+    {
+      title: '3. Fixed Shortcuts',
+      copy: 'Use shortcuts to move into the next formal page or work context. They do not run action chains.',
+      className: 'workbench-section section-shell--secondary',
+    },
+    `
       <div class="workbench-shortcut-highlight">
         ${
           home.pinned_shortcuts.length > 0
@@ -620,8 +621,8 @@ function renderWorkbenchShortcutsSection(
         ${allShortcuts.map((shortcut) => renderWorkbenchShortcutCard(shortcut, false)).join('')}
       </div>
       ${renderWorkbenchShortcutForm(editingShortcut)}
-    </section>
-  `
+    `,
+  )
 }
 
 function renderWorkbenchShortcutCard(shortcut: WorkbenchShortcut, highlighted: boolean): string {
@@ -708,12 +709,13 @@ function renderWorkbenchShortcutForm(editingShortcut: WorkbenchShortcut | null):
 }
 
 function renderWorkbenchRecentSection(home: WorkbenchHomeData): string {
-  return `
-    <section class="panel page-section workbench-section">
-      <div class="section-header">
-        <h2>4. Recent Context</h2>
-        <p class="section-copy">Recent is for continuing work. It is not a history log or audit timeline.</p>
-      </div>
+  return renderSectionShell(
+    {
+      title: '4. Recent Context',
+      copy: 'Recent helps you continue active work after you know where to go next. It is not a history log or audit timeline.',
+      className: 'workbench-section section-shell--secondary',
+    },
+    `
       ${
         home.recent_contexts.length > 0
           ? `
@@ -723,8 +725,8 @@ function renderWorkbenchRecentSection(home: WorkbenchHomeData): string {
             `
           : renderEmptyState('No recent work context yet.')
       }
-    </section>
-  `
+    `,
+  )
 }
 
 function renderWorkbenchRecentCard(recent: WorkbenchHomeData['recent_contexts'][number]): string {
@@ -747,12 +749,13 @@ function renderWorkbenchRecentCard(recent: WorkbenchHomeData['recent_contexts'][
 }
 
 function renderWorkbenchDashboardSummarySection(dashboard: DashboardData | null, errorMessage?: string | null): string {
-  return `
-    <section class="panel page-section workbench-section">
-      <div class="section-header">
-        <h2>5. Dashboard Summary</h2>
-        <p class="section-copy">Summary stays summary. The workbench homepage does not replace the full dashboard.</p>
-      </div>
+  return renderSectionShell(
+    {
+      title: '2. Dashboard Summary',
+      copy: 'Summary stays summary. Use it to see what matters now before stepping into a formal page.',
+      className: 'workbench-section section-shell--support',
+    },
+    `
       ${
         errorMessage
           ? renderUnavailableState(
@@ -820,8 +823,8 @@ function renderWorkbenchDashboardSummarySection(dashboard: DashboardData | null,
                   'Empty means the shared API responded successfully, but this page does not have records or summary data yet.',
               })
       }
-    </section>
-  `
+    `,
+  )
 }
 
 async function handleWorkbenchAction(button: HTMLButtonElement): Promise<void> {
@@ -1092,10 +1095,9 @@ async function renderHealthListPage(): Promise<string> {
 }
 
 async function renderHealthDetailPage(id: string): Promise<string> {
-  const [detailResult, alertResult, aiResult] = await Promise.allSettled([
+  const [detailResult, alertResult] = await Promise.allSettled([
     fetchHealthDetail(id),
     fetchAlertList({ domain: 'health', source_record_id: id }),
-    fetchAiDerivationList({ target_domain: 'health', target_record_id: id }),
   ])
 
   if (detailResult.status === 'rejected') {
@@ -1105,9 +1107,7 @@ async function renderHealthDetailPage(id: string): Promise<string> {
   return renderHealthDetailView(
     detailResult.value,
     alertResult.status === 'fulfilled' ? alertResult.value.items : [],
-    aiResult.status === 'fulfilled' ? getHealthSummaryDerivation(aiResult.value.items) : null,
     alertResult.status === 'rejected' ? toErrorMessage(alertResult.reason) : undefined,
-    aiResult.status === 'rejected' ? toErrorMessage(aiResult.reason) : undefined,
   )
 }
 
@@ -1129,12 +1129,9 @@ function handleClick(event: MouseEvent): void {
   if (aiActionButton) {
     const action = aiActionButton.dataset.aiAction
     const recordId = Number.parseInt(aiActionButton.dataset.recordId || '', 10)
-    if (
-      (action === 'rerun-health-summary' || action === 'recompute-knowledge-summary') &&
-      Number.isFinite(recordId)
-    ) {
+    if (action === 'recompute-knowledge-summary' && Number.isFinite(recordId)) {
       event.preventDefault()
-      void handleAiDerivationAction(aiActionButton, recordId, action)
+      void handleAiDerivationAction(aiActionButton, recordId)
     }
     return
   }
@@ -1275,41 +1272,100 @@ function renderNavLink(label: string, href: string, isActive: boolean): string {
   `
 }
 
-function renderLoadingPage(title: string): string {
+function renderPageShell(content: string): string {
   return `
-    <section class="page-header">
-      <h1>${escapeHtml(title)}</h1>
-    </section>
-    ${renderLoadingState()}
+    <div class="page-shell">
+      ${content}
+    </div>
   `
 }
 
-function renderPlaceholderPage(title: string, message: string): string {
+function renderPageHeaderBlock(options: {
+  title: string
+  copy?: string
+  backHref?: string
+  backLabel?: string
+}): string {
   return `
-    <section class="page-header">
-      <h1>${escapeHtml(title)}</h1>
-    </section>
-    <section class="panel page-section">
-      <p class="placeholder-copy">${escapeHtml(message)}</p>
+    <section class="page-header page-header-block">
+      ${
+        options.backHref && options.backLabel
+          ? `<a class="back-link" href="${escapeHtml(options.backHref)}" data-nav="true">Back to ${escapeHtml(options.backLabel)}</a>`
+          : ''
+      }
+      <h1>${escapeHtml(options.title)}</h1>
+      ${options.copy ? `<p class="page-copy">${escapeHtml(options.copy)}</p>` : ''}
     </section>
   `
+}
+
+function renderSectionActionRow(actions: string): string {
+  return `
+    <div class="section-action-row">
+      ${actions}
+    </div>
+  `
+}
+
+function renderSectionShell(
+  options: {
+    title: string
+    copy?: string
+    className?: string
+    id?: string
+    badge?: string
+  },
+  body: string,
+): string {
+  const sectionClasses = ['panel', 'page-section', 'section-shell']
+  if (options.className) {
+    sectionClasses.push(options.className)
+  }
+
+  return `
+    <section class="${sectionClasses.join(' ')}"${options.id ? ` id="${escapeHtml(options.id)}"` : ''}>
+      <div class="section-header${options.badge ? ' section-header--with-badge' : ''}">
+        <h2>${escapeHtml(options.title)}</h2>
+        ${options.badge ?? ''}
+      </div>
+      ${options.copy ? `<p class="section-copy">${escapeHtml(options.copy)}</p>` : ''}
+      <div class="section-shell__body">
+        ${body}
+      </div>
+    </section>
+  `
+}
+
+function renderLoadingPage(title: string): string {
+  return renderPageShell(`
+    ${renderPageHeaderBlock({ title })}
+    ${renderLoadingState()}
+  `)
+}
+
+function renderPlaceholderPage(title: string, message: string): string {
+  return renderPageShell(`
+    ${renderPageHeaderBlock({ title })}
+    ${renderSectionShell(
+      {
+        title: 'Placeholder',
+        className: 'section-shell--contextual',
+      },
+      `<p class="placeholder-copy">${escapeHtml(message)}</p>`,
+    )}
+  `)
 }
 
 async function handleAiDerivationAction(
   button: HTMLButtonElement,
   recordId: number,
-  action: 'rerun-health-summary' | 'recompute-knowledge-summary',
 ): Promise<void> {
   const originalLabel = button.textContent || ''
   button.disabled = true
-  button.textContent = action === 'recompute-knowledge-summary' ? 'Requesting recompute...' : 'Rerunning...'
+  button.textContent = 'Requesting recompute...'
 
   try {
-    if (action === 'rerun-health-summary') {
-      await rerunHealthAiSummary(recordId)
-    } else {
-      await requestAiDerivationRecompute('knowledge', recordId)
-    }
+    await requestAiDerivationRecompute('knowledge', recordId)
     await renderApp()
   } catch (error) {
     window.alert(toErrorMessage(error))
@@ -1349,11 +1405,11 @@ function renderDashboardView(
   runtimeStatus?: RuntimeStatusData | null,
   runtimeStatusError?: string | null,
 ): string {
-  return `
-    <section class="page-header">
-      <h1>Dashboard</h1>
-      <p class="page-copy">Workspace overview for pending review, formal records, and recent context.</p>
-    </section>
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Dashboard',
+      copy: 'Summary layer for pending review, formal records, and recent context.',
+    })}
     ${renderRuntimeStatusSection(runtimeStatus ?? null, runtimeStatusError ?? null)}
     ${
       !errorMessage && dashboard && isDashboardEmpty(dashboard)
@@ -1372,14 +1428,14 @@ function renderDashboardView(
         : dashboard
           ? `
               ${renderPendingSummarySection(dashboard)}
-              ${renderAlertSummarySection(dashboard)}
-              ${renderQuickLinksSection(dashboard)}
               ${renderFormalSummariesSection(dashboard)}
+              ${renderAlertSummarySection(dashboard)}
               ${renderRecentActivitySection(dashboard)}
+              ${renderQuickLinksSection(dashboard)}
             `
           : renderEmptyState('Dashboard data is not available.')
     }
-  `
+  `)
 }
 
 function renderAlertSummarySection(dashboard: DashboardData): string {
@@ -1718,21 +1774,27 @@ function renderHealthListView(
   errorMessage?: string,
   alertsErrorMessage?: string,
 ): string {
-  const factsSection = `
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Formal Records</h2>
-        <p class="section-copy">Formal health records remain the primary read layer for this page.</p>
-      </div>
-      ${
-        errorMessage
-          ? renderErrorState(errorMessage)
-          : response && response.items.length > 0
-            ? renderHealthRecords(response.items)
-            : renderEmptyState('No health records found.')
-      }
-    </section>
-  `
+  if (errorMessage) {
+    return renderPageShell(`
+      ${renderPageHeaderBlock({
+        title: 'Health',
+        copy: 'Formal health records with separate rule-based reminders.',
+      })}
+      ${renderHealthFilters(query)}
+      ${renderUnavailableState('Health records are unavailable.', errorMessage)}
+    `)
+  }
+
+  const factsSection = renderSectionShell(
+    {
+      title: 'Formal Records',
+      copy: 'Formal health records remain the primary read layer for this page.',
+      className: 'section-shell--primary',
+    },
+    response && response.items.length > 0
+      ? renderHealthRecords(response.items)
+      : renderEmptyState('No health records found.'),
+  )
   const alertsSection = renderHealthAlertSection(
     alerts,
     alertsErrorMessage,
@@ -1743,16 +1805,16 @@ function renderHealthListView(
     },
   )
 
-  return `
-    <section class="page-header">
-      <h1>Health</h1>
-      <p class="page-copy">Formal health records with separate rule-based reminders.</p>
-    </section>
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Health',
+      copy: 'Formal health records with separate rule-based reminders.',
+    })}
     ${renderHealthFilters(query)}
     ${factsSection}
     ${alertsSection}
     ${renderPagination('/health', response?.page ?? query.page, response?.page_size ?? query.pageSize, response?.total ?? 0)}
-  `
+  `)
 }
 
 function renderExpenseDetailView(detail: ExpenseDetail): string {
@@ -1782,53 +1844,64 @@ function renderKnowledgeDetailView(
   detail: KnowledgeDetail,
   aiSummaryState: KnowledgeAiSummaryState,
 ): string {
-  return `
-    <section class="page-header">
-      <a class="back-link" href="/knowledge" data-nav="true">Back to Knowledge</a>
-      <h1>Knowledge Record</h1>
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Formal Content</h2>
-        <p class="section-copy">Formal content remains the record of truth for this knowledge entry.</p>
-      </div>
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Knowledge Record',
+      backHref: '/knowledge',
+      backLabel: 'Knowledge',
+      copy: 'Read the formal record first, then use source context and AI-derived summary as support.',
+    })}
+    ${renderSectionShell(
+      {
+        title: 'Formal Content',
+        copy: 'Formal content remains the record of truth for this knowledge entry.',
+        className: 'section-shell--primary',
+      },
+      `
       <div class="field-grid">
         ${renderField('Created At', formatDateTime(detail.created_at))}
         ${renderField('Title', detail.title, true)}
         ${renderField('Content', detail.content, true)}
       </div>
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Source Reference</h2>
-      </div>
+    `,
+    )}
+    ${renderSectionShell(
+      {
+        title: 'Source Reference',
+        copy: 'Source reference stays contextual. It helps trace origin without replacing the formal record.',
+        className: 'section-shell--contextual source-reference-block',
+      },
+      `
       <div class="field-grid">
         ${renderField('Source Capture ID', String(detail.source_capture_id))}
         ${renderField('Source Pending ID', detail.source_pending_id === null ? null : String(detail.source_pending_id))}
         ${renderField('Source Text', detail.source_text, true)}
       </div>
-    </section>
+    `,
+    )}
     ${renderKnowledgeAiSummarySection(detail.id, aiSummaryState)}
-  `
+  `)
 }
 
 function renderHealthDetailView(
   detail: HealthDetail,
   alerts: AlertResultItem[],
-  aiSummary: AiDerivationResultItem | null,
   alertsErrorMessage?: string,
-  aiErrorMessage?: string,
 ): string {
-  return `
-    <section class="page-header">
-      <a class="back-link" href="/health" data-nav="true">Back to Health</a>
-      <h1>Health Record</h1>
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Formal Record</h2>
-        <p class="section-copy">Formal health record values remain the record of truth for this page.</p>
-      </div>
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Health Record',
+      backHref: '/health',
+      backLabel: 'Health',
+      copy: 'Read the formal record first, then use source context and rule alerts as support.',
+    })}
+    ${renderSectionShell(
+      {
+        title: 'Formal Record',
+        copy: 'Formal health record values remain the record of truth for this page.',
+        className: 'section-shell--primary',
+      },
+      `
       <div class="field-grid">
         ${renderField('ID', String(detail.id))}
         ${renderField('Created At', formatDateTime(detail.created_at))}
@@ -1836,25 +1909,26 @@ function renderHealthDetailView(
         ${renderField('Value Text', detail.value_text, true)}
         ${renderField('Note', detail.note, true)}
       </div>
-    </section>
+    `,
+    )}
+    ${renderSourceSection(detail.source_capture_id, detail.source_pending_id)}
     ${renderHealthAlertSection(alerts, alertsErrorMessage, {
       heading: 'Rule Alerts',
       emptyMessage: 'No rule alerts for this health record.',
       sourceRecordId: detail.id,
     })}
-    ${renderSourceSection(detail.source_capture_id, detail.source_pending_id)}
-    ${renderHealthAiSummarySection(detail.id, aiSummary, aiErrorMessage)}
-  `
+  `)
 }
 
 function renderDetailErrorView(title: string, backPath: string, backLabel: string, message: string): string {
-  return `
-    <section class="page-header">
-      <a class="back-link" href="${backPath}" data-nav="true">Back to ${escapeHtml(backLabel)}</a>
-      <h1>${escapeHtml(title)}</h1>
-    </section>
-    ${renderErrorState(message)}
-  `
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title,
+      backHref: backPath,
+      backLabel,
+    })}
+    ${renderUnavailableState(`${title} is unavailable.`, message)}
+  `)
 }
 
 function renderPendingFilters(query: PendingListQuery): string {
@@ -2112,12 +2186,14 @@ function renderHealthAlertSection(
     (item) => item.status !== 'open' && item.status !== 'acknowledged' && item.status !== 'resolved',
   )
 
-  return `
-    <section class="panel page-section${options.emphasize ? ' page-section--alert-focus' : ''}" id="health-alerts">
-      <div class="section-header">
-        <h2>${escapeHtml(options.heading)}</h2>
-      </div>
-      <p class="section-copy">Rule-based alerts are reminders derived from formal health records. They do not replace or rewrite the formal record itself.</p>
+  return renderSectionShell(
+    {
+      title: options.heading,
+      copy: 'Rule-based alerts are reminders derived from formal health records. They do not replace or rewrite the formal record itself.',
+      className: `${options.emphasize ? 'page-section--alert-focus ' : ''}section-shell--secondary`.trim(),
+      id: 'health-alerts',
+    },
+    `
       ${
         errorMessage
           ? renderUnavailableState('Health alerts are unavailable right now.', errorMessage)
@@ -2134,8 +2210,8 @@ function renderHealthAlertSection(
               `
             : renderEmptyState(options.emptyMessage, 'Health alerts are currently empty.')
       }
-    </section>
-  `
+    `,
+  )
 }
 
 function renderAlertStatusGroup(title: string, alerts: AlertResultItem[], emptyMessage: string): string {
@@ -2147,50 +2223,19 @@ function renderAlertStatusGroup(title: string, alerts: AlertResultItem[], emptyM
   `
 }
 
-function renderHealthAiSummarySection(
-  healthId: number,
-  aiSummary: AiDerivationResultItem | null,
-  errorMessage?: string,
-): string {
-  return `
-    <section class="panel page-section page-section--ai">
-      <div class="section-header section-header--with-badge">
-        <h2>AI Derivation</h2>
-        ${renderAiLabelBadge()}
-      </div>
-      <p class="section-copy">AI derivations are generated from the formal record. They do not replace formal facts or rule alerts.</p>
-      ${
-        errorMessage
-          ? renderUnavailableState('AI-derived summary is unavailable right now.', errorMessage)
-          : aiSummary
-            ? renderHealthAiSummaryContent(aiSummary, healthId)
-            : renderPageStatePanel({
-                tone: 'empty',
-                eyebrow: 'Not Generated',
-                title: 'AI-derived summary is not available yet.',
-                message:
-                  'It is only available for subjective health records. The formal record remains available.',
-                actions: `<button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">Generate AI-derived Summary</button>`,
-              })
-      }
-    </section>
-  `
-}
-
 function renderKnowledgeAiSummarySection(
   knowledgeId: number,
   aiSummaryState: KnowledgeAiSummaryState,
 ): string {
-  return `
-    <section class="panel page-section page-section--ai">
-      <div class="section-header section-header--with-badge">
-        <h2>AI-derived Summary</h2>
-        ${renderAiLabelBadge()}
-      </div>
-      <p class="section-copy">AI-derived summary is generated from the formal record. It does not replace the formal content.</p>
-      ${renderKnowledgeAiSummaryBody(aiSummaryState, knowledgeId)}
-    </section>
-  `
+  return renderSectionShell(
+    {
+      title: 'AI-derived Summary',
+      copy: 'AI-derived summary is generated from the formal record. It does not replace the formal content.',
+      className: 'page-section--ai section-shell--secondary',
+      badge: renderAiLabelBadge(),
+    },
+    renderKnowledgeAiSummaryBody(aiSummaryState, knowledgeId),
+  )
 }
 
 function renderKnowledgeAiSummaryBody(
@@ -2214,58 +2259,6 @@ function renderKnowledgeAiSummaryBody(
     default:
       return renderKnowledgeAiSummaryContent(aiSummaryState.derivation, knowledgeId)
   }
-}
-
-function renderHealthAiSummaryContent(aiSummary: AiDerivationResultItem, healthId: number): string {
-  const content = asHealthSummaryContent(aiSummary.content_json)
-  const summaryText = content?.summary ?? null
-  const observations = content?.observations ?? []
-  const suggestedFollowUp = content?.suggested_follow_up ?? null
-  const careLevelNote = content?.care_level_note ?? null
-
-  return `
-    <article class="record-card record-card--ai">
-      <div class="record-card__header">
-        <div class="record-card__title-group">
-          <h3>Supportive interpretation</h3>
-          <span class="record-meta">${escapeHtml(formatDateTime(aiSummary.generated_at || aiSummary.created_at))}</span>
-        </div>
-        <div class="record-badges">
-          ${renderAiStatusBadge(aiSummary.status)}
-        </div>
-      </div>
-      ${
-        aiSummary.status === 'failed'
-          ? `
-              <p class="section-copy">AI-derived summary generation failed. The formal record remains available.</p>
-              <p class="section-copy">${escapeHtml(aiSummary.error_message || 'AI derivation failed. The formal record remains available.')}</p>
-            `
-          : aiSummary.status === 'invalidated'
-            ? '<p class="section-copy">AI-derived summary is invalidated and should be recomputed before relying on it.</p>'
-            : aiSummary.status === 'pending' || aiSummary.status === 'running'
-              ? '<p class="section-copy">AI-derived summary recompute has been requested. Refresh the page if the status remains pending.</p>'
-            : `
-                <div class="field-grid">
-                  ${renderField('Summary', summaryText, true)}
-                  ${renderField('Suggested Follow-up', suggestedFollowUp, true)}
-                  ${renderField('Care Level Note', careLevelNote, true)}
-                </div>
-                <section class="subsection">
-                  <h3>Observations</h3>
-                  ${renderDataList(
-                    observations.map((item, index) => ({ label: `Observation ${index + 1}`, value: item })),
-                    'No observations available.',
-                  )}
-                </section>
-              `
-      }
-      <div class="alert-actions">
-        <button class="secondary-button" type="button" data-ai-action="rerun-health-summary" data-record-id="${healthId}">
-          Recompute AI-derived Summary
-        </button>
-      </div>
-    </article>
-  `
 }
 
 function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem | null, knowledgeId: number): string {
@@ -2293,14 +2286,9 @@ function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem | nul
           <h3>Generated summary</h3>
           <span class="record-meta">${escapeHtml(formatDateTime(generationTime))}</span>
         </div>
-        <div class="record-badges">
-          ${renderAiStatusBadge(aiSummary.status)}
-        </div>
+      <div class="record-badges">
+        ${renderAiStatusBadge(aiSummary.status)}
       </div>
-      <div class="field-grid">
-        ${renderField('Derivation Status', formatStatusLabel(aiSummary.status))}
-        ${renderField('Model Key', aiSummary.model_key || aiSummary.model_name)}
-        ${renderField('Model Version', aiSummary.model_version)}
       </div>
       ${
         aiSummary.status === 'failed'
@@ -2324,9 +2312,10 @@ function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem | nul
             : aiSummary.status === 'pending' || aiSummary.status === 'running'
               ? '<p class="section-copy">AI-derived summary recompute has been requested. Refresh the page if the status remains pending.</p>'
             : `
-                <div class="field-grid">
-                  ${renderField('Summary', summaryText, true)}
-                </div>
+                <section class="subsection">
+                  <h3>Summary</h3>
+                  ${renderTextBlock(summaryText)}
+                </section>
                 <section class="subsection">
                   <h3>Key Points</h3>
                   ${renderDataList(
@@ -2340,7 +2329,15 @@ function renderKnowledgeAiSummaryContent(aiSummary: AiDerivationResultItem | nul
                 </section>
               `
       }
-      <div class="alert-actions">
+      <section class="subsection">
+        <h3>Derivation Context</h3>
+        <div class="field-grid">
+          ${renderField('Derivation Status', formatStatusLabel(aiSummary.status))}
+          ${renderField('Model Key', aiSummary.model_key || aiSummary.model_name)}
+          ${renderField('Model Version', aiSummary.model_version)}
+        </div>
+      </section>
+      <div class="section-action-row alert-actions">
         <button class="secondary-button" type="button" data-ai-action="recompute-knowledge-summary" data-record-id="${knowledgeId}">
           Recompute AI-derived Summary
         </button>
@@ -2384,14 +2381,14 @@ function renderAlertRecords(items: AlertResultItem[]): string {
           ${
             item.status === 'open'
               ? `
-                  <div class="alert-actions">
+                  <div class="section-action-row alert-actions">
                     <button class="secondary-button" type="button" data-alert-action="acknowledge" data-alert-id="${item.id}">Acknowledge Alert</button>
                     <button class="secondary-button" type="button" data-alert-action="resolve" data-alert-id="${item.id}">Resolve Alert</button>
                   </div>
                 `
               : item.status === 'acknowledged'
                 ? `
-                    <div class="alert-actions">
+                    <div class="section-action-row alert-actions">
                       <button class="secondary-button" type="button" data-alert-action="resolve" data-alert-id="${item.id}">Resolve Alert</button>
                     </div>
                   `
@@ -2534,17 +2531,19 @@ function renderPagination(path: string, page: number, pageSize: number, total: n
 }
 
 function renderSourceSection(sourceCaptureId: number, sourcePendingId: number | null): string {
-  return `
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Source Reference</h2>
-      </div>
+  return renderSectionShell(
+    {
+      title: 'Source Reference',
+      copy: 'Source reference stays contextual. It supports traceability without replacing the formal record.',
+      className: 'section-shell--contextual source-reference-block',
+    },
+    `
       <div class="field-grid">
         ${renderField('Source Capture ID', String(sourceCaptureId))}
         ${renderField('Source Pending ID', sourcePendingId === null ? null : String(sourcePendingId))}
       </div>
-    </section>
-  `
+    `,
+  )
 }
 
 function renderLoadingState(): string {
@@ -2620,8 +2619,12 @@ function renderPageStatePanel(options: {
             ? ' is-empty'
             : ''
 
+  const actionMarkup = [options.actions, options.retry ? '<button class="secondary-button" type="button" data-retry="true">Retry</button>' : '']
+    .filter((value): value is string => Boolean(value))
+    .join('')
+
   return `
-    <section class="panel status-panel${toneClass}">
+    <section class="panel status-panel state-block${toneClass}">
       <span class="status-eyebrow">${escapeHtml(options.eyebrow)}</span>
       <h2 class="status-title">${escapeHtml(options.title)}</h2>
       <p class="status-copy">${escapeHtml(options.message)}</p>
@@ -2634,8 +2637,7 @@ function renderPageStatePanel(options: {
             `
           : ''
       }
-      ${options.actions ?? ''}
-      ${options.retry ? '<button class="secondary-button" type="button" data-retry="true">Retry</button>' : ''}
+      ${actionMarkup ? renderSectionActionRow(actionMarkup) : ''}
     </section>
   `
 }
@@ -3178,10 +3180,6 @@ function formatJson(value: unknown): string {
   }
 }
 
-function getHealthSummaryDerivation(items: AiDerivationResultItem[]): AiDerivationResultItem | null {
-  return items.find((item) => item.derivation_type === 'health_summary') ?? null
-}
-
 function deriveKnowledgeAiSummaryState(
   result: PromiseSettledResult<AiDerivationResultItem>,
 ): KnowledgeAiSummaryState {
@@ -3205,32 +3203,6 @@ function deriveKnowledgeAiSummaryState(
   }
 
   return { kind: 'unavailable', derivation: null, errorMessage: message }
-}
-
-function asHealthSummaryContent(
-  value: unknown,
-): { summary: string; observations: string[]; suggested_follow_up: string; care_level_note: string } | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null
-  }
-
-  const content = value as Record<string, unknown>
-  if (
-    typeof content.summary !== 'string' ||
-    !Array.isArray(content.observations) ||
-    content.observations.some((item) => typeof item !== 'string') ||
-    typeof content.suggested_follow_up !== 'string' ||
-    typeof content.care_level_note !== 'string'
-  ) {
-    return null
-  }
-
-  return {
-    summary: content.summary,
-    observations: content.observations as string[],
-    suggested_follow_up: content.suggested_follow_up,
-    care_level_note: content.care_level_note,
-  }
 }
 
 function asKnowledgeSummaryContent(

@@ -88,6 +88,29 @@ These are the Web baseline documents:
 - `docs/WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md`
 - `docs/WEB_SHARED_STATE_POLISH_BASELINE.md`
 
+## Current Web Closure Status
+
+The first Post-Phase-1 Web main consumption lines optimization round is completed and closed.
+
+That closed scope includes:
+
+- Workbench / Dashboard
+- Knowledge detail + `knowledge_summary`
+- Health records + rule alerts
+- shared shell / shared state alignment
+- cross-page consistency and smoke closure
+
+Within that closed round:
+
+- Workbench remains the entry layer
+- Dashboard remains the summary layer
+- Knowledge detail remains formal-first, with AI-derived summary secondary
+- Health remains formal-record-first, with rule alerts as a secondary reminder layer
+- shared state meanings remain aligned across the included pages
+
+This restrained enhancement round did not introduce an AI center, alerts center, rule console, task runtime control center, or Web-owned business center.
+It records a completed polish pass on top of the already-established Web consumption baseline; it does not redefine the product center, the service-centered architecture, or the current Post-Phase-1 boundary.
+
 ## Desktop And Telegram Reality Check
 
 Desktop and Telegram remain intentionally narrow:

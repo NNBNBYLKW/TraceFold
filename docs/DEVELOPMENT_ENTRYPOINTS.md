@@ -22,6 +22,25 @@ For deeper detail, follow the linked baseline docs after this file.
 4. `docs/API_SEEDED_INTEGRATION_SMOKE.md`
 5. `docs/WEB_CONSUMPTION_BASELINE.md`
 
+## Current Web Entry (Post-Phase-1 Closed State)
+
+For the current closed Web state, use this reading order:
+
+1. `docs/WEB_CONSUMPTION_BASELINE.md`
+2. `docs/WEB_SHARED_STATE_POLISH_BASELINE.md`
+3. `docs/WEB_KNOWLEDGE_AI_PRESENTATION_BASELINE.md`
+4. `docs/WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md`
+5. `docs/WEB_POST_PHASE1_OPTIMIZATION_PLAN.md`
+6. `docs/WEB_INFORMATION_HIERARCHY_CONTRACT.md`
+7. `docs/WEB_PP1_CROSS_PAGE_CONSISTENCY_AND_SMOKE_BASELINE.md`
+
+The first four define the current formal Web baseline.
+The optimization and hierarchy docs define the restrained Post-Phase-1 polish direction.
+The closure baseline records the currently closed state for the first Web optimization round.
+
+This closed round should not be implicitly reopened.
+Any further Web work should be opened as a new scoped task.
+
 ## Standard Fresh Demo DB Flow
 
 Recommended order:

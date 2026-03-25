@@ -20,6 +20,7 @@ def test_health_alert_presentation_distinguishes_open_acknowledged_resolved_empt
     assert "Open Alerts" in MAIN_TS
     assert "Acknowledged Alerts" in MAIN_TS
     assert "Resolved Alerts" in MAIN_TS
+    assert "Health records are unavailable." in MAIN_TS
     assert "Health alerts are unavailable right now." in MAIN_TS
     assert "No rule alerts for health records." in MAIN_TS
     assert "Resolved means the reminder was handled. It does not mean the health fact was automatically corrected." in MAIN_TS
@@ -28,5 +29,12 @@ def test_health_alert_presentation_distinguishes_open_acknowledged_resolved_empt
 def test_health_alert_actions_stay_minimal_and_do_not_form_an_alert_center() -> None:
     assert "Acknowledge Alert" in MAIN_TS
     assert "Resolve Alert" in MAIN_TS
+    assert "section-action-row alert-actions" in MAIN_TS
     assert "Rule-based alerts are reminders derived from formal health records." in MAIN_TS
     assert "Formal health records remain the primary read layer for this page." in MAIN_TS
+
+
+def test_health_pages_do_not_show_ai_section_or_ai_wording() -> None:
+    assert "renderHealthAiSummarySection(" not in MAIN_TS
+    assert "AI Derivation" not in MAIN_TS
+    assert "Supportive interpretation" not in MAIN_TS

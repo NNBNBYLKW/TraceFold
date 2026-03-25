@@ -123,11 +123,25 @@ a {
   padding: 1.5rem 0 2.5rem;
 }
 
+.page-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.page-shell > * {
+  margin-bottom: 0;
+}
+
 .page-header {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   margin-bottom: 1rem;
+}
+
+.page-header-block {
+  padding-inline: 0.2rem;
 }
 
 .page-header h1 {
@@ -154,6 +168,36 @@ a {
 .status-panel {
   padding: 1.1rem;
   margin-bottom: 1rem;
+}
+
+.section-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.section-shell__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+}
+
+.section-shell--primary {
+  border-color: rgba(43, 90, 79, 0.18);
+}
+
+.section-shell--secondary {
+  background: rgba(252, 252, 248, 0.9);
+}
+
+.section-shell--support {
+  background: linear-gradient(180deg, rgba(247, 249, 246, 0.94), rgba(255, 255, 255, 0.86));
+}
+
+.section-shell--contextual,
+.source-reference-block {
+  background: rgba(248, 246, 241, 0.9);
+  border-color: rgba(148, 170, 154, 0.44);
 }
 
 .section-header {
@@ -353,6 +397,7 @@ a {
   flex-direction: column;
   align-items: flex-start;
   gap: 0.8rem;
+  width: 100%;
 }
 
 .status-panel.is-ready {
@@ -397,6 +442,13 @@ a {
 .placeholder-copy {
   margin: 0;
   color: #173126;
+}
+
+.section-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
 }
 
 .page-copy,

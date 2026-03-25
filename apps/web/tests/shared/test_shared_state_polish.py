@@ -18,12 +18,23 @@ def test_shared_state_panels_cover_loading_empty_unavailable_and_degraded() -> N
     assert "tone: 'degraded'" in MAIN_TS
 
 
+def test_shared_page_shell_helpers_cover_header_section_source_and_action_rows() -> None:
+    assert "function renderPageShell(" in MAIN_TS
+    assert "function renderPageHeaderBlock(" in MAIN_TS
+    assert "function renderSectionShell(" in MAIN_TS
+    assert "function renderSectionActionRow(" in MAIN_TS
+    assert "class=\"page-shell\"" in MAIN_TS
+    assert "className: 'section-shell--contextual source-reference-block'" in MAIN_TS
+    assert "class=\"section-action-row alert-actions\"" in MAIN_TS
+
+
 def test_shared_state_copy_is_reused_across_workbench_knowledge_and_health() -> None:
     assert "Loading state is shown while the current route is still fetching its shared API inputs." in MAIN_TS
     assert "Unavailable means the shared API route could not be reached or returned an unusable response." in MAIN_TS
     assert "Empty means the shared API responded successfully, but this page does not have records or summary data yet." in MAIN_TS
     assert "Health alerts are currently empty." in MAIN_TS
     assert "AI-derived summary is unavailable right now." in MAIN_TS
+    assert "Health records are unavailable." in MAIN_TS
 
 
 def test_status_panel_styles_keep_ready_warning_error_and_empty_tones_aligned() -> None:
@@ -33,3 +44,6 @@ def test_status_panel_styles_keep_ready_warning_error_and_empty_tones_aligned() 
     assert ".status-panel.is-empty" in STYLE_CSS
     assert ".status-eyebrow" in STYLE_CSS
     assert ".status-title" in STYLE_CSS
+    assert ".page-shell" in STYLE_CSS
+    assert ".section-shell" in STYLE_CSS
+    assert ".section-action-row" in STYLE_CSS

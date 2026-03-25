@@ -12,6 +12,19 @@ Use it to answer:
 
 It is not a design brief and not a page-by-page redesign document.
 
+## Current Status Note
+
+The first Post-Phase-1 optimization round for the current Web main consumption lines has been completed and closed.
+
+That closure applies only to:
+
+- Workbench / Dashboard
+- Knowledge detail + `knowledge_summary`
+- Health records + rule alerts
+- shared state presentation for the pages above
+
+It does not expand the formal Web baseline into a new product center, AI center, alerts center, or Web-owned workflow layer.
+
 ## Current Coverage
 
 The current formal Web consumption baseline covers:
@@ -128,7 +141,8 @@ Use this order:
 2. `docs/WEB_SHARED_STATE_POLISH_BASELINE.md`
 3. `docs/WEB_KNOWLEDGE_AI_PRESENTATION_BASELINE.md`
 4. `docs/WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md`
-5. `docs/API_SEEDED_INTEGRATION_SMOKE.md` for fresh demo DB validation
+5. `docs/WEB_PP1_CROSS_PAGE_CONSISTENCY_AND_SMOKE_BASELINE.md`
+6. `docs/API_SEEDED_INTEGRATION_SMOKE.md` for fresh demo DB validation
 
 ## Manual Smoke Focus
 
