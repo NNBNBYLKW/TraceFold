@@ -188,3 +188,84 @@ def test_capture_pending_flow_can_be_read_and_confirmed_via_uniform_http_path(
     assert capture is not None
     assert capture.status == CaptureStatus.COMMITTED
     assert capture.finalized_at is not None
+
+
+def test_capture_list_shows_upstream_status_and_stage_visibility(
+    api_client: TestClient,
+) -> None:
+    pending_response = api_client.post(
+        "/api/capture",
+        json={"raw_text": "买了咖啡", "source_type": "manual", "source_ref": "wechat"},
+    )
+    committed_response = api_client.post(
+        "/api/capture",
+        json={"raw_text": "今天花了25元午饭", "source_type": "manual"},
+    )
+
+    pending_capture_id = pending_response.json()["data"]["capture_id"]
+    committed_capture_id = committed_response.json()["data"]["capture_id"]
+
+    response = api_client.get("/api/capture")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["message"] == "Capture items fetched."
+
+    items = payload["data"]["items"]
+    pending_item = next(item for item in items if item["id"] == pending_capture_id)
+    committed_item = next(item for item in items if item["id"] == committed_capture_id)
+
+    assert pending_item["status"] == CaptureStatus.PENDING
+    assert pending_item["current_stage"] == "pending_review"
+    assert pending_item["target_domain"] == "expense"
+    assert pending_item["source_ref"] == "wechat"
+
+    assert committed_item["status"] == CaptureStatus.COMMITTED
+    assert committed_item["current_stage"] == "formal_record"
+    assert committed_item["target_domain"] == "expense"
+
+
+def test_capture_detail_shows_parse_pending_and_formal_linkage_after_pending_resolution(
+    api_client: TestClient,
+) -> None:
+    submit_response = api_client.post(
+        "/api/capture",
+        json={"raw_text": "买了咖啡", "source_type": "manual"},
+    )
+    submit_data = submit_response.json()["data"]
+    capture_id = submit_data["capture_id"]
+    pending_id = submit_data["pending_item_id"]
+
+    assert pending_id is not None
+
+    fix_response = api_client.post(
+        f"/api/pending/{pending_id}/fix",
+        json={"correction_text": "今天花了25元午饭"},
+    )
+    assert fix_response.status_code == 200
+
+    confirm_response = api_client.post(
+        f"/api/pending/{pending_id}/confirm",
+        json={"note": "confirm from capture detail test"},
+    )
+    assert confirm_response.status_code == 200
+
+    detail_response = api_client.get(f"/api/capture/{capture_id}")
+
+    assert detail_response.status_code == 200
+    detail = detail_response.json()["data"]
+
+    assert detail["id"] == capture_id
+    assert detail["status"] == CaptureStatus.COMMITTED
+    assert detail["current_stage"] == "formal_record"
+    assert detail["parse_result"] is not None
+    assert detail["parse_result"]["capture_id"] == capture_id
+    assert detail["pending_item"] is not None
+    assert detail["pending_item"]["id"] == pending_id
+    assert detail["pending_item"]["status"] == PendingStatus.CONFIRMED
+    assert detail["pending_item"]["actionable"] is False
+    assert detail["formal_result"] is not None
+    assert detail["formal_result"]["target_domain"] == "expense"
+    assert detail["formal_result"]["source_pending_id"] == pending_id
+    assert detail["formal_result"]["record_id"] is not None

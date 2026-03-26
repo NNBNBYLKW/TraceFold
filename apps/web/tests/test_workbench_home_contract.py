@@ -17,10 +17,10 @@ def test_workbench_home_rendering_keeps_five_sections_in_frozen_order() -> None:
     block = _render_workbench_view_block()
     positions = [
         block.index("renderWorkbenchCurrentModeSection("),
-        block.index("renderWorkbenchDashboardSummarySection("),
-        block.index("renderWorkbenchShortcutsSection("),
-        block.index("renderWorkbenchRecentSection("),
         block.index("renderWorkbenchTemplatesSection("),
+        block.index("renderWorkbenchShortcutsSection("),
+        block.index("renderWorkbenchDashboardSummarySection("),
+        block.index("renderWorkbenchRecentSection("),
     ]
 
     assert positions == sorted(positions)
@@ -50,21 +50,47 @@ def test_workbench_shortcut_ui_flow_uses_shared_api_contract() -> None:
 def test_recent_restore_flow_uses_route_snapshot_and_keeps_resume_semantics() -> None:
     assert "Resume" in MAIN_TS
     assert "recent.route_snapshot" in MAIN_TS
-    assert "Recent helps you continue active work after you know where to go next." in MAIN_TS
+    assert "Recent helps you resume active work after you already know the next mode or page." in MAIN_TS
 
 
 def test_dashboard_summary_is_present_but_not_dominant() -> None:
     block = _render_workbench_view_block()
-    assert "Summary stays summary. Use it to see what matters now before stepping into a formal page." in MAIN_TS
+    assert "Summary stays support. Use it after choosing a mode or entry path to confirm where pressure or recent movement exists." in MAIN_TS
     current_mode_position = block.index("renderWorkbenchCurrentModeSection(")
-    dashboard_position = block.index("renderWorkbenchDashboardSummarySection(")
+    templates_position = block.index("renderWorkbenchTemplatesSection(")
     shortcuts_position = block.index("renderWorkbenchShortcutsSection(")
-    assert current_mode_position < dashboard_position < shortcuts_position
+    dashboard_position = block.index("renderWorkbenchDashboardSummarySection(")
+    assert current_mode_position < templates_position < shortcuts_position < dashboard_position
 
 
 def test_workbench_formally_consumes_home_dashboard_and_runtime_status() -> None:
     assert "fetchWorkbenchHome()" in MAIN_TS
     assert "fetchDashboard()" in MAIN_TS
     assert "fetchRuntimeStatus()" in MAIN_TS
+    assert "fetchLocalOperability()" in MAIN_TS
     assert "System status is ready." in MAIN_TS
     assert "Workbench summary inputs are partially unavailable." in MAIN_TS
+
+
+def test_templates_are_presented_as_entry_only_work_modes() -> None:
+    assert "Templates are structured work-mode entry points." in MAIN_TS
+    assert "they do not execute actions or automate workflows." in MAIN_TS
+    assert "Built-in modes" in MAIN_TS
+    assert "User modes" in MAIN_TS
+    assert "Set current mode" in MAIN_TS
+    assert "Set default entry" in MAIN_TS
+
+
+def test_local_continuity_stays_support_level_and_sqlite_first() -> None:
+    block = _render_workbench_view_block()
+    assert "renderLocalOperabilitySection(" in block
+    assert block.index("renderRuntimeStatusSection(") < block.index("renderLocalOperabilitySection(")
+    assert "fetchLocalOperability" in API_TS
+    assert "createLocalBackup" in API_TS
+    assert "restoreLocalBackup" in API_TS
+    assert "exportCaptureBundle" in API_TS
+    assert "importCaptureBundle" in API_TS
+    assert "SQLite remains the single source of truth" in MAIN_TS
+    assert "this section stays support-level rather than becoming an admin console." in MAIN_TS
+    assert "Import capture bundle" in MAIN_TS
+    assert "Open capture records" in MAIN_TS

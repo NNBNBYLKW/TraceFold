@@ -169,6 +169,54 @@ export interface RuntimeStatusData {
   last_checked_at: string
 }
 
+export interface LocalOperabilityData {
+  database_path: string
+  database_exists: boolean
+  backup_directory: string
+  transfer_directory: string
+  daily_use_readiness: string
+  readiness_message: string
+  warnings: string[]
+  guidance: string[]
+  backup_scope: string
+  restore_scope: string
+  export_scope: string
+  import_scope: string
+}
+
+export interface LocalBackupResult {
+  backup_created: boolean
+  database_path: string
+  backup_path: string
+  file_size_bytes: number
+  created_at: string
+}
+
+export interface LocalRestoreResult {
+  restore_completed: boolean
+  source_path: string
+  database_path: string
+  safety_backup_path: string | null
+  restored_at: string
+}
+
+export interface CaptureBundleExportResult {
+  export_created: boolean
+  export_path: string
+  item_count: number
+  skipped_count: number
+  created_at: string
+}
+
+export interface CaptureBundleImportResult {
+  import_completed: boolean
+  source_path: string
+  imported_count: number
+  pending_count: number
+  committed_count: number
+  imported_at: string
+}
+
 export interface WorkbenchTemplateList {
   items: WorkbenchTemplate[]
 }
@@ -190,12 +238,86 @@ export interface WorkbenchApplyResult {
   default_template_id: number | null
 }
 
+export interface CaptureSubmitResult {
+  capture_created: boolean
+  capture_id: number
+  status: string
+  route: string
+  target_domain: string
+  pending_item_id: number | null
+  formal_record_id: number | null
+}
+
+export interface CaptureListItem {
+  id: number
+  status: string
+  source_type: string
+  source_ref: string | null
+  summary: string | null
+  target_domain: string | null
+  current_stage: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CaptureListResponse extends PaginatedResponse<CaptureListItem> {}
+
+export interface CaptureParseResult {
+  id: number
+  capture_id: number
+  target_domain: string
+  confidence_score: number
+  confidence_level: string
+  parsed_payload_json: unknown
+  parser_name: string
+  parser_version: string
+  created_at: string
+}
+
+export interface CapturePendingLink {
+  id: number
+  status: string
+  target_domain: string
+  summary: string | null
+  actionable: boolean
+  resolved_at: string | null
+}
+
+export interface CaptureFormalResult {
+  target_domain: string
+  record_id: number
+  summary: string | null
+  source_pending_id: number | null
+  created_at: string
+}
+
+export interface CaptureDetail {
+  id: number
+  status: string
+  source_type: string
+  source_ref: string | null
+  summary: string | null
+  target_domain: string | null
+  current_stage: string
+  chain_summary: string
+  raw_text: string | null
+  raw_payload_json: unknown
+  created_at: string
+  updated_at: string
+  finalized_at: string | null
+  parse_result: CaptureParseResult | null
+  pending_item: CapturePendingLink | null
+  formal_result: CaptureFormalResult | null
+}
+
 export interface PendingListItem {
   id: number
   status: string
   target_domain: string
+  summary: string | null
   reason_preview: string | null
   created_at: string
+  updated_at: string
   has_corrected_payload: boolean
   source_capture_id: number
   is_next_to_review: boolean
@@ -209,13 +331,44 @@ export interface PendingDetail {
   id: number
   status: string
   target_domain: string
+  summary: string | null
   reason: string | null
   proposed_payload_json: unknown
   corrected_payload_json: unknown
+  effective_payload_json: unknown
+  effective_payload_source: string
+  actionable: boolean
   created_at: string
+  updated_at: string
   resolved_at: string | null
   source_capture_id: number
   parse_result_id: number
+  review_actions: PendingReviewAction[]
+  formal_result: PendingFormalResult | null
+}
+
+export interface PendingReviewAction {
+  id: number
+  pending_item_id: number
+  action_type: string
+  before_payload_json: unknown
+  after_payload_json: unknown
+  note: string | null
+  created_at: string
+}
+
+export interface PendingFormalResult {
+  target_domain: string
+  record_id: number
+}
+
+export interface PendingActionResult {
+  action_executed: boolean
+  action_type: string
+  pending_id: number
+  status: string
+  target_domain: string
+  source_capture_id: number
 }
 
 export interface ExpenseListItem {
@@ -352,6 +505,38 @@ export async function fetchRuntimeStatus(): Promise<RuntimeStatusData> {
   return request<RuntimeStatusData>('/api/system/status')
 }
 
+export async function fetchLocalOperability(): Promise<LocalOperabilityData> {
+  return request<LocalOperabilityData>('/api/system/local-operability')
+}
+
+export async function createLocalBackup(destinationPath?: string): Promise<LocalBackupResult> {
+  return request<LocalBackupResult>('/api/system/backup', undefined, 'POST', {
+    destination_path: destinationPath || null,
+  })
+}
+
+export async function restoreLocalBackup(
+  sourcePath: string,
+  createSafetyBackup = true,
+): Promise<LocalRestoreResult> {
+  return request<LocalRestoreResult>('/api/system/restore', undefined, 'POST', {
+    source_path: sourcePath,
+    create_safety_backup: createSafetyBackup,
+  })
+}
+
+export async function exportCaptureBundle(destinationPath?: string): Promise<CaptureBundleExportResult> {
+  return request<CaptureBundleExportResult>('/api/system/export/capture-bundle', undefined, 'POST', {
+    destination_path: destinationPath || null,
+  })
+}
+
+export async function importCaptureBundle(sourcePath: string): Promise<CaptureBundleImportResult> {
+  return request<CaptureBundleImportResult>('/api/system/import/capture-bundle', undefined, 'POST', {
+    source_path: sourcePath,
+  })
+}
+
 export async function fetchWorkbenchTemplates(): Promise<WorkbenchTemplateList> {
   return request<WorkbenchTemplateList>('/api/workbench/templates')
 }
@@ -412,6 +597,22 @@ export async function updateWorkbenchPreferences(
   return request<WorkbenchPreferences>('/api/workbench/preferences', undefined, 'PATCH', payload)
 }
 
+export async function fetchCaptureList(
+  params: Record<string, string>,
+): Promise<CaptureListResponse> {
+  return request<CaptureListResponse>('/api/capture', params)
+}
+
+export async function fetchCaptureDetail(id: string): Promise<CaptureDetail> {
+  return request<CaptureDetail>(`/api/capture/${id}`)
+}
+
+export async function submitCapture(
+  payload: Record<string, unknown>,
+): Promise<CaptureSubmitResult> {
+  return request<CaptureSubmitResult>('/api/capture', undefined, 'POST', payload)
+}
+
 export async function fetchPendingList(
   params: Record<string, string>,
 ): Promise<PendingListResponse> {
@@ -420,6 +621,26 @@ export async function fetchPendingList(
 
 export async function fetchPendingDetail(id: string): Promise<PendingDetail> {
   return request<PendingDetail>(`/api/pending/${id}`)
+}
+
+export async function confirmPending(id: number, note?: string): Promise<PendingActionResult> {
+  return request<PendingActionResult>(`/api/pending/${id}/confirm`, undefined, 'POST', { note: note || null })
+}
+
+export async function discardPending(id: number, note?: string): Promise<PendingActionResult> {
+  return request<PendingActionResult>(`/api/pending/${id}/discard`, undefined, 'POST', { note: note || null })
+}
+
+export async function fixPending(id: number, correctionText: string): Promise<PendingActionResult> {
+  return request<PendingActionResult>(`/api/pending/${id}/fix`, undefined, 'POST', {
+    correction_text: correctionText,
+  })
+}
+
+export async function forceInsertPending(id: number, note?: string): Promise<PendingActionResult> {
+  return request<PendingActionResult>(`/api/pending/${id}/force_insert`, undefined, 'POST', {
+    note: note || null,
+  })
 }
 
 export async function fetchExpenseList(

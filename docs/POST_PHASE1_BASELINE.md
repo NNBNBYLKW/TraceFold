@@ -77,9 +77,13 @@ These are the operational baseline documents:
 The Web side is currently considered formally established in these areas:
 
 - Workbench / Dashboard consumption of shared API summary and runtime status
+- Pending review workbench
+- Capture visibility plus restrained minimal Web capture entry
+- Expense formal consumption polish
 - Knowledge detail consumption of formal content plus `knowledge_summary`
 - Health page consumption of formal records plus rule alerts
 - shared state presentation for loading / empty / unavailable / degraded and derived-state feedback
+- current Phase 2 V1 closure-ready additions recorded in `docs/PHASE2_V1_CLOSURE_BASELINE.md`
 
 These are the Web baseline documents:
 
@@ -87,6 +91,7 @@ These are the Web baseline documents:
 - `docs/WEB_KNOWLEDGE_AI_PRESENTATION_BASELINE.md`
 - `docs/WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md`
 - `docs/WEB_SHARED_STATE_POLISH_BASELINE.md`
+- `docs/PHASE2_V1_CLOSURE_BASELINE.md`
 
 ## Current Web Closure Status
 
@@ -111,6 +116,24 @@ Within that closed round:
 This restrained enhancement round did not introduce an AI center, alerts center, rule console, task runtime control center, or Web-owned business center.
 It records a completed polish pass on top of the already-established Web consumption baseline; it does not redefine the product center, the service-centered architecture, or the current Post-Phase-1 boundary.
 
+A later restrained Phase 2 V1 enhancement pack is now also implementation-complete and closure-ready.
+
+That Phase 2 V1 scope includes:
+
+- Pending review workbench
+- Capture list/detail plus restrained minimal Web entry
+- Expense formal consumption polish
+- Workbench Round 2 hierarchy and entry polish
+- Templates as entry-only work modes
+- local operability baseline for backup / restore, bounded import / export, runtime clarity, and daily-use readiness guidance
+
+That closure-ready pack is recorded in:
+
+- `docs/PHASE2_V1_CLOSURE_BASELINE.md`
+
+This does not mean the whole product or the whole frontend is complete.
+It records a bounded Phase 2 V1 closure-ready state only.
+
 ## Desktop And Telegram Reality Check
 
 Desktop and Telegram remain intentionally narrow:
@@ -130,11 +153,12 @@ For current work, use this order:
 1. `docs/POST_PHASE1_BASELINE.md`
 2. `docs/DEVELOPMENT_ENTRYPOINTS.md`
 3. `docs/WEB_CONSUMPTION_BASELINE.md`
-4. `docs/PHASE1_SUMMARY.md`
-5. `docs/ARCHITECTURE_RULES.md`
-6. `docs/ENV_CONVENTIONS.md`
-7. The specific `docs/API_*_BASELINE.md` or `docs/WEB_*_BASELINE.md` relevant to the task
-8. `docs/archive/README.md` and then `docs/archive/phase1/**` only when historical traceability is needed
+4. `docs/PHASE2_V1_CLOSURE_BASELINE.md` when the task touches current Phase 2 V1 Web scope
+5. `docs/PHASE1_SUMMARY.md`
+6. `docs/ARCHITECTURE_RULES.md`
+7. `docs/ENV_CONVENTIONS.md`
+8. The specific `docs/API_*_BASELINE.md` or `docs/WEB_*_BASELINE.md` relevant to the task
+9. `docs/archive/README.md` and then `docs/archive/phase1/**` only when historical traceability is needed
 
 ## Hot Docs Vs Archive
 

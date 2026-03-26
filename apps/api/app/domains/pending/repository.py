@@ -48,6 +48,15 @@ def get_pending_item_by_id(db: Session, pending_item_id: int) -> PendingItem | N
     return db.get(PendingItem, pending_item_id)
 
 
+def get_latest_pending_item_by_capture_id(db: Session, capture_id: int) -> PendingItem | None:
+    return (
+        db.query(PendingItem)
+        .filter(PendingItem.capture_id == capture_id)
+        .order_by(PendingItem.created_at.desc(), PendingItem.id.desc())
+        .first()
+    )
+
+
 def list_pending_items(
     db: Session,
     *,
@@ -144,6 +153,64 @@ def create_pending_review_action(
     db.add(action)
     db.flush()
     return action
+
+
+def list_pending_review_actions(
+    db: Session,
+    *,
+    pending_item_id: int,
+) -> list[PendingReviewAction]:
+    return (
+        db.query(PendingReviewAction)
+        .filter(PendingReviewAction.pending_item_id == pending_item_id)
+        .order_by(PendingReviewAction.created_at.desc(), PendingReviewAction.id.desc())
+        .all()
+    )
+
+
+def get_latest_review_action_timestamps(
+    db: Session,
+    *,
+    pending_item_ids: list[int],
+) -> dict[int, datetime]:
+    if not pending_item_ids:
+        return {}
+
+    rows = (
+        db.query(
+            PendingReviewAction.pending_item_id,
+            func.max(PendingReviewAction.created_at),
+        )
+        .filter(PendingReviewAction.pending_item_id.in_(pending_item_ids))
+        .group_by(PendingReviewAction.pending_item_id)
+        .all()
+    )
+    return {
+        int(pending_item_id): latest_created_at
+        for pending_item_id, latest_created_at in rows
+        if latest_created_at is not None
+    }
+
+
+def get_latest_pending_items_by_capture_ids(
+    db: Session,
+    *,
+    capture_ids: list[int],
+) -> dict[int, PendingItem]:
+    if not capture_ids:
+        return {}
+
+    rows = (
+        db.query(PendingItem)
+        .filter(PendingItem.capture_id.in_(capture_ids))
+        .order_by(PendingItem.capture_id.asc(), PendingItem.created_at.desc(), PendingItem.id.desc())
+        .all()
+    )
+
+    pending_items: dict[int, PendingItem] = {}
+    for row in rows:
+        pending_items.setdefault(int(row.capture_id), row)
+    return pending_items
 
 
 def count_pending_items(

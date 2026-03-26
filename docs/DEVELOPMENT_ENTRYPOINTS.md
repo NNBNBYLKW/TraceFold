@@ -22,7 +22,7 @@ For deeper detail, follow the linked baseline docs after this file.
 4. `docs/API_SEEDED_INTEGRATION_SMOKE.md`
 5. `docs/WEB_CONSUMPTION_BASELINE.md`
 
-## Current Web Entry (Post-Phase-1 Closed State)
+## Current Web Entry (Post-Phase-1 / Phase 2 V1 Closure-Ready State)
 
 For the current closed Web state, use this reading order:
 
@@ -33,10 +33,12 @@ For the current closed Web state, use this reading order:
 5. `docs/WEB_POST_PHASE1_OPTIMIZATION_PLAN.md`
 6. `docs/WEB_INFORMATION_HIERARCHY_CONTRACT.md`
 7. `docs/WEB_PP1_CROSS_PAGE_CONSISTENCY_AND_SMOKE_BASELINE.md`
+8. `docs/PHASE2_V1_CLOSURE_BASELINE.md`
 
 The first four define the current formal Web baseline.
 The optimization and hierarchy docs define the restrained Post-Phase-1 polish direction.
 The closure baseline records the currently closed state for the first Web optimization round.
+The Phase 2 V1 closure baseline records the currently implemented closure-ready expansion across Pending, Capture, Expense, Workbench Round 2, Templates restraint, and local operability.
 
 This closed round should not be implicitly reopened.
 Any further Web work should be opened as a new scoped task.
@@ -118,6 +120,9 @@ Check these API routes first:
 
 - `GET http://127.0.0.1:8000/api/healthz`
 - `GET http://127.0.0.1:8000/api/system/status`
+- `GET http://127.0.0.1:8000/api/system/local-operability`
+- `GET http://127.0.0.1:8000/api/capture?page=1&page_size=20`
+- `GET http://127.0.0.1:8000/api/pending?page=1&page_size=20`
 - `GET http://127.0.0.1:8000/api/expense?page=1&page_size=20`
 - `GET http://127.0.0.1:8000/api/knowledge?page=1&page_size=20`
 - `GET http://127.0.0.1:8000/api/health?page=1&page_size=20`
@@ -129,6 +134,8 @@ Check these API routes first:
 Then check these Web routes:
 
 - `http://127.0.0.1:3000/workbench`
+- `http://127.0.0.1:3000/capture`
+- `http://127.0.0.1:3000/pending`
 - `http://127.0.0.1:3000/expense`
 - `http://127.0.0.1:3000/knowledge`
 - `http://127.0.0.1:3000/health`
@@ -137,6 +144,8 @@ Expected baseline:
 
 - API starts cleanly on the seeded DB
 - runtime status is readable
+- local continuity status is readable
+- capture and pending list routes are readable
 - expenses, knowledge, and health are not empty
 - at least one health alert exists
 - at least one task run exists
@@ -206,5 +215,6 @@ Restart the Web dev server after fixing `.env`.
 - `docs/API_DEMO_SEED_BASELINE.md`
 - `docs/API_SEEDED_INTEGRATION_SMOKE.md`
 - `docs/WEB_CONSUMPTION_BASELINE.md`
+- `docs/PHASE2_V1_CLOSURE_BASELINE.md`
 - `docs/POST_PHASE1_A3_TASK2_STARTUP_BASELINE.md`
 - `docs/POST_PHASE1_A3_TASK4_VALIDATION_BASELINE.md`

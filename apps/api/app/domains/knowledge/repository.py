@@ -18,6 +18,24 @@ def get_knowledge_entry_by_id(db: Session, knowledge_id: int) -> KnowledgeEntry 
     return db.get(KnowledgeEntry, knowledge_id)
 
 
+def get_knowledge_entry_by_source_pending_id(db: Session, source_pending_id: int) -> KnowledgeEntry | None:
+    return (
+        db.query(KnowledgeEntry)
+        .filter(KnowledgeEntry.source_pending_id == source_pending_id)
+        .order_by(KnowledgeEntry.id.desc())
+        .first()
+    )
+
+
+def get_knowledge_entry_by_source_capture_id(db: Session, source_capture_id: int) -> KnowledgeEntry | None:
+    return (
+        db.query(KnowledgeEntry)
+        .filter(KnowledgeEntry.source_capture_id == source_capture_id)
+        .order_by(KnowledgeEntry.id.desc())
+        .first()
+    )
+
+
 def list_knowledge_entries(
     db: Session,
     *,

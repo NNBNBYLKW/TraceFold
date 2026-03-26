@@ -18,6 +18,24 @@ def get_health_record_by_id(db: Session, health_id: int) -> HealthRecord | None:
     return db.get(HealthRecord, health_id)
 
 
+def get_health_record_by_source_pending_id(db: Session, source_pending_id: int) -> HealthRecord | None:
+    return (
+        db.query(HealthRecord)
+        .filter(HealthRecord.source_pending_id == source_pending_id)
+        .order_by(HealthRecord.id.desc())
+        .first()
+    )
+
+
+def get_health_record_by_source_capture_id(db: Session, source_capture_id: int) -> HealthRecord | None:
+    return (
+        db.query(HealthRecord)
+        .filter(HealthRecord.source_capture_id == source_capture_id)
+        .order_by(HealthRecord.id.desc())
+        .first()
+    )
+
+
 def list_health_records(
     db: Session,
     *,

@@ -14,8 +14,10 @@ class PendingListItemRead(BaseModel):
     id: int
     status: str
     target_domain: str
+    summary: str | None = None
     reason_preview: str | None = None
     created_at: datetime
+    updated_at: datetime
     has_corrected_payload: bool
     source_capture_id: int
     is_next_to_review: bool
@@ -34,13 +36,20 @@ class PendingDetailRead(BaseModel):
     id: int
     status: str
     target_domain: str
+    summary: str | None = None
     reason: str | None = None
     proposed_payload_json: dict[str, Any] | list[Any] | str | int | float | bool | None = None
     corrected_payload_json: dict[str, Any] | list[Any] | str | int | float | bool | None = None
+    effective_payload_json: dict[str, Any] | list[Any] | str | int | float | bool | None = None
+    effective_payload_source: str
+    actionable: bool
     created_at: datetime
+    updated_at: datetime
     resolved_at: datetime | None = None
     source_capture_id: int
     parse_result_id: int
+    review_actions: list["PendingActionRead"]
+    formal_result: "PendingFormalResultRead | None" = None
 
 
 class PendingItemRead(BaseModel):
@@ -99,6 +108,13 @@ class PendingActionRead(BaseModel):
     after_payload_json: dict[str, Any] | list[Any] | str | int | float | bool | None = None
     note: str | None = None
     created_at: datetime
+
+
+class PendingFormalResultRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_domain: str
+    record_id: int
 
 
 class PendingActionResultRead(BaseModel):

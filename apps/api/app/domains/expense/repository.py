@@ -18,6 +18,24 @@ def get_expense_record_by_id(db: Session, expense_id: int) -> ExpenseRecord | No
     return db.get(ExpenseRecord, expense_id)
 
 
+def get_expense_record_by_source_pending_id(db: Session, source_pending_id: int) -> ExpenseRecord | None:
+    return (
+        db.query(ExpenseRecord)
+        .filter(ExpenseRecord.source_pending_id == source_pending_id)
+        .order_by(ExpenseRecord.id.desc())
+        .first()
+    )
+
+
+def get_expense_record_by_source_capture_id(db: Session, source_capture_id: int) -> ExpenseRecord | None:
+    return (
+        db.query(ExpenseRecord)
+        .filter(ExpenseRecord.source_capture_id == source_capture_id)
+        .order_by(ExpenseRecord.id.desc())
+        .first()
+    )
+
+
 def list_expense_records(
     db: Session,
     *,

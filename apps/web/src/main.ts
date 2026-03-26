@@ -4,8 +4,14 @@ import {
   acknowledgeAlert,
   ApiRequestError,
   applyWorkbenchTemplate,
+  confirmPending,
+  createLocalBackup,
   createWorkbenchShortcut,
   createWorkbenchTemplate,
+  discardPending,
+  exportCaptureBundle,
+  fetchCaptureDetail,
+  fetchCaptureList,
   fetchAiDerivationDetail,
   fetchAlertList,
   fetchDashboard,
@@ -15,21 +21,31 @@ import {
   fetchHealthList,
   fetchKnowledgeDetail,
   fetchKnowledgeList,
+  fetchLocalOperability,
   fetchRuntimeStatus,
   fetchWorkbenchHome,
   fetchWorkbenchPreferences,
   fetchWorkbenchShortcuts,
+  importCaptureBundle,
+  restoreLocalBackup,
+  submitCapture,
   updateWorkbenchShortcut,
   updateWorkbenchTemplate,
   deleteWorkbenchShortcut,
   fetchPendingDetail,
   fetchPendingList,
+  fixPending,
+  forceInsertPending,
   resolveAlert,
   requestAiDerivationRecompute,
 } from './api.ts'
 import type {
   AlertResultItem,
   AiDerivationResultItem,
+  CaptureDetail,
+  CaptureListItem,
+  CaptureListResponse,
+  CaptureSubmitResult,
   DashboardData,
   DashboardRecentActivity,
   ExpenseDetail,
@@ -38,10 +54,14 @@ import type {
   HealthListItem,
   KnowledgeDetail,
   KnowledgeListItem,
+  LocalOperabilityData,
   PaginatedResponse,
+  PendingActionResult,
   PendingDetail,
+  PendingFormalResult,
   PendingListItem,
   PendingListResponse,
+  PendingReviewAction,
   RuntimeStatusData,
   WorkbenchHomeData,
   WorkbenchPreferences,
@@ -69,6 +89,49 @@ interface FailureSignal {
   formalFactsNote: string | null
 }
 
+interface CaptureSubmissionFeedback {
+  kind: 'success' | 'error'
+  title: string
+  message: string
+  captureId?: number
+}
+
+interface CaptureUiState {
+  feedback: CaptureSubmissionFeedback | null
+  submissionDraft: {
+    rawText: string
+    sourceRef: string
+  }
+}
+
+interface PendingReviewFeedback {
+  kind: 'success' | 'error'
+  title: string
+  message: string
+}
+
+interface PendingUiState {
+  feedbackById: Record<number, PendingReviewFeedback | undefined>
+  fixDraftById: Record<number, string | undefined>
+}
+
+interface LocalOperabilityFeedback {
+  kind: 'success' | 'error'
+  title: string
+  message: string
+  details?: string[]
+}
+
+interface LocalOperabilityUiState {
+  feedback: LocalOperabilityFeedback | null
+  backupDestinationPath: string
+  restoreSourcePath: string
+  restoreCreateSafetyBackup: boolean
+  restoreConfirmed: boolean
+  exportDestinationPath: string
+  importSourcePath: string
+}
+
 interface KnowledgeAiSummaryState {
   kind: 'ready' | 'pending' | 'failed' | 'invalidated' | 'not-generated' | 'unavailable'
   derivation: AiDerivationResultItem | null
@@ -76,6 +139,7 @@ interface KnowledgeAiSummaryState {
 }
 
 type AlertActionType = 'acknowledge' | 'resolve'
+type PendingReviewActionType = 'confirm' | 'discard' | 'force_insert'
 
 interface BaseListQuery {
   page: number
@@ -89,6 +153,11 @@ interface BaseListQuery {
 interface PendingListQuery extends BaseListQuery {
   status: string
   targetDomain: string
+}
+
+interface CaptureListQuery extends BaseListQuery {
+  status: string
+  sourceType: string
 }
 
 interface ExpenseListQuery extends BaseListQuery {
@@ -110,7 +179,14 @@ interface HealthListQuery extends BaseListQuery {
 type Route =
   | { kind: 'workbench'; section: NavSection; pageTitle: string; documentTitle: string }
   | { kind: 'dashboard'; section: NavSection; pageTitle: string; documentTitle: string }
-  | { kind: 'capture'; section: NavSection; pageTitle: string; documentTitle: string }
+  | { kind: 'capture-list'; section: NavSection; pageTitle: string; documentTitle: string }
+  | {
+      kind: 'capture-detail'
+      section: NavSection
+      pageTitle: string
+      documentTitle: string
+      id: string
+    }
   | { kind: 'pending-list'; section: NavSection; pageTitle: string; documentTitle: string }
   | {
       kind: 'pending-detail'
@@ -154,10 +230,30 @@ if (!appElement) {
 const app = appElement
 
 let renderToken = 0
+const captureUiState: CaptureUiState = {
+  feedback: null,
+  submissionDraft: {
+    rawText: '',
+    sourceRef: '',
+  },
+}
 const workbenchUiState: WorkbenchUiState = {
   editingTemplateId: null,
   editingShortcutId: null,
   flash: null,
+}
+const pendingUiState: PendingUiState = {
+  feedbackById: {},
+  fixDraftById: {},
+}
+const localOperabilityUiState: LocalOperabilityUiState = {
+  feedback: null,
+  backupDestinationPath: '',
+  restoreSourcePath: '',
+  restoreCreateSafetyBackup: true,
+  restoreConfirmed: false,
+  exportDestinationPath: '',
+  importSourcePath: '',
 }
 
 window.addEventListener('popstate', () => {
@@ -218,7 +314,7 @@ function parseRoute(pathname: string): Route {
           documentTitle: 'Dashboard',
         }
       case 'capture':
-        return { kind: 'capture', section: 'capture', pageTitle: 'Capture', documentTitle: 'Capture' }
+        return { kind: 'capture-list', section: 'capture', pageTitle: 'Capture', documentTitle: 'Capture' }
       case 'pending':
         return { kind: 'pending-list', section: 'pending', pageTitle: 'Pending', documentTitle: 'Pending' }
       case 'expense':
@@ -238,6 +334,15 @@ function parseRoute(pathname: string): Route {
   }
 
   if (parts.length === 2) {
+    if (parts[0] === 'capture') {
+      return {
+        kind: 'capture-detail',
+        section: 'capture',
+        pageTitle: 'Capture Record',
+        documentTitle: 'Capture Record',
+        id: parts[1],
+      }
+    }
     if (parts[0] === 'pending') {
       return {
         kind: 'pending-detail',
@@ -285,8 +390,10 @@ async function renderRoute(route: Exclude<Route, { kind: 'redirect' }>): Promise
       return renderWorkbenchPage()
     case 'dashboard':
       return renderDashboardPage()
-    case 'capture':
-      return renderPlaceholderPage(route.pageTitle, 'Capture view is not implemented yet.')
+    case 'capture-list':
+      return renderCaptureListPage()
+    case 'capture-detail':
+      return renderCaptureDetailPage(route.id)
     case 'pending-list':
       return renderPendingListPage()
     case 'pending-detail':
@@ -318,12 +425,13 @@ async function renderDashboardPage(): Promise<string> {
 }
 
 async function renderWorkbenchPage(): Promise<string> {
-  const [homeResult, dashboardResult, shortcutsResult, preferencesResult, runtimeStatusResult] = await Promise.allSettled([
+  const [homeResult, dashboardResult, shortcutsResult, preferencesResult, runtimeStatusResult, localOperabilityResult] = await Promise.allSettled([
     fetchWorkbenchHome(),
     fetchDashboard(),
     fetchWorkbenchShortcuts(),
     fetchWorkbenchPreferences(),
     fetchRuntimeStatus(),
+    fetchLocalOperability(),
   ])
 
   if (homeResult.status === 'rejected') {
@@ -336,6 +444,10 @@ async function renderWorkbenchPage(): Promise<string> {
         runtimeStatusResult.status === 'fulfilled' ? runtimeStatusResult.value : null,
         runtimeStatusResult.status === 'rejected' ? toErrorMessage(runtimeStatusResult.reason) : null,
       )}
+      ${renderLocalOperabilitySection(
+        localOperabilityResult.status === 'fulfilled' ? localOperabilityResult.value : null,
+        localOperabilityResult.status === 'rejected' ? toErrorMessage(localOperabilityResult.reason) : null,
+      )}
       ${renderUnavailableState('Workbench home is unavailable.', toErrorMessage(homeResult.reason))}
     `)
   }
@@ -346,11 +458,13 @@ async function renderWorkbenchPage(): Promise<string> {
     shortcutsResult.status === 'fulfilled' ? shortcutsResult.value.items : [],
     preferencesResult.status === 'fulfilled' ? preferencesResult.value : null,
     runtimeStatusResult.status === 'fulfilled' ? runtimeStatusResult.value : null,
+    localOperabilityResult.status === 'fulfilled' ? localOperabilityResult.value : null,
     {
       dashboardError: dashboardResult.status === 'rejected' ? toErrorMessage(dashboardResult.reason) : null,
       shortcutsError: shortcutsResult.status === 'rejected' ? toErrorMessage(shortcutsResult.reason) : null,
       preferencesError: preferencesResult.status === 'rejected' ? toErrorMessage(preferencesResult.reason) : null,
       runtimeStatusError: runtimeStatusResult.status === 'rejected' ? toErrorMessage(runtimeStatusResult.reason) : null,
+      localOperabilityError: localOperabilityResult.status === 'rejected' ? toErrorMessage(localOperabilityResult.reason) : null,
     },
   )
 }
@@ -361,11 +475,13 @@ function renderWorkbenchView(
   allShortcuts: WorkbenchShortcut[],
   preferences: WorkbenchPreferences | null,
   runtimeStatus: RuntimeStatusData | null,
+  localOperability: LocalOperabilityData | null,
   errors: {
     dashboardError: string | null
     shortcutsError: string | null
     preferencesError: string | null
     runtimeStatusError: string | null
+    localOperabilityError: string | null
   },
 ): string {
   const templates = home.templates
@@ -384,12 +500,13 @@ function renderWorkbenchView(
     })}
     ${renderWorkbenchFlash()}
     ${renderWorkbenchStateBanner(home, dashboard, errors.dashboardError)}
-    ${renderWorkbenchCurrentModeSection(home, activeTemplate, defaultTemplate, preferences, errors.preferencesError)}
-    ${renderWorkbenchDashboardSummarySection(dashboard, errors.dashboardError)}
+    ${renderWorkbenchCurrentModeSection(home, dashboard, activeTemplate, defaultTemplate, preferences, errors.preferencesError, errors.dashboardError)}
+    ${renderWorkbenchTemplatesSection(home, editingTemplate, defaultTemplate?.template_id ?? preferences?.default_template_id ?? null)}
     ${renderWorkbenchShortcutsSection(home, allShortcuts, editingShortcut, errors.shortcutsError)}
+    ${renderWorkbenchDashboardSummarySection(dashboard, errors.dashboardError)}
     ${renderWorkbenchRecentSection(home)}
-    ${renderWorkbenchTemplatesSection(home, editingTemplate)}
     ${renderRuntimeStatusSection(runtimeStatus, errors.runtimeStatusError)}
+    ${renderLocalOperabilitySection(localOperability, errors.localOperabilityError)}
   `)
 }
 
@@ -411,10 +528,12 @@ function renderWorkbenchFlash(): string {
 
 function renderWorkbenchCurrentModeSection(
   home: WorkbenchHomeData,
+  dashboard: DashboardData | null,
   activeTemplate: WorkbenchTemplate | null,
   defaultTemplate: WorkbenchTemplate | null,
   preferences: WorkbenchPreferences | null,
   preferencesError?: string | null,
+  dashboardError?: string | null,
 ): string {
   const currentModeHref = buildWorkbenchModeHref({
     default_module: home.current_mode.default_module,
@@ -425,7 +544,7 @@ function renderWorkbenchCurrentModeSection(
   return renderSectionShell(
     {
       title: '1. Current Mode',
-      copy: 'Current mode only changes entry context. It does not change formal record semantics.',
+      copy: 'Current mode only changes entry context. It does not change formal record semantics. It helps explain what to open next.',
       className: 'workbench-section section-shell--primary',
     },
     `
@@ -437,16 +556,24 @@ function renderWorkbenchCurrentModeSection(
               <span class="record-meta">Active mode</span>
             </div>
             <div class="inline-list">
+              ${activeTemplate ? renderBadge('Current mode') : ''}
               ${activeTemplate ? renderBadge(formatDomainLabel(activeTemplate.default_module)) : ''}
               ${activeTemplate?.template_type ? renderBadge(formatStatusLabel(activeTemplate.template_type), true) : ''}
             </div>
           </div>
           <p class="section-copy">${escapeHtml(activeTemplate?.description ?? 'Select a template to set the current work mode.')}</p>
           <div class="field-grid">
-            ${renderField('Default View', activeTemplate?.default_view_key ?? 'list')}
+            ${renderField('Entry Target', describeWorkbenchModeTarget(activeTemplate?.default_module ?? null, activeTemplate?.default_view_key ?? null))}
+            ${renderField('Default Entry Mode', defaultTemplate?.name ?? 'Not set')}
             ${renderField('Scoped Shortcuts', String(activeTemplate?.scoped_shortcut_ids.length ?? 0))}
-            ${renderField('Query Defaults', summarizeQuery(activeTemplate?.default_query_json))}
+            ${renderField('Default Filters', summarizeQuery(activeTemplate?.default_query_json))}
+            ${
+              preferences
+                ? renderField('Preferences Updated', formatDateTime(preferences.updated_at))
+                : ''
+            }
           </div>
+          ${preferencesError ? `<p class="section-copy">${escapeHtml(preferencesError)}</p>` : ''}
           ${
             currentModeHref
               ? `<div class="filter-actions"><a class="record-action" href="${escapeHtml(currentModeHref)}" data-nav="true">Open current context</a></div>`
@@ -456,24 +583,28 @@ function renderWorkbenchCurrentModeSection(
         <article class="record-card">
           <div class="record-card__header">
             <div class="record-card__title-group">
-              <h3>${escapeHtml(defaultTemplate?.name ?? 'No default mode')}</h3>
-              <span class="record-meta">Default mode</span>
+              <h3>What matters now</h3>
+              <span class="record-meta">Entry cues</span>
             </div>
-            ${
-              preferences
-                ? `<span class="record-meta">Updated ${escapeHtml(formatDateTime(preferences.updated_at))}</span>`
-                : ''
-            }
           </div>
           <p class="section-copy">${
-            defaultTemplate
-              ? `Default entry context remains API-defined and can be changed only through workbench APIs.`
-              : 'No default template is configured.'
+            dashboardError
+              ? 'Dashboard support is temporarily unavailable, but mode context and entry paths remain readable.'
+              : 'These are support cues for choosing the next page. They do not turn Workbench into a dashboard center.'
           }</p>
-          ${preferencesError ? `<p class="section-copy">${escapeHtml(preferencesError)}</p>` : ''}
           <div class="field-grid">
-            ${renderField('Default Module', defaultTemplate ? formatDomainLabel(defaultTemplate.default_module) : 'Not set')}
-            ${renderField('Enabled', defaultTemplate ? formatBoolean(defaultTemplate.is_enabled) : 'No')}
+            ${renderField('Open Pending', dashboard ? String(dashboard.pending_summary.open_count) : 'Unavailable')}
+            ${renderField('Open Alerts', dashboard ? String(dashboard.alert_summary.open_count) : 'Unavailable')}
+            ${renderField('Pinned Entry Paths', String(home.pinned_shortcuts.length))}
+            ${renderField('Recent Contexts', String(home.recent_contexts.length))}
+          </div>
+          <div class="filter-actions">
+            <a class="record-action" href="/pending" data-nav="true">Open pending review</a>
+            ${
+              currentModeHref
+                ? `<a class="record-action" href="${escapeHtml(currentModeHref)}" data-nav="true">Continue current mode</a>`
+                : '<a class="record-action" href="/dashboard" data-nav="true">Open dashboard summary</a>'
+            }
           </div>
         </article>
       </div>
@@ -481,28 +612,52 @@ function renderWorkbenchCurrentModeSection(
   )
 }
 
-function renderWorkbenchTemplatesSection(home: WorkbenchHomeData, editingTemplate: WorkbenchTemplate | null): string {
+function renderWorkbenchTemplatesSection(
+  home: WorkbenchHomeData,
+  editingTemplate: WorkbenchTemplate | null,
+  defaultTemplateId: number | null,
+): string {
   const builtinTemplates = home.templates.filter((template) => template.template_type === 'builtin')
   const userTemplates = home.templates.filter((template) => template.template_type === 'user')
 
   return renderSectionShell(
     {
-      title: '5. Templates',
-      copy: 'Templates are named work modes. Builtin templates are read-only. User templates stay lightweight.',
+      title: '2. Template Work Modes',
+      copy:
+        'Templates are structured work-mode entry points. They set shared entry context and default reads; they do not execute actions or automate workflows.',
       className: 'workbench-section section-shell--primary',
     },
     `
-      <div class="workbench-card-grid">
-        ${builtinTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id)).join('')}
-        ${userTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id)).join('')}
+      <div class="subsection">
+        <h3>Built-in modes</h3>
+        <p class="section-copy">Stable workbench entry points for common domains and review contexts.</p>
+        <div class="workbench-card-grid">
+          ${builtinTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id, defaultTemplateId)).join('')}
+        </div>
+      </div>
+      <div class="subsection">
+        <h3>User modes</h3>
+        <p class="section-copy">Lightweight repeated views built from existing read filters and entry defaults.</p>
+        ${
+          userTemplates.length > 0
+            ? `<div class="workbench-card-grid">
+                ${userTemplates.map((template) => renderWorkbenchTemplateCard(template, home.current_mode.template_id, defaultTemplateId)).join('')}
+              </div>`
+            : renderEmptyState('No user work modes yet.')
+        }
       </div>
       ${renderWorkbenchTemplateForm(home.templates, editingTemplate)}
     `,
   )
 }
 
-function renderWorkbenchTemplateCard(template: WorkbenchTemplate, activeTemplateId: number | null): string {
+function renderWorkbenchTemplateCard(
+  template: WorkbenchTemplate,
+  activeTemplateId: number | null,
+  defaultTemplateId: number | null,
+): string {
   const isActive = template.template_id === activeTemplateId
+  const isDefault = template.template_id === defaultTemplateId
   return `
     <article class="record-card${isActive ? ' record-card--priority' : ''}">
       <div class="record-card__header">
@@ -512,28 +667,42 @@ function renderWorkbenchTemplateCard(template: WorkbenchTemplate, activeTemplate
         </div>
         <div class="inline-list">
           ${isActive ? renderBadge('Active') : ''}
+          ${isDefault ? renderBadge('Default entry', true) : ''}
           ${renderBadge(formatStatusLabel(template.template_type), true)}
           ${renderBadge(formatDomainLabel(template.default_module))}
           ${renderStatusBadge(template.is_enabled ? 'open' : 'dismissed')}
         </div>
       </div>
       <div class="field-grid">
-        ${renderField('Default View', template.default_view_key ?? 'list')}
-        ${renderField('Query Defaults', summarizeQuery(template.default_query_json))}
-        ${renderField('Scoped Shortcuts', String(template.scoped_shortcut_ids.length))}
+        ${renderField('Entry Target', describeWorkbenchModeTarget(template.default_module, template.default_view_key))}
+        ${renderField('Default Filters', summarizeQuery(template.default_query_json))}
+        ${renderField('Scoped Entry Paths', String(template.scoped_shortcut_ids.length))}
+        ${renderField('Updated', formatDateTime(template.updated_at))}
       </div>
       <div class="filter-actions">
-        <button class="primary-button" type="button" data-workbench-action="template-apply" data-template-id="${template.template_id}">
-          Apply
+        <button
+          class="primary-button"
+          type="button"
+          data-workbench-action="template-apply"
+          data-template-id="${template.template_id}"
+          ${isActive || !template.is_enabled ? 'disabled' : ''}
+        >
+          ${isActive ? 'Current mode' : 'Set current mode'}
         </button>
-        <button class="secondary-button" type="button" data-workbench-action="template-apply-default" data-template-id="${template.template_id}">
-          Apply as default
+        <button
+          class="secondary-button"
+          type="button"
+          data-workbench-action="template-apply-default"
+          data-template-id="${template.template_id}"
+          ${isDefault || !template.is_enabled ? 'disabled' : ''}
+        >
+          ${isDefault ? 'Default entry' : 'Set default entry'}
         </button>
         ${
           template.template_type === 'user'
             ? `
                 <button class="secondary-button" type="button" data-workbench-action="template-edit" data-template-id="${template.template_id}">
-                  Edit
+                  Edit mode
                 </button>
                 <button
                   class="secondary-button"
@@ -542,7 +711,7 @@ function renderWorkbenchTemplateCard(template: WorkbenchTemplate, activeTemplate
                   data-template-id="${template.template_id}"
                   data-enabled="${template.is_enabled ? 'true' : 'false'}"
                 >
-                  ${template.is_enabled ? 'Disable' : 'Enable'}
+                  ${template.is_enabled ? 'Disable mode' : 'Enable mode'}
                 </button>
               `
             : ''
@@ -556,12 +725,12 @@ function renderWorkbenchTemplateForm(
   templates: WorkbenchTemplate[],
   editingTemplate: WorkbenchTemplate | null,
 ): string {
-  const title = editingTemplate ? 'Edit user template' : 'Create user template'
+  const title = editingTemplate ? 'Edit user work mode' : 'Create user work mode'
   return `
     <section class="workbench-form-panel">
       <div class="section-header">
         <h3>${escapeHtml(title)}</h3>
-        <p class="section-copy">Keep template defaults limited to existing formal read query semantics.</p>
+        <p class="section-copy">User work modes stay entry-only. Keep them limited to existing formal read query semantics.</p>
       </div>
       <form class="filter-form" data-workbench-form="true" data-workbench-kind="template">
         <input type="hidden" name="template_id" value="${editingTemplate?.template_id ?? ''}" />
@@ -584,7 +753,7 @@ function renderWorkbenchTemplateForm(
           <span>Enabled</span>
         </label>
         <div class="filter-actions">
-          <button class="primary-button" type="submit">${editingTemplate ? 'Save template' : 'Create template'}</button>
+          <button class="primary-button" type="submit">${editingTemplate ? 'Save work mode' : 'Create work mode'}</button>
           ${
             editingTemplate
               ? '<button class="secondary-button" type="button" data-workbench-action="template-cancel">Cancel edit</button>'
@@ -604,8 +773,8 @@ function renderWorkbenchShortcutsSection(
 ): string {
   return renderSectionShell(
     {
-      title: '3. Fixed Shortcuts',
-      copy: 'Use shortcuts to move into the next formal page or work context. They do not run action chains.',
+      title: '3. Common Entry Paths',
+      copy: 'After choosing a mode, use shortcuts to open the next formal page or filtered view. They do not run action chains.',
       className: 'workbench-section section-shell--secondary',
     },
     `
@@ -711,8 +880,8 @@ function renderWorkbenchShortcutForm(editingShortcut: WorkbenchShortcut | null):
 function renderWorkbenchRecentSection(home: WorkbenchHomeData): string {
   return renderSectionShell(
     {
-      title: '4. Recent Context',
-      copy: 'Recent helps you continue active work after you know where to go next. It is not a history log or audit timeline.',
+      title: '5. Recent Context',
+      copy: 'Recent helps you resume active work after you already know the next mode or page. It is contextual support, not a history log or audit timeline.',
       className: 'workbench-section section-shell--secondary',
     },
     `
@@ -751,8 +920,8 @@ function renderWorkbenchRecentCard(recent: WorkbenchHomeData['recent_contexts'][
 function renderWorkbenchDashboardSummarySection(dashboard: DashboardData | null, errorMessage?: string | null): string {
   return renderSectionShell(
     {
-      title: '2. Dashboard Summary',
-      copy: 'Summary stays summary. Use it to see what matters now before stepping into a formal page.',
+      title: '4. Summary Support',
+      copy: 'Summary stays support. Use it after choosing a mode or entry path to confirm where pressure or recent movement exists.',
       className: 'workbench-section section-shell--support',
     },
     `
@@ -775,7 +944,7 @@ function renderWorkbenchDashboardSummarySection(dashboard: DashboardData | null,
                   <div class="summary-grid">
                     <article class="summary-card">
                       <div class="summary-card__header">
-                        <h3>Pending</h3>
+                        <h3>Pending review</h3>
                         <a class="record-action" href="/pending" data-nav="true">Open</a>
                       </div>
                       <p class="summary-value">${dashboard.pending_summary.open_count}</p>
@@ -791,27 +960,20 @@ function renderWorkbenchDashboardSummarySection(dashboard: DashboardData | null,
                     </article>
                     <article class="summary-card">
                       <div class="summary-card__header">
-                        <h3>Expense</h3>
-                        <a class="record-action" href="/expense" data-nav="true">Open</a>
+                        <h3>Formal record pulse</h3>
+                        <a class="record-action" href="/dashboard" data-nav="true">Dashboard</a>
                       </div>
-                      <p class="summary-value">${dashboard.expense_summary.created_in_current_month}</p>
-                      <p class="section-copy">Created this month.</p>
-                    </article>
-                    <article class="summary-card">
-                      <div class="summary-card__header">
-                        <h3>Knowledge</h3>
-                        <a class="record-action" href="/knowledge" data-nav="true">Open</a>
+                      <p class="section-copy">Formal records stay primary on their own pages. This support block only helps you pick the next domain to open.</p>
+                      <div class="field-grid">
+                        ${renderField('Expense This Month', String(dashboard.expense_summary.created_in_current_month))}
+                        ${renderField('Knowledge Last 7 Days', String(dashboard.knowledge_summary.created_in_last_7_days))}
+                        ${renderField('Health Last 7 Days', String(dashboard.health_summary.created_in_last_7_days))}
                       </div>
-                      <p class="summary-value">${dashboard.knowledge_summary.created_in_last_7_days}</p>
-                      <p class="section-copy">Created in the last 7 days.</p>
-                    </article>
-                    <article class="summary-card">
-                      <div class="summary-card__header">
-                        <h3>Health</h3>
-                        <a class="record-action" href="/health" data-nav="true">Open</a>
+                      <div class="filter-actions">
+                        <a class="record-action" href="/expense" data-nav="true">Expense</a>
+                        <a class="record-action" href="/knowledge" data-nav="true">Knowledge</a>
+                        <a class="record-action" href="/health" data-nav="true">Health</a>
                       </div>
-                      <p class="summary-value">${dashboard.health_summary.created_in_last_7_days}</p>
-                      <p class="section-copy">Created in the last 7 days.</p>
                     </article>
                   </div>
                 `
@@ -825,6 +987,19 @@ function renderWorkbenchDashboardSummarySection(dashboard: DashboardData | null,
       }
     `,
   )
+}
+
+function describeWorkbenchModeTarget(moduleValue: string | null, viewKey: string | null): string {
+  if (!moduleValue) {
+    return 'Not set'
+  }
+
+  const moduleLabel = formatDomainLabel(moduleValue)
+  if (!viewKey) {
+    return moduleLabel
+  }
+
+  return `${moduleLabel} / ${viewKey}`
 }
 
 async function handleWorkbenchAction(button: HTMLButtonElement): Promise<void> {
@@ -847,14 +1022,14 @@ async function handleWorkbenchAction(button: HTMLButtonElement): Promise<void> {
       case 'template-apply': {
         const templateId = Number.parseInt(button.dataset.templateId || '', 10)
         await applyWorkbenchTemplate(templateId, { set_as_default: false })
-        workbenchUiState.flash = { kind: 'success', message: 'Template applied.' }
+        workbenchUiState.flash = { kind: 'success', message: 'Current work mode updated.' }
         await renderApp()
         return
       }
       case 'template-apply-default': {
         const templateId = Number.parseInt(button.dataset.templateId || '', 10)
         await applyWorkbenchTemplate(templateId, { set_as_default: true })
-        workbenchUiState.flash = { kind: 'success', message: 'Template applied as active and default.' }
+        workbenchUiState.flash = { kind: 'success', message: 'Work mode updated and set as the default entry.' }
         await renderApp()
         return
       }
@@ -862,7 +1037,7 @@ async function handleWorkbenchAction(button: HTMLButtonElement): Promise<void> {
         const templateId = Number.parseInt(button.dataset.templateId || '', 10)
         const enabled = button.dataset.enabled === 'true'
         await updateWorkbenchTemplate(templateId, { is_enabled: !enabled })
-        workbenchUiState.flash = { kind: 'success', message: enabled ? 'Template disabled.' : 'Template enabled.' }
+        workbenchUiState.flash = { kind: 'success', message: enabled ? 'Work mode disabled.' : 'Work mode enabled.' }
         await renderApp()
         return
       }
@@ -918,10 +1093,10 @@ async function handleWorkbenchSubmit(form: HTMLFormElement): Promise<void> {
       const payload = buildTemplatePayload(formData)
       if (templateId) {
         await updateWorkbenchTemplate(templateId, payload)
-        workbenchUiState.flash = { kind: 'success', message: 'Template saved.' }
+        workbenchUiState.flash = { kind: 'success', message: 'Work mode saved.' }
       } else {
         await createWorkbenchTemplate(payload)
-        workbenchUiState.flash = { kind: 'success', message: 'Template created.' }
+        workbenchUiState.flash = { kind: 'success', message: 'Work mode created.' }
       }
       workbenchUiState.editingTemplateId = null
       await renderApp()
@@ -1008,6 +1183,26 @@ function buildShortcutPayload(formData: FormData): Record<string, unknown> {
   }
   payload.target_payload_json = targetPayload
   return payload
+}
+
+async function renderCaptureListPage(): Promise<string> {
+  const query = parseCaptureListQuery(new URLSearchParams(window.location.search))
+
+  try {
+    const response = await fetchCaptureList(buildCaptureApiParams(query))
+    return renderCaptureListView(query, response)
+  } catch (error) {
+    return renderCaptureListView(query, null, toErrorMessage(error))
+  }
+}
+
+async function renderCaptureDetailPage(id: string): Promise<string> {
+  try {
+    const detail = await fetchCaptureDetail(id)
+    return renderCaptureDetailView(detail)
+  } catch (error) {
+    return renderDetailErrorView('Capture Record', '/capture', 'Capture', toErrorMessage(error))
+  }
 }
 
 async function renderPendingListPage(): Promise<string> {
@@ -1118,6 +1313,17 @@ function handleClick(event: MouseEvent): void {
     return
   }
 
+  const pendingActionButton = target.closest<HTMLButtonElement>('[data-pending-action]')
+  if (pendingActionButton) {
+    const action = pendingActionButton.dataset.pendingAction
+    const pendingId = Number.parseInt(pendingActionButton.dataset.pendingId || '', 10)
+    if ((action === 'confirm' || action === 'discard' || action === 'force_insert') && Number.isFinite(pendingId)) {
+      event.preventDefault()
+      void handlePendingReviewAction(pendingActionButton, pendingId, action)
+    }
+    return
+  }
+
   const workbenchActionButton = target.closest<HTMLButtonElement>('[data-workbench-action]')
   if (workbenchActionButton) {
     event.preventDefault()
@@ -1194,9 +1400,27 @@ function handleSubmit(event: SubmitEvent): void {
     return
   }
 
+  if (form.dataset.captureForm === 'submit') {
+    event.preventDefault()
+    void handleCaptureSubmit(form)
+    return
+  }
+
+  if (form.dataset.pendingForm === 'fix') {
+    event.preventDefault()
+    void handlePendingFixSubmit(form)
+    return
+  }
+
   if (form.dataset.workbenchForm === 'true') {
     event.preventDefault()
     void handleWorkbenchSubmit(form)
+    return
+  }
+
+  if (form.dataset.systemForm) {
+    event.preventDefault()
+    void handleSystemFormSubmit(form)
     return
   }
 
@@ -1223,6 +1447,201 @@ function handleSubmit(event: SubmitEvent): void {
 
   params.set('page', '1')
   navigate(buildUrl(path, params))
+}
+
+async function handleCaptureSubmit(form: HTMLFormElement): Promise<void> {
+  const textarea = form.querySelector<HTMLTextAreaElement>('textarea[name="raw_text"]')
+  const sourceRefInput = form.querySelector<HTMLInputElement>('input[name="source_ref"]')
+  const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')
+
+  const rawText = textarea?.value.trim() || ''
+  const sourceRef = sourceRefInput?.value.trim() || ''
+
+  captureUiState.submissionDraft = {
+    rawText,
+    sourceRef,
+  }
+  captureUiState.feedback = null
+
+  if (!rawText) {
+    captureUiState.feedback = {
+      kind: 'error',
+      title: 'Capture could not be submitted.',
+      message: 'Plain text input is required before a capture record can be created.',
+    }
+    await renderApp()
+    return
+  }
+
+  if (submitButton) {
+    submitButton.disabled = true
+    submitButton.textContent = 'Submitting capture...'
+  }
+  if (textarea) {
+    textarea.disabled = true
+  }
+  if (sourceRefInput) {
+    sourceRefInput.disabled = true
+  }
+
+  try {
+    const result = await submitCapture({
+      raw_text: rawText,
+      source_type: 'manual',
+      source_ref: sourceRef || null,
+    })
+    captureUiState.submissionDraft = {
+      rawText: '',
+      sourceRef: '',
+    }
+    captureUiState.feedback = buildCaptureSubmissionSuccessFeedback(result)
+    navigate(`/capture/${result.capture_id}`)
+  } catch (error) {
+    captureUiState.feedback = {
+      kind: 'error',
+      title: 'Capture could not be submitted.',
+      message: toErrorMessage(error),
+    }
+    await renderApp()
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false
+      submitButton.textContent = 'Create Capture Record'
+    }
+    if (textarea) {
+      textarea.disabled = false
+    }
+    if (sourceRefInput) {
+      sourceRefInput.disabled = false
+    }
+  }
+}
+
+async function handleSystemFormSubmit(form: HTMLFormElement): Promise<void> {
+  const kind = form.dataset.systemForm
+  if (!kind) {
+    return
+  }
+
+  const formData = new FormData(form)
+  localOperabilityUiState.feedback = null
+  localOperabilityUiState.backupDestinationPath = optionalFormValue(formData, 'destination_path') || ''
+  localOperabilityUiState.restoreSourcePath = optionalFormValue(formData, 'source_path') || ''
+  localOperabilityUiState.restoreCreateSafetyBackup = formData.get('create_safety_backup') === 'on'
+  localOperabilityUiState.restoreConfirmed = formData.get('confirm_restore') === 'on'
+  localOperabilityUiState.exportDestinationPath = optionalFormValue(formData, 'export_destination_path') || ''
+  localOperabilityUiState.importSourcePath = optionalFormValue(formData, 'import_source_path') || ''
+
+  if (kind === 'restore' && !localOperabilityUiState.restoreConfirmed) {
+    localOperabilityUiState.feedback = {
+      kind: 'error',
+      title: 'Restore could not start.',
+      message: 'Restore must be explicitly confirmed because it replaces the active local SQLite database file.',
+    }
+    await renderApp()
+    return
+  }
+
+  const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')
+  const originalLabel = submitButton?.textContent || ''
+  if (submitButton) {
+    submitButton.textContent = describeSystemFormRunningLabel(kind)
+  }
+  setFormControlsDisabled(form, true)
+
+  try {
+    if (kind === 'backup') {
+      const result = await createLocalBackup(localOperabilityUiState.backupDestinationPath || undefined)
+      localOperabilityUiState.feedback = {
+        kind: 'success',
+        title: 'Local backup created.',
+        message: `SQLite backup was written to ${result.backup_path}.`,
+        details: [
+          `Active database: ${result.database_path}`,
+          `Backup size: ${formatByteSize(result.file_size_bytes)}`,
+          `Created at: ${formatDateTime(result.created_at)}`,
+        ],
+      }
+      localOperabilityUiState.backupDestinationPath = ''
+    } else if (kind === 'restore') {
+      const result = await restoreLocalBackup(
+        localOperabilityUiState.restoreSourcePath,
+        localOperabilityUiState.restoreCreateSafetyBackup,
+      )
+      localOperabilityUiState.feedback = {
+        kind: 'success',
+        title: 'Local database restored.',
+        message: `SQLite database was restored from ${result.source_path}.`,
+        details: [
+          `Active database: ${result.database_path}`,
+          result.safety_backup_path ? `Safety backup: ${result.safety_backup_path}` : 'Safety backup was skipped.',
+          `Restored at: ${formatDateTime(result.restored_at)}`,
+        ],
+      }
+      localOperabilityUiState.restoreConfirmed = false
+    } else if (kind === 'export') {
+      const result = await exportCaptureBundle(localOperabilityUiState.exportDestinationPath || undefined)
+      localOperabilityUiState.feedback = {
+        kind: 'success',
+        title: 'Capture bundle exported.',
+        message: `Bounded capture transfer file was written to ${result.export_path}.`,
+        details: [
+          `Included capture items: ${String(result.item_count)}`,
+          `Skipped items without raw text: ${String(result.skipped_count)}`,
+          `Created at: ${formatDateTime(result.created_at)}`,
+        ],
+      }
+      localOperabilityUiState.exportDestinationPath = ''
+    } else if (kind === 'import') {
+      const result = await importCaptureBundle(localOperabilityUiState.importSourcePath)
+      localOperabilityUiState.feedback = {
+        kind: 'success',
+        title: 'Capture bundle imported.',
+        message: `Capture bundle import created ${result.imported_count} new capture records through the existing intake path.`,
+        details: [
+          `Pending review routes: ${String(result.pending_count)}`,
+          `Direct committed routes: ${String(result.committed_count)}`,
+          `Imported at: ${formatDateTime(result.imported_at)}`,
+        ],
+      }
+    }
+    await renderApp()
+  } catch (error) {
+    localOperabilityUiState.feedback = {
+      kind: 'error',
+      title: 'Local continuity action failed.',
+      message: toErrorMessage(error),
+    }
+    await renderApp()
+  } finally {
+    setFormControlsDisabled(form, false)
+    if (submitButton) {
+      submitButton.textContent = originalLabel
+    }
+  }
+}
+
+function setFormControlsDisabled(form: HTMLFormElement, disabled: boolean): void {
+  form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>(
+    'input, textarea, select, button',
+  ).forEach((element) => {
+    element.disabled = disabled
+  })
+}
+
+function describeSystemFormRunningLabel(kind: string): string {
+  switch (kind) {
+    case 'backup':
+      return 'Creating backup...'
+    case 'restore':
+      return 'Restoring database...'
+    case 'export':
+      return 'Exporting capture bundle...'
+    case 'import':
+      return 'Importing capture bundle...'
+    default:
+      return 'Working...'
+  }
 }
 
 function navigate(path: string, options: { replace?: boolean } = {}): void {
@@ -1343,19 +1762,6 @@ function renderLoadingPage(title: string): string {
   `)
 }
 
-function renderPlaceholderPage(title: string, message: string): string {
-  return renderPageShell(`
-    ${renderPageHeaderBlock({ title })}
-    ${renderSectionShell(
-      {
-        title: 'Placeholder',
-        className: 'section-shell--contextual',
-      },
-      `<p class="placeholder-copy">${escapeHtml(message)}</p>`,
-    )}
-  `)
-}
-
 async function handleAiDerivationAction(
   button: HTMLButtonElement,
   recordId: number,
@@ -1396,6 +1802,97 @@ async function handleAlertAction(
   } finally {
     button.disabled = false
     button.textContent = originalLabel
+  }
+}
+
+async function handlePendingReviewAction(
+  button: HTMLButtonElement,
+  pendingId: number,
+  action: PendingReviewActionType,
+): Promise<void> {
+  const originalLabel = button.textContent || ''
+  button.disabled = true
+  button.textContent = describePendingActionRunningLabel(action)
+  pendingUiState.feedbackById[pendingId] = undefined
+
+  try {
+    const result =
+      action === 'confirm'
+        ? await confirmPending(pendingId)
+        : action === 'discard'
+          ? await discardPending(pendingId)
+          : await forceInsertPending(pendingId)
+
+    pendingUiState.feedbackById[pendingId] = buildPendingActionSuccessFeedback(result)
+    await renderApp()
+  } catch (error) {
+    pendingUiState.feedbackById[pendingId] = {
+      kind: 'error',
+      title: `${formatPendingActionLabel(action)} failed.`,
+      message: toErrorMessage(error),
+    }
+    await renderApp()
+  } finally {
+    button.disabled = false
+    button.textContent = originalLabel
+  }
+}
+
+async function handlePendingFixSubmit(form: HTMLFormElement): Promise<void> {
+  const pendingId = Number.parseInt(form.dataset.pendingId || '', 10)
+  if (!Number.isFinite(pendingId)) {
+    return
+  }
+
+  const textarea = form.querySelector<HTMLTextAreaElement>('textarea[name="correction_text"]')
+  const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')
+  const correctionText = textarea?.value.trim() || ''
+
+  pendingUiState.fixDraftById[pendingId] = correctionText
+
+  if (!correctionText) {
+    pendingUiState.feedbackById[pendingId] = {
+      kind: 'error',
+      title: 'Fix could not be applied.',
+      message: 'Correction text is required before the corrected payload can be updated.',
+    }
+    await renderApp()
+    return
+  }
+
+  if (submitButton) {
+    submitButton.disabled = true
+    submitButton.textContent = 'Updating corrected payload...'
+  }
+  if (textarea) {
+    textarea.disabled = true
+  }
+  pendingUiState.feedbackById[pendingId] = undefined
+
+  try {
+    await fixPending(pendingId, correctionText)
+    delete pendingUiState.fixDraftById[pendingId]
+    pendingUiState.feedbackById[pendingId] = {
+      kind: 'success',
+      title: 'Corrected payload updated.',
+      message: 'Fix updates corrected payload only. The pending item remains reviewable until you confirm, discard, or force insert it.',
+    }
+    await renderApp()
+  } catch (error) {
+    pendingUiState.feedbackById[pendingId] = {
+      kind: 'error',
+      title: 'Fix could not be applied.',
+      message: toErrorMessage(error),
+    }
+    await renderApp()
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false
+      submitButton.textContent = 'Apply Fix'
+    }
+    if (textarea) {
+      textarea.disabled = false
+    }
   }
 }
 
@@ -1642,72 +2139,663 @@ function renderRecentActivitySection(dashboard: DashboardData): string {
   `
 }
 
+function renderCaptureListView(
+  query: CaptureListQuery,
+  response: CaptureListResponse | null,
+  errorMessage?: string,
+): string {
+  const statusNote =
+    response && response.total > 0
+      ? `Current filtered queue contains ${response.total} capture records. Open one to inspect raw input and downstream linkage.`
+      : 'Capture list makes upstream input records visible without turning the web app into a new intake platform.'
+
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Capture',
+      copy: 'Capture is the visible upstream input record layer. Use it to inspect what entered the system and where it flowed next.',
+    })}
+    ${renderSectionShell(
+      {
+        title: 'Capture Status',
+        copy: 'Capture stays upstream. It helps you understand intake visibility and chain position before moving into Pending or formal records.',
+        className: 'section-shell--contextual',
+      },
+      `
+        <div class="field-grid">
+          ${renderField('Filtered Total', String(response?.total ?? 0))}
+          ${renderField('Current Status Filter', query.status ? formatStatusLabel(query.status) : 'All')}
+          ${renderField('Current Source Filter', query.sourceType || 'All')}
+          ${renderField('Status Note', statusNote, true)}
+        </div>
+      `,
+    )}
+    ${renderCaptureSubmissionSection()}
+    ${renderCaptureFilters(query)}
+    ${renderSectionShell(
+      {
+        title: 'Capture Records',
+        copy: 'Use the list to scan source, type, current stage, and timestamps before opening capture detail.',
+        className: 'section-shell--primary',
+      },
+      errorMessage
+        ? renderUnavailableState('Capture list is unavailable.', errorMessage)
+        : response && response.items.length > 0
+          ? renderCaptureRecords(response.items)
+          : renderEmptyState('No capture records found for the current filters.'),
+    )}
+    ${renderPagination('/capture', response?.page ?? query.page, response?.page_size ?? query.pageSize, response?.total ?? 0)}
+  `)
+}
+
+function renderCaptureDetailView(detail: CaptureDetail): string {
+  const feedback =
+    captureUiState.feedback && captureUiState.feedback.captureId === detail.id
+      ? renderCaptureSubmissionFeedback(captureUiState.feedback)
+      : ''
+
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Capture Record',
+      backHref: '/capture',
+      backLabel: 'Capture',
+      copy: 'Capture detail keeps the upstream input visible, then shows how that input moved toward Pending review or a formal result.',
+    })}
+    ${feedback}
+    ${renderSectionShell(
+      {
+        title: 'Current Capture Item',
+        copy: 'Captured content and current chain position stay visible before following downstream links.',
+        className: 'section-shell--primary',
+      },
+      `
+        <div class="record-badges">
+          ${renderStatusBadge(detail.status)}
+          ${detail.target_domain ? renderBadge(formatDomainLabel(detail.target_domain), true) : renderBadge('Target domain pending', true)}
+          ${renderBadge(`Stage: ${formatCaptureStageLabel(detail.current_stage)}`)}
+          ${renderBadge(`Source: ${detail.source_type}`, true)}
+        </div>
+        <div class="field-grid">
+          ${renderField('Capture ID', String(detail.id))}
+          ${renderField('Current Summary', detail.summary, true)}
+          ${renderField('Current Status', formatStatusLabel(detail.status))}
+          ${renderField('Current Stage', formatCaptureStageLabel(detail.current_stage))}
+          ${renderField('Target Domain', detail.target_domain ? formatDomainLabel(detail.target_domain) : 'Not available yet')}
+          ${renderField('Source Type', detail.source_type)}
+          ${renderField('Source Reference', detail.source_ref, true)}
+          ${renderField('Created At', formatDateTime(detail.created_at))}
+          ${renderField('Updated At', formatDateTime(detail.updated_at))}
+          ${renderField('Finalized At', detail.finalized_at ? formatDateTime(detail.finalized_at) : null)}
+          ${renderField('Chain Summary', detail.chain_summary, true)}
+        </div>
+      `,
+    )}
+    ${renderCaptureRawContentSection(detail)}
+    ${renderCaptureParseContextSection(detail)}
+    ${renderCapturePendingLinkSection(detail)}
+    ${renderCaptureFormalResultSection(detail)}
+  `)
+}
+
+function renderCaptureSubmissionSection(): string {
+  const draft = captureUiState.submissionDraft
+  const feedback =
+    captureUiState.feedback && captureUiState.feedback.captureId === undefined
+      ? renderCaptureSubmissionFeedback(captureUiState.feedback)
+      : ''
+
+  return renderSectionShell(
+    {
+      title: 'Minimal Capture Entry',
+      copy: 'This restrained entry accepts plain text only and reuses the existing backend capture submission semantics.',
+      className: 'section-shell--secondary',
+    },
+    `
+      ${feedback}
+      <div class="field-grid">
+        ${renderField('Accepted Input', 'Plain text only')}
+        ${renderField('Submission Source Type', 'manual')}
+        ${renderField('Scope Note', 'Creating a capture record here does not introduce a new input platform.', true)}
+      </div>
+      <form class="filter-form" data-capture-form="submit">
+        <label class="filter-field">
+          <span>Captured Text</span>
+          <textarea class="workbench-textarea" name="raw_text" placeholder="Enter the source text that should become a capture record.">${escapeHtml(draft.rawText)}</textarea>
+        </label>
+        <label class="filter-field">
+          <span>Source Reference</span>
+          <input type="text" name="source_ref" value="${escapeHtml(draft.sourceRef)}" placeholder="Optional note or source reference" />
+        </label>
+        <div class="filter-actions">
+          <button class="primary-button" type="submit">Create Capture Record</button>
+        </div>
+      </form>
+    `,
+  )
+}
+
+function renderCaptureSubmissionFeedback(feedback: CaptureSubmissionFeedback): string {
+  const actions =
+    feedback.captureId !== undefined
+      ? `<a class="record-action" href="/capture/${feedback.captureId}" data-nav="true">Open capture record</a>`
+      : undefined
+
+  return renderPageStatePanel({
+    tone: feedback.kind === 'success' ? 'ready' : 'unavailable',
+    eyebrow: feedback.kind === 'success' ? 'Capture Submitted' : 'Submission Failed',
+    title: feedback.title,
+    message: feedback.message,
+    actions,
+  })
+}
+
+function renderCaptureRawContentSection(detail: CaptureDetail): string {
+  const rawPayloadMarkup =
+    detail.raw_payload_json !== null
+      ? `
+          <section class="subsection">
+            <h3>Raw Payload Snapshot</h3>
+            ${renderTextBlock(formatJson(detail.raw_payload_json))}
+          </section>
+        `
+      : ''
+
+  return renderSectionShell(
+    {
+      title: 'Raw Input and Captured Content',
+      copy: 'The captured material itself stays primary. This first version keeps the content readable without adding editor behavior.',
+      className: 'section-shell--primary',
+    },
+    detail.raw_text || detail.raw_payload_json !== null
+      ? `
+          <div class="field-grid">
+            ${renderField('Primary Raw Input', detail.raw_text ? 'Plain text capture' : 'Structured payload snapshot')}
+            ${renderField('Read Mode', 'Read-only')}
+          </div>
+          ${detail.raw_text ? renderTextBlock(detail.raw_text) : ''}
+          ${rawPayloadMarkup}
+        `
+      : renderEmptyState('No captured content is stored for this record.'),
+  )
+}
+
+function renderCaptureParseContextSection(detail: CaptureDetail): string {
+  if (!detail.parse_result) {
+    return renderSectionShell(
+      {
+        title: 'Parse and Processing Context',
+        copy: 'Parse context is secondary support for understanding how this capture moved downstream.',
+        className: 'section-shell--contextual',
+      },
+      renderPageStatePanel({
+        tone: 'empty',
+        eyebrow: 'Parse',
+        title: 'No parse result is available yet.',
+        message: 'This capture does not currently show a parse result in the visible chain.',
+      }),
+    )
+  }
+
+  return renderSectionShell(
+    {
+      title: 'Parse and Processing Context',
+      copy: 'Parse context stays concise and supports the user’s understanding of the chain without becoming an AI explanation surface.',
+      className: 'section-shell--contextual',
+    },
+    `
+      <div class="field-grid">
+        ${renderField('Parse Result ID', String(detail.parse_result.id))}
+        ${renderField('Target Domain', formatDomainLabel(detail.parse_result.target_domain))}
+        ${renderField('Confidence Level', formatStatusLabel(detail.parse_result.confidence_level))}
+        ${renderField('Confidence Score', String(detail.parse_result.confidence_score))}
+        ${renderField('Parser', `${detail.parse_result.parser_name} ${detail.parse_result.parser_version}`)}
+        ${renderField('Parsed At', formatDateTime(detail.parse_result.created_at))}
+      </div>
+      <section class="subsection">
+        <h3>Parsed Payload Snapshot</h3>
+        ${renderTextBlock(formatJson(detail.parse_result.parsed_payload_json))}
+      </section>
+    `,
+  )
+}
+
+function renderCapturePendingLinkSection(detail: CaptureDetail): string {
+  if (!detail.pending_item) {
+    return renderSectionShell(
+      {
+        title: 'Pending Review Linkage',
+        copy: 'Pending linkage stays simple: it shows whether this capture moved into the review workbench and where to go next.',
+        className: 'section-shell--secondary',
+      },
+      renderPageStatePanel({
+        tone: 'empty',
+        eyebrow: 'Pending',
+        title: 'No linked pending item is available.',
+        message: 'This capture did not create a visible pending review item, or it moved directly into a formal result.',
+      }),
+    )
+  }
+
+  return renderSectionShell(
+    {
+      title: 'Pending Review Linkage',
+      copy: 'Pending is the downstream review workbench for captures that need a formal decision.',
+      className: 'section-shell--secondary',
+    },
+    `
+      <article class="record-card${detail.pending_item.actionable ? ' record-card--priority' : ''}">
+        <div class="record-card__header">
+          <div class="record-card__title-group">
+            <h3>${escapeHtml(detail.pending_item.summary || `Pending #${detail.pending_item.id}`)}</h3>
+            <span class="record-meta">Pending #${detail.pending_item.id}</span>
+          </div>
+          <a class="record-action" href="/pending/${detail.pending_item.id}" data-nav="true">Open pending detail</a>
+        </div>
+        <div class="record-badges">
+          ${renderStatusBadge(detail.pending_item.status)}
+          ${renderBadge(formatDomainLabel(detail.pending_item.target_domain), true)}
+          ${detail.pending_item.actionable ? renderBadge('Actionable') : renderBadge('Resolved', true)}
+        </div>
+        <div class="field-grid">
+          ${renderField('Pending Status', formatStatusLabel(detail.pending_item.status))}
+          ${renderField('Target Domain', formatDomainLabel(detail.pending_item.target_domain))}
+          ${renderField('Pending Summary', detail.pending_item.summary, true)}
+          ${renderField('Reviewability', detail.pending_item.actionable ? 'Still actionable in Pending' : 'No longer actionable')}
+          ${renderField('Resolved At', detail.pending_item.resolved_at ? formatDateTime(detail.pending_item.resolved_at) : null)}
+        </div>
+      </article>
+    `,
+  )
+}
+
+function renderCaptureFormalResultSection(detail: CaptureDetail): string {
+  if (!detail.formal_result) {
+    return renderSectionShell(
+      {
+        title: 'Formal Result and Resolution Context',
+        copy: 'Formal-result linkage stays restrained and only shows whether this capture already produced a formal record.',
+        className: 'section-shell--contextual',
+      },
+      renderPageStatePanel({
+        tone: 'empty',
+        eyebrow: 'Formal Result',
+        title: 'No formal result is linked yet.',
+        message: 'This capture has not yet produced a visible formal record, or it resolved without one.',
+      }),
+    )
+  }
+
+  const href = buildFormalRecordHref(detail.formal_result.target_domain, detail.formal_result.record_id)
+
+  return renderSectionShell(
+    {
+      title: 'Formal Result and Resolution Context',
+      copy: 'Formal-result linkage shows the downstream fact record without turning Capture into a workflow console.',
+      className: 'section-shell--contextual',
+    },
+    `
+      <article class="record-card">
+        <div class="record-card__header">
+          <div class="record-card__title-group">
+            <h3>${escapeHtml(detail.formal_result.summary || `${formatDomainLabel(detail.formal_result.target_domain)} record`)}</h3>
+            <span class="record-meta">${escapeHtml(formatDateTime(detail.formal_result.created_at))}</span>
+          </div>
+          ${href ? `<a class="record-action" href="${escapeHtml(href)}" data-nav="true">Open formal record</a>` : ''}
+        </div>
+        <div class="record-badges">
+          ${renderBadge(formatDomainLabel(detail.formal_result.target_domain), true)}
+          ${detail.formal_result.source_pending_id ? renderBadge(`Via Pending #${detail.formal_result.source_pending_id}`) : renderBadge('Direct from capture')}
+        </div>
+        <div class="field-grid">
+          ${renderField('Target Domain', formatDomainLabel(detail.formal_result.target_domain))}
+          ${renderField('Formal Record ID', String(detail.formal_result.record_id))}
+          ${renderField('Result Summary', detail.formal_result.summary, true)}
+          ${renderField('Resolution Path', detail.formal_result.source_pending_id ? `Pending #${detail.formal_result.source_pending_id}` : 'Direct commit from capture')}
+        </div>
+      </article>
+    `,
+  )
+}
+
 function renderPendingListView(
   query: PendingListQuery,
   response: PendingListResponse | null,
   errorMessage?: string,
 ): string {
-  return `
-    <section class="page-header">
-      <h1>Pending</h1>
-      <p class="page-copy">Minimal read view for open and resolved pending items.</p>
-    </section>
+  const queueSummary =
+    response?.next_pending_item_id
+      ? `Next to review uses the earliest open pending item rule. Current hint: #${response.next_pending_item_id}.`
+      : 'Pending list helps you scan what still needs review, what is already resolved, and what to open next.'
+
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Pending',
+      copy: 'Pending is the review queue for scanning, prioritizing, and entering the single-item review workbench.',
+    })}
+    ${renderSectionShell(
+      {
+        title: 'Queue Status',
+        copy: 'Open items remain actionable. Confirmed, discarded, and forced items stay readable as resolution context only.',
+        className: 'section-shell--contextual',
+      },
+      `
+        <div class="field-grid">
+          ${renderField('Filtered Total', String(response?.total ?? 0))}
+          ${renderField('Next to Review', response?.next_pending_item_id === null || response?.next_pending_item_id === undefined ? 'None' : `#${response.next_pending_item_id}`)}
+          ${renderField('Current Status Filter', formatStatusLabel(query.status))}
+          ${renderField('Current Domain Filter', query.targetDomain ? formatDomainLabel(query.targetDomain) : 'All')}
+          ${renderField('Queue Note', queueSummary, true)}
+        </div>
+      `,
+    )}
     ${renderPendingFilters(query)}
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>List</h2>
-      </div>
-      ${
-        response?.next_pending_item_id
-          ? `<p class="section-copy">Next to review uses the earliest open pending item rule. Current hint: #${response.next_pending_item_id}.</p>`
-          : ''
-      }
-      ${
-        errorMessage
-          ? renderErrorState(errorMessage)
-          : response && response.items.length > 0
-            ? renderPendingRecords(response.items)
-            : renderEmptyState('No pending items found.')
-      }
-    </section>
+    ${renderSectionShell(
+      {
+        title: 'Review Queue',
+        copy: 'Use the list to scan status, domain, current summary, and timestamps before opening the detail workbench.',
+        className: 'section-shell--primary',
+      },
+      errorMessage
+        ? renderUnavailableState('Pending review queue is unavailable.', errorMessage)
+        : response && response.items.length > 0
+          ? renderPendingRecords(response.items)
+          : renderEmptyState('No pending items found for the current queue filters.'),
+    )}
     ${renderPagination('/pending', response?.page ?? query.page, response?.page_size ?? query.pageSize, response?.total ?? 0)}
-  `
+  `)
 }
 
 function renderPendingDetailView(detail: PendingDetail): string {
-  return `
-    <section class="page-header">
-      <a class="back-link" href="/pending" data-nav="true">Back to Pending</a>
-      <h1>Pending Item</h1>
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Detail</h2>
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Pending Item',
+      backHref: '/pending',
+      backLabel: 'Pending',
+      copy: 'Pending detail is a single-item review workbench. Read the current payload first, then make the formal review decision.',
+    })}
+    ${renderSectionShell(
+      {
+        title: 'Current Pending Item',
+        copy: 'Current status, target domain, and timestamps stay visible before any review action is taken.',
+        className: 'section-shell--primary',
+      },
+      `
+        <div class="record-badges">
+          ${renderStatusBadge(detail.status)}
+          ${renderBadge(formatDomainLabel(detail.target_domain), true)}
+          ${detail.actionable ? renderBadge('Actionable') : renderBadge('Resolved', true)}
+          ${detail.summary ? renderBadge('Current item') : ''}
+        </div>
+        <div class="field-grid">
+          ${renderField('Pending ID', String(detail.id))}
+          ${renderField('Current Summary', detail.summary, true)}
+          ${renderField('Current Status', formatStatusLabel(detail.status))}
+          ${renderField('Target Domain', formatDomainLabel(detail.target_domain))}
+          ${renderField('Created At', formatDateTime(detail.created_at))}
+          ${renderField('Updated At', formatDateTime(detail.updated_at))}
+          ${renderField('Resolved At', detail.resolved_at ? formatDateTime(detail.resolved_at) : null)}
+          ${renderField('Reason', detail.reason, true)}
+        </div>
+      `,
+    )}
+    ${renderPendingCurrentPayloadSection(detail)}
+    ${renderPendingSourceContextSection(detail)}
+    ${renderPendingActionSection(detail)}
+    ${renderPendingHistorySection(detail)}
+  `)
+}
+
+function renderPendingCurrentPayloadSection(detail: PendingDetail): string {
+  const effectiveSource = formatPendingEffectivePayloadSource(detail.effective_payload_source)
+  const originalPayload =
+    detail.effective_payload_source === 'corrected' ? detail.proposed_payload_json : detail.corrected_payload_json
+  const originalTitle =
+    detail.effective_payload_source === 'corrected' ? 'Original Proposed Payload Snapshot' : 'Corrected Payload Snapshot'
+
+  return renderSectionShell(
+    {
+      title: 'Current Review Payload',
+      copy: 'Current review uses corrected payload when it exists. Otherwise it uses the proposed payload.',
+      className: 'section-shell--primary',
+    },
+    `
+      <div class="record-badges">
+        ${renderBadge(`Effective Source: ${effectiveSource}`)}
+        ${detail.corrected_payload_json !== null ? renderBadge('Corrected payload available', true) : renderBadge('Using proposed payload', true)}
       </div>
       <div class="field-grid">
-        ${renderField('ID', String(detail.id))}
-        ${renderField('Status', formatStatusLabel(detail.status))}
-        ${renderField('Target Domain', formatDomainLabel(detail.target_domain))}
-        ${renderField('Created At', formatDateTime(detail.created_at))}
-        ${renderField('Resolved At', detail.resolved_at ? formatDateTime(detail.resolved_at) : null)}
+        ${renderField('Review Basis', effectiveSource)}
+        ${renderField('Actionability', detail.actionable ? 'Still reviewable' : 'Read-only resolved state')}
+        ${renderField('Payload Origin Note', describePendingEffectivePayloadSource(detail.effective_payload_source), true)}
+      </div>
+      ${renderTextBlock(formatJson(detail.effective_payload_json))}
+      ${
+        originalPayload !== null
+          ? `
+              <section class="subsection">
+                <h3>${escapeHtml(originalTitle)}</h3>
+                ${renderTextBlock(formatJson(originalPayload))}
+              </section>
+            `
+          : ''
+      }
+    `,
+  )
+}
+
+function renderPendingSourceContextSection(detail: PendingDetail): string {
+  return renderSectionShell(
+    {
+      title: 'Source and Upstream Context',
+      copy: 'Source capture, parse reference, and intake reason stay contextual support for the current review decision.',
+      className: 'section-shell--contextual source-reference-block',
+    },
+    `
+      <div class="field-grid">
         ${renderField('Source Capture ID', String(detail.source_capture_id))}
         ${renderField('Parse Result ID', String(detail.parse_result_id))}
-        ${renderField('Reason', detail.reason, true)}
+        ${renderField('Target Domain', formatDomainLabel(detail.target_domain))}
+        ${renderField('Source Relationship', `Capture #${detail.source_capture_id} -> Parse #${detail.parse_result_id} -> Pending #${detail.id}`, true)}
+        ${renderField('Intake Reason', detail.reason, true)}
       </div>
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Proposed Payload</h2>
+    `,
+  )
+}
+
+function renderPendingActionSection(detail: PendingDetail): string {
+  const feedback = renderPendingReviewFeedback(detail.id)
+  const fixDraft = pendingUiState.fixDraftById[detail.id] ?? ''
+
+  if (!detail.actionable) {
+    return renderSectionShell(
+      {
+        title: 'Review Actions',
+        copy: 'Review actions stay close to the main payload, but resolved items are no longer actionable.',
+        className: 'section-shell--secondary',
+      },
+      `
+        ${feedback}
+        ${renderPageStatePanel({
+          tone: 'ready',
+          eyebrow: 'Resolved',
+          title: 'Pending item is no longer actionable.',
+          message: `This pending item is resolved as ${formatStatusLabel(detail.status)}. It remains readable for traceability, but review actions are disabled.`,
+        })}
+      `,
+    )
+  }
+
+  return renderSectionShell(
+    {
+      title: 'Review Actions',
+      copy: 'Actions stay subordinate to understanding. Fix updates corrected payload only; confirm, discard, and force insert resolve the pending item under existing backend rules.',
+      className: 'section-shell--secondary',
+    },
+    `
+      ${feedback}
+      <div class="workbench-card-grid">
+        <article class="record-card">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>Fix</h3>
+              <span class="record-meta">Updates corrected payload only</span>
+            </div>
+          </div>
+          <p class="section-copy">Fix updates corrected payload, does not directly write a formal record, and keeps the item reviewable afterward.</p>
+          <form class="filter-form" data-pending-form="fix" data-pending-id="${detail.id}">
+            <label class="filter-field">
+              <span>Correction Text</span>
+              <textarea class="workbench-textarea" name="correction_text" placeholder="Enter the corrected text TraceFold should parse into the corrected payload.">${escapeHtml(fixDraft)}</textarea>
+            </label>
+            <div class="filter-actions">
+              <button class="secondary-button" type="submit">Apply Fix</button>
+            </div>
+          </form>
+        </article>
+        <article class="record-card record-card--priority">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>Confirm</h3>
+              <span class="record-meta">Standard approve and commit path</span>
+            </div>
+          </div>
+          <p class="section-copy">Confirm writes the current effective payload to the formal record and resolves the pending item.</p>
+          <div class="filter-actions">
+            <button class="primary-button" type="button" data-pending-action="confirm" data-pending-id="${detail.id}">Confirm</button>
+          </div>
+        </article>
+        <article class="record-card">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>Discard</h3>
+              <span class="record-meta">Resolve without writing a formal record</span>
+            </div>
+          </div>
+          <p class="section-copy">Discard resolves the pending item without writing a formal record. After discard, the item is no longer actionable.</p>
+          <div class="filter-actions">
+            <button class="secondary-button" type="button" data-pending-action="discard" data-pending-id="${detail.id}">Discard</button>
+          </div>
+        </article>
+        <article class="record-card">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>Force Insert</h3>
+              <span class="record-meta">Explicit force-insert path</span>
+            </div>
+          </div>
+          <p class="section-copy">Force Insert writes the current effective payload through the backend force-insert path and resolves the pending item. Use it only when that explicit path is intended.</p>
+          <div class="filter-actions">
+            <button class="secondary-button" type="button" data-pending-action="force_insert" data-pending-id="${detail.id}">Force Insert</button>
+          </div>
+        </article>
       </div>
-      ${renderTextBlock(formatJson(detail.proposed_payload_json))}
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Corrected Payload</h2>
+    `,
+  )
+}
+
+function renderPendingReviewFeedback(pendingId: number): string {
+  const feedback = pendingUiState.feedbackById[pendingId]
+  if (!feedback) {
+    return ''
+  }
+
+  return renderPageStatePanel({
+    tone: feedback.kind === 'success' ? 'ready' : 'unavailable',
+    eyebrow: feedback.kind === 'success' ? 'Action Complete' : 'Action Failed',
+    title: feedback.title,
+    message: feedback.message,
+  })
+}
+
+function renderPendingHistorySection(detail: PendingDetail): string {
+  const formalResultMarkup = renderPendingFormalResult(detail.formal_result)
+  const historyMarkup =
+    detail.review_actions.length > 0
+      ? renderPendingReviewActions(detail.review_actions)
+      : renderEmptyState('No review actions have been recorded for this pending item yet.')
+
+  return renderSectionShell(
+    {
+      title: 'Review History and Resolution Context',
+      copy: 'Review history, resolution state, and any linked formal result stay secondary to the current payload and current decision.',
+      className: 'section-shell--contextual',
+    },
+    `
+      ${formalResultMarkup}
+      ${historyMarkup}
+    `,
+  )
+}
+
+function renderPendingFormalResult(formalResult: PendingFormalResult | null): string {
+  if (!formalResult) {
+    return renderPageStatePanel({
+      tone: 'empty',
+      eyebrow: 'Result',
+      title: 'No formal result is linked yet.',
+      message: 'A formal result becomes available after confirm or force insert when a formal record is created for this pending item.',
+    })
+  }
+
+  const href = buildFormalRecordHref(formalResult.target_domain, formalResult.record_id)
+  return `
+    <article class="record-card">
+      <div class="record-card__header">
+        <div class="record-card__title-group">
+          <h3>Formal Result</h3>
+          <span class="record-meta">${escapeHtml(formatDomainLabel(formalResult.target_domain))}</span>
+        </div>
+        ${href ? `<a class="record-action" href="${escapeHtml(href)}" data-nav="true">Open formal record</a>` : ''}
       </div>
-      ${renderTextBlock(formatJson(detail.corrected_payload_json))}
-    </section>
+      <div class="field-grid">
+        ${renderField('Target Domain', formatDomainLabel(formalResult.target_domain))}
+        ${renderField('Formal Record ID', String(formalResult.record_id))}
+      </div>
+    </article>
   `
+}
+
+function renderPendingReviewActions(actions: PendingReviewAction[]): string {
+  return actions
+    .map(
+      (action) => `
+        <article class="record-card">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>${escapeHtml(formatPendingActionLabel(action.action_type))}</h3>
+              <span class="record-meta">${escapeHtml(formatDateTime(action.created_at))}</span>
+            </div>
+            <div class="record-badges">
+              ${renderBadge(formatStatusLabel(action.action_type), true)}
+            </div>
+          </div>
+          <div class="field-grid">
+            ${renderField('Action Type', formatStatusLabel(action.action_type))}
+            ${renderField('Action Note', action.note, true)}
+          </div>
+          ${
+            action.before_payload_json !== null
+              ? `
+                  <section class="subsection">
+                    <h3>Before Payload Snapshot</h3>
+                    ${renderTextBlock(formatJson(action.before_payload_json))}
+                  </section>
+                `
+              : ''
+          }
+          ${
+            action.after_payload_json !== null
+              ? `
+                  <section class="subsection">
+                    <h3>After Payload Snapshot</h3>
+                    ${renderTextBlock(formatJson(action.after_payload_json))}
+                  </section>
+                `
+              : ''
+          }
+        </article>
+      `,
+    )
+    .join('')
 }
 
 function renderExpenseListView(
@@ -1715,25 +2803,51 @@ function renderExpenseListView(
   response: PaginatedResponse<ExpenseListItem> | null,
   errorMessage?: string,
 ): string {
-  return `
-    <section class="page-header">
-      <h1>Expenses</h1>
-    </section>
-    ${renderExpenseFilters(query)}
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>List</h2>
+  const headerMarkup = renderPageHeaderBlock({
+    title: 'Expenses',
+    copy: 'Expense is a formal record consumption surface. Use it to scan recorded facts first, then open a record for contextual support.',
+  })
+  const contextMarkup = renderSectionShell(
+    {
+      title: 'Record Scope',
+      copy: 'Expense list stays formal-record-first. It is for reading recorded facts, not for turning the page into a chart or analytics center.',
+      className: 'section-shell--contextual',
+    },
+    `
+      <div class="field-grid">
+        ${renderField('Filtered Total', String(response?.total ?? 0))}
+        ${renderField('Current Category Filter', query.category || 'All')}
+        ${renderField('Current Keyword Filter', query.keyword || 'None')}
+        ${renderField('Current Sort', `${formatStatusLabel(query.sortBy)} · ${query.sortOrder}`)}
       </div>
-      ${
-        errorMessage
-          ? renderErrorState(errorMessage)
-          : response && response.items.length > 0
-            ? renderExpenseRecords(response.items)
-            : renderEmptyState('No expense records found.')
-      }
-    </section>
+    `,
+  )
+
+  if (errorMessage) {
+    return renderPageShell(`
+      ${headerMarkup}
+      ${contextMarkup}
+      ${renderExpenseFilters(query)}
+      ${renderUnavailableState('Expense records are unavailable.', errorMessage)}
+    `)
+  }
+
+  return renderPageShell(`
+    ${headerMarkup}
+    ${contextMarkup}
+    ${renderExpenseFilters(query)}
+    ${renderSectionShell(
+      {
+        title: 'Formal Records',
+        copy: 'Use the list to scan amount, category, recorded time, and source path before opening expense detail.',
+        className: 'section-shell--primary',
+      },
+      response && response.items.length > 0
+        ? renderExpenseRecords(response.items)
+        : renderEmptyState('No expense records found for the current filters.'),
+    )}
     ${renderPagination('/expense', response?.page ?? query.page, response?.page_size ?? query.pageSize, response?.total ?? 0)}
-  `
+  `)
 }
 
 function renderKnowledgeListView(
@@ -1818,26 +2932,69 @@ function renderHealthListView(
 }
 
 function renderExpenseDetailView(detail: ExpenseDetail): string {
-  return `
-    <section class="page-header">
-      <a class="back-link" href="/expense" data-nav="true">Back to Expenses</a>
-      <h1>Expense Record</h1>
-    </section>
-    <section class="panel page-section">
-      <div class="section-header">
-        <h2>Detail</h2>
-      </div>
+  return renderPageShell(`
+    ${renderPageHeaderBlock({
+      title: 'Expense Record',
+      backHref: '/expense',
+      backLabel: 'Expenses',
+      copy: `${detail.amount} ${detail.currency} · ${detail.category || 'Uncategorized'} · recorded ${formatDateTime(detail.created_at)}.`,
+    })}
+    ${renderSectionShell(
+      {
+        title: 'Formal Expense Record',
+        copy: 'Formal expense fields remain the truth-bearing content for this page.',
+        className: 'section-shell--primary',
+      },
+      `
+        <div class="record-badges">
+          ${renderBadge(`${detail.amount} ${detail.currency}`)}
+          ${detail.category ? renderBadge(formatDomainLabel(detail.category), true) : renderBadge('Uncategorized', true)}
+          ${detail.source_pending_id === null ? renderBadge('Direct from Capture') : renderBadge('Reviewed from Pending')}
+        </div>
+        <div class="field-grid">
+          ${renderField('Expense ID', String(detail.id))}
+          ${renderField('Recorded At', formatDateTime(detail.created_at))}
+          ${renderField('Amount', detail.amount)}
+          ${renderField('Currency', detail.currency)}
+          ${renderField('Category', detail.category)}
+          ${renderField('Record Path', describeExpenseSourcePath(detail.source_pending_id))}
+          ${renderField('Formal Note', detail.note, true)}
+        </div>
+      `,
+    )}
+    ${renderExpenseSourceContextSection(detail)}
+  `)
+}
+
+function renderExpenseSourceContextSection(detail: ExpenseDetail): string {
+  const sourceLinks = [
+    `<a class="record-action" href="/capture/${detail.source_capture_id}" data-nav="true">Open source capture</a>`,
+    detail.source_pending_id === null
+      ? ''
+      : `<a class="record-action" href="/pending/${detail.source_pending_id}" data-nav="true">Open source pending</a>`,
+  ]
+    .filter((value) => value.length > 0)
+    .join('')
+
+  return renderSectionShell(
+    {
+      title: 'Source and Record Context',
+      copy: 'Source reference stays contextual support. It helps trace formal provenance without turning Expense into a workflow or analytics center.',
+      className: 'section-shell--contextual source-reference-block',
+    },
+    `
+      ${
+        sourceLinks
+          ? renderSectionActionRow(sourceLinks)
+          : ''
+      }
       <div class="field-grid">
-        ${renderField('ID', String(detail.id))}
-        ${renderField('Created At', formatDateTime(detail.created_at))}
-        ${renderField('Amount', detail.amount)}
-        ${renderField('Currency', detail.currency)}
-        ${renderField('Category', detail.category)}
-        ${renderField('Note', detail.note, true)}
+        ${renderField('Source Capture ID', String(detail.source_capture_id))}
+        ${renderField('Source Pending ID', detail.source_pending_id === null ? null : String(detail.source_pending_id))}
+        ${renderField('Source Path', describeExpenseSourcePath(detail.source_pending_id), true)}
       </div>
-    </section>
-    ${renderSourceSection(detail.source_capture_id, detail.source_pending_id)}
-  `
+    `,
+  )
 }
 
 function renderKnowledgeDetailView(
@@ -1929,6 +3086,40 @@ function renderDetailErrorView(title: string, backPath: string, backLabel: strin
     })}
     ${renderUnavailableState(`${title} is unavailable.`, message)}
   `)
+}
+
+function renderCaptureFilters(query: CaptureListQuery): string {
+  return renderFilterSection(
+    '/capture',
+    `
+      ${renderDateInput('date_from', 'Date From', query.dateFrom)}
+      ${renderDateInput('date_to', 'Date To', query.dateTo)}
+      ${renderSelectInput('status', 'Status', query.status, [
+        ['', 'All'],
+        ['received', 'received'],
+        ['parsed', 'parsed'],
+        ['pending', 'pending'],
+        ['committed', 'committed'],
+        ['discarded', 'discarded'],
+        ['failed', 'failed'],
+      ])}
+      ${renderTextInput('source_type', 'Source Type', query.sourceType)}
+      ${renderSelectInput('sort_by', 'Sort By', query.sortBy, [
+        ['created_at', 'created_at'],
+        ['status', 'status'],
+        ['source_type', 'source_type'],
+      ])}
+      ${renderSelectInput('sort_order', 'Sort Order', query.sortOrder, [
+        ['desc', 'desc'],
+        ['asc', 'asc'],
+      ])}
+      ${renderSelectInput('page_size', 'Page Size', String(query.pageSize), [
+        ['20', '20'],
+        ['50', '50'],
+        ['100', '100'],
+      ])}
+    `,
+  )
 }
 
 function renderPendingFilters(query: PendingListQuery): string {
@@ -2067,6 +3258,38 @@ function renderFilterSection(path: string, controls: string): string {
   `
 }
 
+function renderCaptureRecords(items: CaptureListItem[]): string {
+  return items
+    .map(
+      (item) => `
+        <article class="record-card">
+          <div class="record-card__header">
+            <div class="record-card__title-group">
+              <h3>${escapeHtml(item.summary || `Capture #${item.id}`)}</h3>
+              <span class="record-meta">Capture #${item.id}</span>
+            </div>
+            <a class="record-action" href="/capture/${item.id}" data-nav="true">Open</a>
+          </div>
+          <div class="record-badges">
+            ${renderStatusBadge(item.status)}
+            ${renderBadge(`Stage: ${formatCaptureStageLabel(item.current_stage)}`)}
+            ${renderBadge(`Source: ${item.source_type}`, true)}
+            ${item.target_domain ? renderBadge(formatDomainLabel(item.target_domain), true) : ''}
+          </div>
+          <div class="field-grid">
+            ${renderField('Current Summary', item.summary, true)}
+            ${renderField('Current Stage', formatCaptureStageLabel(item.current_stage))}
+            ${renderField('Target Domain', item.target_domain ? formatDomainLabel(item.target_domain) : 'Not available yet')}
+            ${renderField('Source Reference', item.source_ref, true)}
+            ${renderField('Created At', formatDateTime(item.created_at))}
+            ${renderField('Updated At', formatDateTime(item.updated_at))}
+          </div>
+        </article>
+      `,
+    )
+    .join('')
+}
+
 function renderPendingRecords(items: PendingListItem[]): string {
   return items
     .map(
@@ -2074,19 +3297,23 @@ function renderPendingRecords(items: PendingListItem[]): string {
         <article class="record-card${item.is_next_to_review ? ' record-card--priority' : ''}">
           <div class="record-card__header">
             <div class="record-card__title-group">
-              <h3>Pending #${item.id}</h3>
-              <span class="record-meta">${escapeHtml(formatDateTime(item.created_at))}</span>
+              <h3>${escapeHtml(item.summary || `Pending #${item.id}`)}</h3>
+              <span class="record-meta">Pending #${item.id}</span>
             </div>
             <a class="record-action" href="/pending/${item.id}" data-nav="true">Open</a>
           </div>
           <div class="record-badges">
-            ${renderBadge(formatStatusLabel(item.status))}
+            ${renderStatusBadge(item.status)}
             ${renderBadge(formatDomainLabel(item.target_domain), true)}
             ${item.has_corrected_payload ? renderBadge('Has corrected payload') : ''}
             ${item.is_next_to_review ? renderBadge('Next to review') : ''}
+            ${item.status === 'open' ? renderBadge('Actionable') : renderBadge('Resolved', true)}
           </div>
           <div class="field-grid">
+            ${renderField('Current Summary', item.summary, true)}
             ${renderField('Reason Preview', item.reason_preview, true)}
+            ${renderField('Created At', formatDateTime(item.created_at))}
+            ${renderField('Updated At', formatDateTime(item.updated_at))}
             ${renderField('Source Capture ID', String(item.source_capture_id))}
             ${renderField('Has Corrected Payload', formatBoolean(item.has_corrected_payload))}
           </div>
@@ -2108,10 +3335,17 @@ function renderExpenseRecords(items: ExpenseListItem[]): string {
             </div>
             <a class="record-action" href="/expense/${item.id}" data-nav="true">Open</a>
           </div>
+          <div class="record-badges">
+            ${renderBadge(`${item.amount} ${item.currency}`)}
+            ${item.category ? renderBadge(formatDomainLabel(item.category), true) : renderBadge('Uncategorized', true)}
+            ${item.has_source_pending ? renderBadge('Reviewed from Pending') : renderBadge('Direct from Capture', true)}
+          </div>
           <div class="field-grid">
+            ${renderField('Recorded At', formatDateTime(item.created_at))}
+            ${renderField('Amount', `${item.amount} ${item.currency}`)}
             ${renderField('Category', item.category)}
+            ${renderField('Source Path', item.has_source_pending ? 'Capture -> Pending -> Expense' : 'Capture -> Expense', true)}
             ${renderField('Note Preview', item.note_preview, true)}
-            ${renderField('Has Source Pending', formatBoolean(item.has_source_pending))}
           </div>
         </article>
       `,
@@ -2671,9 +3905,10 @@ function renderRuntimeStatusSection(runtimeStatus: RuntimeStatusData | null, run
       'Degraded means /api/system/status reported a shared runtime warning even though reads may still succeed.',
       [
         ...statusDetails,
-        ...runtimeStatus.degraded_reasons.map(
-          (reason) => `Degraded reason: ${formatStatusLabel(reason)}`,
-        ),
+        ...runtimeStatus.degraded_reasons.flatMap((reason) => [
+          `Degraded reason: ${formatStatusLabel(reason)}`,
+          `Recovery note: ${describeRuntimeDegradedReason(reason)}`,
+        ]),
       ],
     )
   }
@@ -2685,6 +3920,155 @@ function renderRuntimeStatusSection(runtimeStatus: RuntimeStatusData | null, run
     message: 'The shared API, database, migrations, and task runtime are available for workbench and dashboard reads.',
     details: statusDetails,
   })
+}
+
+function renderLocalOperabilitySection(
+  localOperability: LocalOperabilityData | null,
+  localOperabilityError?: string | null,
+): string {
+  return renderSectionShell(
+    {
+      title: 'Local Continuity',
+      copy:
+        'Backup, restore, and bounded capture transfer stay explicit and local-first here. SQLite remains the single source of truth, and this section stays support-level rather than becoming an admin console.',
+      className: 'workbench-section section-shell--support',
+    },
+    localOperabilityError
+      ? renderUnavailableState('Local continuity support is unavailable.', localOperabilityError)
+      : !localOperability
+        ? renderEmptyState('Local continuity support has not been loaded yet.', 'Local continuity is currently empty.')
+        : `
+            ${renderLocalOperabilityFeedback()}
+            ${renderLocalOperabilityReadinessPanel(localOperability)}
+            <div class="workbench-card-grid">
+              <article class="record-card">
+                <div class="record-card__header">
+                  <div class="record-card__title-group">
+                    <h3>Local SQLite context</h3>
+                    <span class="record-meta">Single source of truth</span>
+                  </div>
+                </div>
+                <p class="section-copy">${escapeHtml(localOperability.guidance[0] || 'SQLite remains the single source of truth for local TraceFold data.')}</p>
+                <div class="field-grid">
+                  ${renderField('Database Path', localOperability.database_path, true)}
+                  ${renderField('Database File Present', formatBoolean(localOperability.database_exists))}
+                  ${renderField('Backup Directory', localOperability.backup_directory)}
+                  ${renderField('Transfer Directory', localOperability.transfer_directory)}
+                  ${renderField('Daily-use Readiness', formatStatusLabel(localOperability.daily_use_readiness))}
+                </div>
+              </article>
+              <article class="record-card">
+                <div class="record-card__header">
+                  <div class="record-card__title-group">
+                    <h3>Local backup</h3>
+                    <span class="record-meta">Full SQLite copy</span>
+                  </div>
+                </div>
+                <p class="section-copy">${escapeHtml(localOperability.backup_scope)}</p>
+                <form class="filter-form" data-system-form="backup">
+                  <div class="filter-grid">
+                    ${renderTextInput('destination_path', 'Backup Path (Optional)', localOperabilityUiState.backupDestinationPath)}
+                  </div>
+                  <div class="filter-actions">
+                    <button class="primary-button" type="submit">Create local backup</button>
+                  </div>
+                </form>
+              </article>
+              <article class="record-card">
+                <div class="record-card__header">
+                  <div class="record-card__title-group">
+                    <h3>Local restore</h3>
+                    <span class="record-meta">Bounded replacement</span>
+                  </div>
+                </div>
+                <p class="section-copy">${escapeHtml(localOperability.restore_scope)}</p>
+                <form class="filter-form" data-system-form="restore">
+                  <div class="filter-grid">
+                    ${renderTextInput('source_path', 'Backup File Path', localOperabilityUiState.restoreSourcePath)}
+                  </div>
+                  <label class="workbench-checkbox">
+                    <input type="checkbox" name="create_safety_backup" ${localOperabilityUiState.restoreCreateSafetyBackup ? 'checked' : ''} />
+                    <span>Create a safety backup of the current SQLite file before restore.</span>
+                  </label>
+                  <label class="workbench-checkbox">
+                    <input type="checkbox" name="confirm_restore" ${localOperabilityUiState.restoreConfirmed ? 'checked' : ''} />
+                    <span>I understand restore replaces the active local SQLite database file.</span>
+                  </label>
+                  <div class="filter-actions">
+                    <button class="secondary-button" type="submit">Restore local database</button>
+                  </div>
+                </form>
+              </article>
+              <article class="record-card">
+                <div class="record-card__header">
+                  <div class="record-card__title-group">
+                    <h3>Capture bundle export</h3>
+                    <span class="record-meta">Bounded transfer</span>
+                  </div>
+                </div>
+                <p class="section-copy">${escapeHtml(localOperability.export_scope)}</p>
+                <form class="filter-form" data-system-form="export">
+                  <div class="filter-grid">
+                    ${renderTextInput('export_destination_path', 'Export File Path (Optional)', localOperabilityUiState.exportDestinationPath)}
+                  </div>
+                  <div class="filter-actions">
+                    <button class="secondary-button" type="submit">Export capture bundle</button>
+                  </div>
+                </form>
+              </article>
+              <article class="record-card">
+                <div class="record-card__header">
+                  <div class="record-card__title-group">
+                    <h3>Capture bundle import</h3>
+                    <span class="record-meta">Existing intake path</span>
+                  </div>
+                </div>
+                <p class="section-copy">${escapeHtml(localOperability.import_scope)}</p>
+                <form class="filter-form" data-system-form="import">
+                  <div class="filter-grid">
+                    ${renderTextInput('import_source_path', 'Import File Path', localOperabilityUiState.importSourcePath)}
+                  </div>
+                  <div class="filter-actions">
+                    <button class="secondary-button" type="submit">Import capture bundle</button>
+                    <a class="record-action" href="/capture" data-nav="true">Open capture records</a>
+                  </div>
+                </form>
+              </article>
+            </div>
+          `,
+  )
+}
+
+function renderLocalOperabilityFeedback(): string {
+  if (!localOperabilityUiState.feedback) {
+    return ''
+  }
+
+  return renderPageStatePanel({
+    tone: localOperabilityUiState.feedback.kind === 'success' ? 'ready' : 'unavailable',
+    eyebrow: localOperabilityUiState.feedback.kind === 'success' ? 'Complete' : 'Unavailable',
+    title: localOperabilityUiState.feedback.title,
+    message: localOperabilityUiState.feedback.message,
+    details: localOperabilityUiState.feedback.details,
+  })
+}
+
+function renderLocalOperabilityReadinessPanel(localOperability: LocalOperabilityData): string {
+  if (localOperability.daily_use_readiness === 'daily_use_ready' && localOperability.warnings.length === 0) {
+    return renderPageStatePanel({
+      tone: 'ready',
+      eyebrow: 'Ready',
+      title: 'Local daily-use continuity is ready.',
+      message: localOperability.readiness_message,
+      details: localOperability.guidance.slice(1),
+    })
+  }
+
+  return renderDegradedState(
+    'Daily-use transition needs attention.',
+    localOperability.readiness_message,
+    [...localOperability.warnings, ...localOperability.guidance.slice(1)],
+  )
 }
 
 function renderWorkbenchStateBanner(
@@ -2779,6 +4163,19 @@ function parsePendingListQuery(params: URLSearchParams): PendingListQuery {
   }
 }
 
+function parseCaptureListQuery(params: URLSearchParams): CaptureListQuery {
+  return {
+    page: parsePositiveInt(params.get('page'), 1),
+    pageSize: parsePageSize(params.get('page_size')),
+    sortBy: parseSortBy(params.get('sort_by'), ['created_at', 'status', 'source_type'], 'created_at'),
+    sortOrder: parseSortOrder(params.get('sort_order')),
+    dateFrom: params.get('date_from') ?? '',
+    dateTo: params.get('date_to') ?? '',
+    status: parseOption(params.get('status'), ['received', 'parsed', 'pending', 'committed', 'discarded', 'failed'], ''),
+    sourceType: params.get('source_type') ?? '',
+  }
+}
+
 function parseExpenseListQuery(params: URLSearchParams): ExpenseListQuery {
   return {
     page: parsePositiveInt(params.get('page'), 1),
@@ -2829,6 +4226,19 @@ function buildPendingApiParams(query: PendingListQuery): Record<string, string> 
     sort_order: query.sortOrder,
     status: query.status,
     target_domain: query.targetDomain,
+    date_from: toDateTimeStart(query.dateFrom),
+    date_to: toDateTimeEnd(query.dateTo),
+  }
+}
+
+function buildCaptureApiParams(query: CaptureListQuery): Record<string, string> {
+  return {
+    page: String(query.page),
+    page_size: String(query.pageSize),
+    sort_by: query.sortBy,
+    sort_order: query.sortOrder,
+    status: query.status,
+    source_type: query.sourceType,
     date_from: toDateTimeStart(query.dateFrom),
     date_to: toDateTimeEnd(query.dateTo),
   }
@@ -3120,6 +4530,19 @@ function formatDateTime(value: string): string {
   return date.toLocaleString()
 }
 
+function formatByteSize(value: number): string {
+  if (!Number.isFinite(value) || value < 1024) {
+    return `${Math.max(0, Math.round(value))} B`
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`
+  }
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  }
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
 function formatBoolean(value: boolean): string {
   return value ? 'Yes' : 'No'
 }
@@ -3155,6 +4578,27 @@ function isRuntimeStatusDegraded(runtimeStatus: RuntimeStatusData): boolean {
   )
 }
 
+function describeRuntimeDegradedReason(reason: string): string {
+  switch (reason) {
+    case 'database_unavailable':
+      return 'SQLite database is not reachable. Check the configured local database path and file permissions.'
+    case 'migration_head_unavailable':
+      return 'Migration head could not be read. Check migration files before trusting schema state.'
+    case 'migration_state_error':
+      return 'Current schema revision could not be read cleanly. Re-run migrations against the active SQLite file.'
+    case 'schema_not_initialized':
+      return 'SQLite is reachable but schema tables are not initialized yet. Run migrations before daily use.'
+    case 'migration_not_at_head':
+      return 'SQLite schema is behind the current migration head. Apply migrations before relying on formal writes.'
+    case 'task_runtime_unavailable':
+      return 'Background task runtime status could not be read. Formal pages may still be usable while support signals are incomplete.'
+    case 'ai_derivation_runtime_unavailable':
+      return 'AI derivation runtime status could not be read. Formal pages remain primary and may still be available.'
+    default:
+      return 'Check API health and the active local SQLite runtime before continuing daily use.'
+  }
+}
+
 function formatStatusLabel(value: string): string {
   return value
     .split('_')
@@ -3167,6 +4611,94 @@ function formatDomainLabel(value: string): string {
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
+}
+
+function formatPendingActionLabel(value: string): string {
+  return value === 'force_insert' ? 'Force Insert' : formatStatusLabel(value)
+}
+
+function describePendingActionRunningLabel(action: PendingReviewActionType): string {
+  switch (action) {
+    case 'confirm':
+      return 'Confirming...'
+    case 'discard':
+      return 'Discarding...'
+    case 'force_insert':
+      return 'Force inserting...'
+  }
+}
+
+function buildPendingActionSuccessFeedback(result: PendingActionResult): PendingReviewFeedback {
+  if (result.action_type === 'confirm') {
+    return {
+      kind: 'success',
+      title: 'Pending item confirmed.',
+      message: 'Confirm wrote the current effective payload to the formal record and resolved the pending item.',
+    }
+  }
+
+  if (result.action_type === 'discard') {
+    return {
+      kind: 'success',
+      title: 'Pending item discarded.',
+      message: 'Discard resolved the pending item without writing a formal record.',
+    }
+  }
+
+  return {
+    kind: 'success',
+    title: 'Pending item force inserted.',
+    message: 'Force Insert wrote the current effective payload through the backend force-insert path and resolved the pending item.',
+  }
+}
+
+function buildCaptureSubmissionSuccessFeedback(result: CaptureSubmitResult): CaptureSubmissionFeedback {
+  if (result.route === 'pending') {
+    return {
+      kind: 'success',
+      title: 'Capture record created.',
+      message: `Capture #${result.capture_id} was created and routed to Pending for formal review.`,
+      captureId: result.capture_id,
+    }
+  }
+
+  return {
+    kind: 'success',
+    title: 'Capture record created.',
+    message: `Capture #${result.capture_id} was created and committed to the formal ${formatDomainLabel(result.target_domain)} line under existing backend rules.`,
+    captureId: result.capture_id,
+  }
+}
+
+function formatPendingEffectivePayloadSource(value: string): string {
+  return value === 'corrected' ? 'Corrected Payload' : 'Proposed Payload'
+}
+
+function describePendingEffectivePayloadSource(value: string): string {
+  return value === 'corrected'
+    ? 'Review is currently based on corrected payload because a fix has already updated the pending item.'
+    : 'Review is currently based on proposed payload because no corrected payload has been saved yet.'
+}
+
+function buildFormalRecordHref(targetDomain: string, recordId: number): string | null {
+  switch (targetDomain) {
+    case 'expense':
+      return `/expense/${recordId}`
+    case 'knowledge':
+      return `/knowledge/${recordId}`
+    case 'health':
+      return `/health/${recordId}`
+    default:
+      return null
+  }
+}
+
+function describeExpenseSourcePath(sourcePendingId: number | null): string {
+  return sourcePendingId === null ? 'Capture -> Expense' : 'Capture -> Pending -> Expense'
+}
+
+function formatCaptureStageLabel(value: string): string {
+  return value === 'formal_record' ? 'Formal Record' : formatStatusLabel(value)
 }
 
 function formatJson(value: unknown): string {

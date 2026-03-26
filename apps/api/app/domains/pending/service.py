@@ -10,14 +10,19 @@ from app.core.exceptions import AppException, BadRequestError, IllegalStateError
 from app.core.logging import build_log_message, get_logger, log_event
 from app.domains.capture import repository as capture_repository
 from app.domains.capture.models import CaptureRecord, CaptureStatus, ParseTargetDomain
+from app.domains.expense import repository as expense_repository
 from app.domains.expense.service import create_expense_record
 from app.domains.health.service import create_health_record
+from app.domains.health import repository as health_repository
 from app.domains.knowledge.service import create_knowledge_entry
+from app.domains.knowledge import repository as knowledge_repository
 from app.domains.pending import repository
 from app.domains.pending.models import PendingActionType, PendingItem, PendingReviewAction, PendingStatus
 from app.domains.pending.schemas import (
     PendingActionResultRead,
+    PendingActionRead,
     PendingDetailRead,
+    PendingFormalResultRead,
     PendingListItemRead,
     PendingListRead,
 )
@@ -98,6 +103,10 @@ def list_pending_reads(
         date_from=date_from,
         date_to=date_to,
     )
+    latest_review_timestamps = repository.get_latest_review_action_timestamps(
+        db,
+        pending_item_ids=[item.id for item in items],
+    )
     next_pending_item = repository.get_oldest_open_pending_item(db)
     next_pending_item_id = next_pending_item.id if next_pending_item is not None else None
 
@@ -105,6 +114,7 @@ def list_pending_reads(
         items=[
             _build_pending_list_item(
                 pending_item,
+                latest_reviewed_at=latest_review_timestamps.get(pending_item.id),
                 next_pending_item_id=next_pending_item_id,
             )
             for pending_item in items
@@ -118,31 +128,46 @@ def list_pending_reads(
 
 def get_pending_read(db: Session, pending_item_id: int) -> PendingDetailRead:
     pending_item = _get_pending_item_or_raise(db, pending_item_id)
+    review_actions = repository.list_pending_review_actions(db, pending_item_id=pending_item.id)
+    effective_payload = _get_latest_payload_snapshot(pending_item)
     return PendingDetailRead(
         id=pending_item.id,
         status=pending_item.status,
         target_domain=pending_item.target_domain,
+        summary=_build_pending_summary(pending_item),
         reason=pending_item.reason,
         proposed_payload_json=pending_item.proposed_payload_json,
         corrected_payload_json=pending_item.corrected_payload_json,
+        effective_payload_json=effective_payload,
+        effective_payload_source="corrected" if pending_item.corrected_payload_json is not None else "proposed",
+        actionable=pending_item.status == PendingStatus.OPEN,
         created_at=pending_item.created_at,
+        updated_at=_resolve_pending_updated_at(
+            pending_item,
+            latest_reviewed_at=review_actions[0].created_at if review_actions else None,
+        ),
         resolved_at=pending_item.resolved_at,
         source_capture_id=pending_item.capture_id,
         parse_result_id=pending_item.parse_result_id,
+        review_actions=[_build_pending_action_read(action) for action in review_actions],
+        formal_result=_build_formal_result_read(db, pending_item),
     )
 
 
 def _build_pending_list_item(
     pending_item: PendingItem,
     *,
+    latest_reviewed_at: datetime | None,
     next_pending_item_id: int | None,
 ) -> PendingListItemRead:
     return PendingListItemRead(
         id=pending_item.id,
         status=pending_item.status,
         target_domain=pending_item.target_domain,
+        summary=_build_pending_summary(pending_item),
         reason_preview=_build_preview(pending_item.reason),
         created_at=pending_item.created_at,
+        updated_at=_resolve_pending_updated_at(pending_item, latest_reviewed_at=latest_reviewed_at),
         has_corrected_payload=pending_item.corrected_payload_json is not None,
         source_capture_id=pending_item.capture_id,
         is_next_to_review=pending_item.id == next_pending_item_id,
@@ -163,6 +188,81 @@ def _normalize_optional_text(value: str | None) -> str | None:
         return None
     normalized = " ".join(str(value).split())
     return normalized or None
+
+
+def _build_pending_summary(pending_item: PendingItem) -> str | None:
+    payload = _as_payload_dict(_get_latest_payload_snapshot(pending_item))
+
+    if payload is not None:
+        if pending_item.target_domain == ParseTargetDomain.EXPENSE:
+            amount = _string_value(payload.get("amount"))
+            currency = _string_value(payload.get("currency"))
+            category = _string_value(payload.get("category"))
+            note = _normalize_optional_text(_string_value(payload.get("note")))
+            headline = " ".join(part for part in (amount, currency) if part).strip() or "Expense review"
+            detail = category or note
+            return _build_preview(" · ".join(part for part in (headline, detail) if part))
+
+        if pending_item.target_domain == ParseTargetDomain.KNOWLEDGE:
+            return _build_preview(
+                _string_value(payload.get("title"))
+                or _string_value(payload.get("content"))
+                or _string_value(payload.get("source_text"))
+                or "Knowledge review"
+            )
+
+        if pending_item.target_domain == ParseTargetDomain.HEALTH:
+            metric_type = _string_value(payload.get("metric_type"))
+            value_text = _string_value(payload.get("value_text"))
+            note = _normalize_optional_text(_string_value(payload.get("note")))
+            return _build_preview(" · ".join(part for part in (metric_type, value_text, note) if part))
+
+        return _build_preview(
+            _string_value(payload.get("raw_text"))
+            or _string_value(payload.get("note"))
+            or _string_value(payload.get("title"))
+        )
+
+    return _build_preview(pending_item.reason)
+
+
+def _resolve_pending_updated_at(
+    pending_item: PendingItem,
+    *,
+    latest_reviewed_at: datetime | None,
+) -> datetime:
+    timestamps = [pending_item.created_at]
+    if pending_item.resolved_at is not None:
+        timestamps.append(pending_item.resolved_at)
+    if latest_reviewed_at is not None:
+        timestamps.append(latest_reviewed_at)
+    return max(timestamps)
+
+
+def _build_pending_action_read(action: PendingReviewAction) -> PendingActionRead:
+    return PendingActionRead.model_validate(action)
+
+
+def _build_formal_result_read(
+    db: Session,
+    pending_item: PendingItem,
+) -> PendingFormalResultRead | None:
+    if pending_item.status not in {PendingStatus.CONFIRMED, PendingStatus.FORCED}:
+        return None
+
+    if pending_item.target_domain == ParseTargetDomain.EXPENSE:
+        record = expense_repository.get_expense_record_by_source_pending_id(db, pending_item.id)
+        return None if record is None else PendingFormalResultRead(target_domain=pending_item.target_domain, record_id=record.id)
+
+    if pending_item.target_domain == ParseTargetDomain.KNOWLEDGE:
+        record = knowledge_repository.get_knowledge_entry_by_source_pending_id(db, pending_item.id)
+        return None if record is None else PendingFormalResultRead(target_domain=pending_item.target_domain, record_id=record.id)
+
+    if pending_item.target_domain == ParseTargetDomain.HEALTH:
+        record = health_repository.get_health_record_by_source_pending_id(db, pending_item.id)
+        return None if record is None else PendingFormalResultRead(target_domain=pending_item.target_domain, record_id=record.id)
+
+    return None
 
 
 def _validate_pagination(*, page: int, page_size: int) -> tuple[int, int]:
@@ -564,6 +664,23 @@ def apply_pending_fix_action(
     return _build_pending_action_result(
         pending_item=pending_item,
         action_type=PendingActionType.FIX,
+    )
+
+
+def apply_pending_force_insert_action(
+    db: Session,
+    *,
+    pending_item_id: int,
+    note: str | None = None,
+) -> PendingActionResultRead:
+    pending_item = force_insert_pending_item(
+        db,
+        pending_item_id=pending_item_id,
+        note=note,
+    )
+    return _build_pending_action_result(
+        pending_item=pending_item,
+        action_type=PendingActionType.FORCE_INSERT,
     )
 
 

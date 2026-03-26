@@ -13,8 +13,11 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.domains.capture import repository as capture_repository
 from app.domains.capture.models import CaptureStatus, ParseConfidenceLevel, ParseTargetDomain
+from app.domains.knowledge.models import KnowledgeEntry
 from app.domains.pending import repository as pending_repository
+from app.domains.pending.models import PendingActionType
 from app.domains.pending.models import PendingStatus
+from app.domains.pending.service import add_review_action, confirm_pending_item
 from app.main import app
 
 
@@ -233,14 +236,60 @@ def test_get_pending_detail_returns_payloads_for_resolved_item(
         "id": pending_item.id,
         "status": PendingStatus.FORCED,
         "target_domain": ParseTargetDomain.KNOWLEDGE,
+        "summary": "final",
         "reason": "manual insert",
         "proposed_payload_json": {"title": "draft", "content": "body"},
         "corrected_payload_json": {"title": "final", "content": "final body"},
+        "effective_payload_json": {"title": "final", "content": "final body"},
+        "effective_payload_source": "corrected",
+        "actionable": False,
         "created_at": "2026-03-10T08:00:00",
+        "updated_at": "2026-03-10T09:00:00",
         "resolved_at": "2026-03-10T09:00:00",
         "source_capture_id": pending_item.capture_id,
         "parse_result_id": pending_item.parse_result_id,
+        "review_actions": [],
+        "formal_result": None,
     }
+
+
+def test_get_pending_detail_includes_review_history_and_formal_result_context(
+    api_client: TestClient,
+    db: Session,
+) -> None:
+    pending_item = _create_pending_fixture(
+        db,
+        target_domain=ParseTargetDomain.KNOWLEDGE,
+        status=PendingStatus.OPEN,
+        created_at=datetime(2026, 3, 13, 8, 0, 0),
+        reason="knowledge pending",
+        proposed_payload_json={"title": "draft title", "content": "draft body"},
+        corrected_payload_json={"title": "final title", "content": "final body"},
+    )
+    add_review_action(
+        db,
+        pending_item_id=pending_item.id,
+        action_type=PendingActionType.FIX,
+        before_payload_json={"title": "draft title", "content": "draft body"},
+        after_payload_json={"title": "final title", "content": "final body"},
+        note="normalized title",
+    )
+    confirm_pending_item(db, pending_item_id=pending_item.id, note="ship it")
+
+    response = api_client.get(f"/api/pending/{pending_item.id}")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["summary"] == "final title"
+    assert data["effective_payload_source"] == "corrected"
+    assert data["actionable"] is False
+    assert data["formal_result"] == {
+        "target_domain": ParseTargetDomain.KNOWLEDGE,
+        "record_id": db.query(KnowledgeEntry).one().id,
+    }
+    assert [item["action_type"] for item in data["review_actions"]] == ["confirm", "fix"]
+    assert data["review_actions"][0]["note"] == "ship it"
+    assert data["review_actions"][1]["note"] == "normalized title"
 
 
 @pytest.mark.parametrize(

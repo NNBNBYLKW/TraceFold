@@ -288,6 +288,7 @@ a {
   transform: translateY(-1px);
 }
 
+.primary-button:disabled,
 .secondary-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -670,6 +671,12 @@ a {
   color: #295f50;
 }
 
+.badge--status-confirmed,
+.badge--status-forced {
+  background: #dcebdd;
+  color: #2f6147;
+}
+
 .badge--status-viewed {
   background: #e8ece8;
   color: #53645c;
@@ -685,6 +692,7 @@ a {
   color: #7a6a56;
 }
 
+.badge--status-discarded,
 .badge--status-resolved {
   background: #f0ebe2;
   color: #7a6a56;

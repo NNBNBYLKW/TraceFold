@@ -13,6 +13,7 @@ from app.domains.pending.schemas import (
     PendingConfirmRequest,
     PendingDetailRead,
     PendingDiscardRequest,
+    PendingForceInsertRequest,
     PendingFixTextRequest,
     PendingListRead,
 )
@@ -100,3 +101,18 @@ def fix_pending_item(
     )
     workbench_service.record_pending_action_best_effort(db, action_read=result)
     return success_response(data=result, message="Pending item updated.")
+
+
+@router.post("/{pending_item_id}/force_insert", response_model=ApiResponse[PendingActionResultRead])
+def force_insert_pending_item(
+    pending_item_id: int,
+    payload: PendingForceInsertRequest,
+    db: Session = Depends(get_db),
+) -> ApiResponse[PendingActionResultRead]:
+    result = service.apply_pending_force_insert_action(
+        db,
+        pending_item_id=pending_item_id,
+        note=payload.note,
+    )
+    workbench_service.record_pending_action_best_effort(db, action_read=result)
+    return success_response(data=result, message="Pending item force inserted.")

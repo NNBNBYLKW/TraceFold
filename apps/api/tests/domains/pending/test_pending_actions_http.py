@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.domains.capture import repository as capture_repository
 from app.domains.capture.models import CaptureStatus, ParseConfidenceLevel, ParseTargetDomain
 from app.domains.expense.models import ExpenseRecord
+from app.domains.health.models import HealthRecord
 from app.domains.pending import repository as pending_repository
 from app.domains.pending.models import PendingReviewAction, PendingStatus
 from app.main import app, create_app
@@ -172,6 +173,39 @@ def test_post_pending_fix_updates_pending_with_minimal_text_correction(
     }
     assert action.action_type == "fix"
     assert action.note == "今天花了25元午饭"
+
+
+def test_post_pending_force_insert_resolves_item_through_force_path(
+    api_client: TestClient,
+    db: Session,
+) -> None:
+    pending_item = _create_pending_fixture(
+        db,
+        target_domain=ParseTargetDomain.HEALTH,
+        proposed_payload={"metric_type": "sleep", "value_text": "8h"},
+    )
+
+    response = api_client.post(
+        f"/api/pending/{pending_item.id}/force_insert",
+        json={"note": "force through"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "action_executed": True,
+        "action_type": "force_insert",
+        "pending_id": pending_item.id,
+        "status": PendingStatus.FORCED,
+        "target_domain": ParseTargetDomain.HEALTH,
+        "source_capture_id": pending_item.capture_id,
+    }
+
+    refreshed = pending_repository.get_pending_item_by_id(db, pending_item.id)
+    health_record = db.query(HealthRecord).one()
+
+    assert refreshed is not None
+    assert refreshed.status == PendingStatus.FORCED
+    assert health_record.source_pending_id == pending_item.id
 
 
 def test_post_pending_confirm_rejects_already_resolved_item(
