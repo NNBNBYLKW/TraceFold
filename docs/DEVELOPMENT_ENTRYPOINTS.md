@@ -34,11 +34,13 @@ For the current closed Web state, use this reading order:
 6. `docs/WEB_INFORMATION_HIERARCHY_CONTRACT.md`
 7. `docs/WEB_PP1_CROSS_PAGE_CONSISTENCY_AND_SMOKE_BASELINE.md`
 8. `docs/PHASE2_V1_CLOSURE_BASELINE.md`
+9. `docs/PHASE2_TECHNICAL_SUMMARY_V1.md`
 
 The first four define the current formal Web baseline.
 The optimization and hierarchy docs define the restrained Post-Phase-1 polish direction.
 The closure baseline records the currently closed state for the first Web optimization round.
 The Phase 2 V1 closure baseline records the currently implemented closure-ready expansion across Pending, Capture, Expense, Workbench Round 2, Templates restraint, and local operability.
+The Phase 2 technical summary records the same bounded pack in implementation-facing terms.
 
 This closed round should not be implicitly reopened.
 Any further Web work should be opened as a new scoped task.

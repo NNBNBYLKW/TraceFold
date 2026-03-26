@@ -24,6 +24,9 @@ The main execution-era materials currently live under:
 - `docs/archive/phase1/desktop_r2/`
 - `docs/archive/phase1/baselines/`
 - `docs/archive/phase1/anomalies/`
+- `docs/archive/post_phase1/web_pp1/`
+- `docs/archive/process/`
+- `docs/archive/repo/`
 
 These are retained, not deleted, because they still provide historical justification and traceability.
 
@@ -35,17 +38,21 @@ Use root-level docs for current work:
 - `docs/DEVELOPMENT_ENTRYPOINTS.md`
 - `docs/WEB_CONSUMPTION_BASELINE.md`
 - `docs/PHASE1_SUMMARY.md`
+- `docs/PHASE2_V1_CLOSURE_BASELINE.md`
+- `docs/PHASE2_TECHNICAL_SUMMARY_V1.md`
 - `docs/API_*_BASELINE.md`
 - `docs/WEB_*_BASELINE.md`
 - current startup / validation / Desktop / Telegram operating docs
 
 ## About Execution-Era Task Materials
 
-This repo does not currently contain a separate root-level set of standalone `T1~T5` or `WEB_T1~T4` task docs that need a second archive move.
+The current root-level docs surface has been trimmed so that execution-era task packs no longer stay in the main reading layer.
 
-Instead:
+Those archived materials now include:
 
-- the older execution-era Step / Chapter / Round / Task materials are already under `docs/archive/phase1/**`
-- the newer completed backend and Web work has been consolidated into current baseline docs such as `docs/API_*_BASELINE.md` and `docs/WEB_*_BASELINE.md`
+- older Step / Chapter / Round / Task materials under `docs/archive/phase1/**`
+- the Post-Phase-1 Web PP1 execution pack and PP1 task docs under `docs/archive/post_phase1/web_pp1/`
+- process-only scaffolding such as `docs/archive/process/TASK_TEMPLATE.md`
+- repo snapshot artifacts such as `docs/archive/repo/tree.txt`
 
-That means the archive action in this round is mainly a documentation-layer clarification, not a large file move.
+Their durable conclusions remain preserved in current baseline and closure docs such as `docs/POST_PHASE1_BASELINE.md`, `docs/WEB_CONSUMPTION_BASELINE.md`, `docs/WEB_PP1_CROSS_PAGE_CONSISTENCY_AND_SMOKE_BASELINE.md`, and the Phase 2 closure summaries.
