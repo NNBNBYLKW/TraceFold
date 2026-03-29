@@ -94,6 +94,46 @@ a {
   gap: 0.55rem;
 }
 
+.locale-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 170, 154, 0.38);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.locale-toggle__label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.locale-toggle__button {
+  min-width: 3.2rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.locale-toggle__button:hover {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--accent);
+}
+
+.locale-toggle__button.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #f6f6f0;
+}
+
 .nav-link {
   padding: 0.7rem 0.95rem;
   border-radius: 999px;

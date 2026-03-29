@@ -28,6 +28,53 @@ class CaptureSubmitResultRead(BaseModel):
     formal_record_id: int | None = None
 
 
+class BulkCapturePreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str
+    text_content: str
+
+
+class BulkCapturePreviewCandidateRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    raw_text: str
+    preview: str | None = None
+    char_count: int
+    is_valid: bool
+    issue: str | None = None
+
+
+class BulkCapturePreviewRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str
+    split_strategy: str
+    candidate_count: int
+    valid_count: int
+    invalid_count: int
+    candidates: list[BulkCapturePreviewCandidateRead]
+
+
+class BulkCaptureImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str
+    entries: list[str]
+
+
+class BulkCaptureImportResultRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str
+    imported_count: int
+    skipped_count: int
+    pending_count: int
+    committed_count: int
+    capture_ids: list[int]
+
+
 class CaptureRecordRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="forbid")
 
@@ -51,6 +98,9 @@ class CaptureListItemRead(BaseModel):
     summary: str | None = None
     target_domain: str | None = None
     current_stage: str
+    pending_item_id: int | None = None
+    formal_record_id: int | None = None
+    formal_source_pending_id: int | None = None
     created_at: datetime
     updated_at: datetime
 

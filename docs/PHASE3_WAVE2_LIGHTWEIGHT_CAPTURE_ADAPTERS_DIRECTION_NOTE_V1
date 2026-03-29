@@ -1,0 +1,347 @@
+1. Purpose
+
+This document defines a possible direction for Phase 3 Wave 2 in TraceFold.
+
+It exists to answer:
+
+why a bot/adapters wave is a reasonable next step after Phase 3 Wave 1
+what problem this wave is actually trying to solve
+what TG bot / Feishu bot should mean inside TraceFold
+what boundaries must remain frozen
+what work packages should structure the wave
+what should explicitly remain out of scope
+
+This document is a direction note only.
+It does not yet authorize broad execution or implementation prompts.
+
+2. Current Project Position
+
+TraceFold remains:
+
+a local-first personal data workbench / personal data platform
+centered on the main chain
+Capture -> Parse -> Pending -> Confirm -> Formal Record -> Query / Analysis / Derivation
+centered on the application service layer as the only business-logic center
+centered on SQLite as the single source of truth
+centered on Web as the main business interface
+with Desktop as shell-level entry
+with Telegram as lightweight adapter
+
+Phase 3 Wave 1 has already produced bounded closures around:
+
+Input-side daily-use improvement
+Quick Capture
+Bulk Intake with Preview
+Capture Inbox / Intake Triage
+Readback/detail usability improvement
+detail hierarchy tightening
+density/readback polish
+bounded Workbench readback-support polish
+
+This means the system already has a stronger Web intake and readback surface than before.
+
+The next reasonable problem is no longer only “make the Web better.”
+The next reasonable problem is:
+
+make it easier to begin recording from the places where users naturally start typing.
+
+3. Why Wave 2 Exists
+
+The motivation for this wave is simple:
+
+daily use improves only partially if input is still mostly tied to opening the Web workbench first
+for many real-life use cases, the natural starting point for recording is a chat-like surface
+the user explicitly wants recording to feel more like “drop a message in quickly”
+this is especially relevant for:
+Telegram
+Feishu
+
+So the problem is not “how to create new product lines,” but:
+
+how to reduce the friction of starting a record by using lightweight message-based adapters that still feed the same unified chain.
+
+Wave 2 therefore should not be interpreted as “bot productization.”
+
+It should be interpreted as:
+
+lightweight capture adapters for lower-friction entry into the existing system.
+
+4. Proposed Theme
+Proposed theme
+
+Phase 3 Wave 2 = Lightweight Capture Adapters
+
+Chinese working expression:
+
+Phase 3 第二波 = 轻量输入适配器阶段
+
+This theme means:
+
+chat-like entry
+lower-friction message-based capture
+adapters, not independent product centers
+same main chain
+same service-centered backend truth
+same capture-first, structure-later model
+
+This wave is not about:
+
+bot intelligence
+automation
+workflow orchestration
+bot-side review
+management surfaces
+5. Core Product Objective
+
+The core objective of this wave is:
+
+to let users begin recording more naturally from Telegram and Feishu by treating them as lightweight capture adapters that send input into the same Capture-first main chain, without creating independent bot-side business logic or new product centers.
+
+This objective implies several important constraints:
+
+1. adapter-first, not bot-product-first
+
+TG bot and Feishu bot are entry surfaces, not product centers.
+
+2. capture-first, structure-later
+
+Bot input should create capture records first.
+Parsing, pending, and formalization remain downstream.
+
+3. same business logic center
+
+The application service layer remains the only real business-logic center.
+Bots do not become alternate logic systems.
+
+4. lighter entry, not richer orchestration
+
+The point is to make recording easier, not to turn messaging tools into workflow platforms.
+
+6. What This Wave Is Not
+
+This wave is not:
+
+a Telegram product line
+a Feishu product line
+a bot management console
+a review bot
+an AI assistant bot
+a workflow bot system
+a multi-turn conversational agent
+a direct-to-formal shortcut
+a command/control center
+a new platformization wave
+
+It also does not imply:
+
+Telegram management expansion
+Feishu workflow platform expansion
+Desktop role change
+AI parsing/suggestion expansion
+automation engine work
+task orchestration work
+
+These must remain explicitly outside the wave.
+
+7. Product Meaning of TG Bot / Feishu Bot in TraceFold
+
+Within this wave, TG bot and Feishu bot should each mean only one thing:
+
+a lightweight message-to-capture adapter
+
+That means:
+
+the user sends text
+the adapter submits it into Capture
+the system acknowledges success/failure
+downstream parse / pending / confirm still happen later
+the user can continue in Web when deeper work is needed
+
+The bot should be thought of as:
+
+a very light recording doorway
+not a place where the main work happens
+
+This distinction is essential.
+
+8. Recommended Wave Structure
+
+I recommend structuring the wave around four work packages.
+
+WP1 — Unified Adapter Contract
+Purpose
+
+Define one bounded contract for all message-based capture adapters.
+
+Why first
+
+Without a shared contract, TG and Feishu can easily grow into two independent logic branches.
+
+What this work package should solve
+unified input semantics
+unified source metadata shape
+unified success/failure response pattern
+unified capture-first behavior
+explicit boundary that adapters do not own downstream business logic
+Important boundary
+
+This is not a generalized adapter framework for everything.
+It is a bounded contract for lightweight capture adapters.
+
+WP2 — Telegram Quick Capture Bot V1
+Purpose
+
+Make Telegram a real lightweight quick-recording entry point.
+
+Why Telegram first
+
+Telegram already fits the project’s established “lightweight adapter” interpretation more naturally.
+It is therefore the most natural first adapter to formalize.
+
+First-version meaning
+send text
+create capture
+get restrained feedback
+keep the interaction light
+no bot-side review actions
+Important boundary
+
+Telegram should remain an adapter, not become a control surface.
+
+WP3 — Feishu Quick Capture Bot V1
+Purpose
+
+Bring Feishu into the same bounded adapter model.
+
+Product meaning
+
+Feishu should become:
+
+a message-based lightweight entry path
+not a workflow bot
+not an approval/review platform
+not a complex card/app system in the first wave
+Important boundary
+
+Feishu must not become a second, more enterprise-shaped business center.
+
+WP4 — Adapter Usability Hardening
+Purpose
+
+Make the adapters actually feel “easy to start recording with.”
+
+Areas of likely focus
+clearer success feedback
+better failure feedback
+no silent input loss
+cleaner capture-source traceability
+clear handoff back into Web surfaces when deeper work is needed
+bounded bilingual or user-facing copy alignment where useful
+Important boundary
+
+This is still usability hardening, not feature expansion into new bot roles.
+
+9. Recommended Execution Order
+
+I recommend the following order:
+
+Wave 2-A
+
+Unified Adapter Contract
+
+Wave 2-B
+
+Telegram Quick Capture Bot V1
+
+Wave 2-C
+
+Feishu Quick Capture Bot V1
+
+Wave 2-D
+
+Adapter Usability Hardening
+
+This order keeps the wave stable:
+
+define shared semantics first
+formalize the more natural existing adapter first
+then extend the same model to Feishu
+then harden usability after both exist
+10. Preserved Boundaries for This Wave
+
+The following must remain true throughout this wave:
+
+bots create capture records first
+bots do not write formal records directly
+bots do not bypass Pending or review semantics
+bots do not execute confirm / discard / force_insert
+bots do not own business logic
+Web remains the main business interface
+Desktop remains shell-level entry
+Telegram and Feishu remain lightweight adapters
+no AI parsing/suggestion expansion is introduced under the banner of “smarter bots”
+no workflow / orchestration drift is introduced
+11. Entry Criteria for the Wave
+
+This wave is justified only because:
+
+input friction reduction has already been established as the current Phase 3 theme
+Wave 1 already strengthened Web-side intake
+the next natural friction point is beginning capture from chat-like environments
+the user explicitly wants recording to feel more like dropping a message in naturally
+
+This is therefore a continuation of the same product problem, not a new unrelated direction.
+
+12. Completion Definition for This Wave
+
+A successful Lightweight Capture Adapters wave should make it true that:
+
+Telegram and/or Feishu can act as lightweight message-to-capture entry surfaces
+the adapters feel materially easier than opening deeper workbench surfaces for quick recording
+all adapter inputs still remain capture-first
+no adapter becomes a review or business-control surface
+source traceability remains clear
+the wave does not drift into bot platformization
+
+This wave should not be judged by how “powerful” the bots look.
+It should be judged by how naturally users can begin recording without breaking the architecture.
+
+13. Drift Checks
+
+This wave begins to drift if any of the following happen:
+
+TG bot or Feishu bot starts growing bot-side workflow logic
+adapters begin to execute formal review actions
+adapters begin to bypass capture-first semantics
+“helpful” behavior starts turning into AI parsing/classification expansion
+the wave starts to resemble a management console or workflow system
+Telegram or Feishu begins to act like a product center rather than an entry adapter
+
+If this happens, the wave is no longer aligned.
+
+14. Current Recommendation
+
+The current recommendation is:
+
+if TraceFold wants to keep improving low-friction daily recording after Phase 3 Wave 1, the cleanest next bounded direction is Lightweight Capture Adapters, starting from a unified adapter contract and a Telegram-first v1.
+
+This recommendation assumes a continuing commitment to:
+
+local-first
+capture-first
+service-centered semantics
+restrained scope
+adapter-not-center discipline
+15. Next Step
+
+The next appropriate planning step after this direction note is:
+
+define the first executable work package: Unified Adapter Contract
+
+That package should answer:
+
+what the shared adapter contract is
+what minimal metadata all adapters must provide
+how success/failure should be handled
+what the adapters are explicitly not allowed to do
+how Telegram and Feishu remain siblings under one intake model

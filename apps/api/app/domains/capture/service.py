@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -11,6 +12,9 @@ from app.core.logging import build_log_message, get_logger, log_event
 from app.domains.capture import repository
 from app.domains.capture.models import CaptureRecord, CaptureStatus, ParseResult, ParseTargetDomain
 from app.domains.capture.schemas import (
+    BulkCaptureImportResultRead,
+    BulkCapturePreviewCandidateRead,
+    BulkCapturePreviewRead,
     CaptureDetailRead,
     CaptureFormalResultRead,
     CaptureListItemRead,
@@ -45,6 +49,9 @@ _FORMAL_TARGET_DOMAINS = {
     ParseTargetDomain.HEALTH,
 }
 _PREVIEW_LENGTH = 120
+_BULK_FILE_SOURCE_TYPE = "file_import"
+_BULK_PREVIEW_SPLIT_STRATEGY = "split_by_blank_lines"
+_ALLOWED_BULK_FILE_SUFFIXES = {".txt", ".md"}
 logger = get_logger(__name__)
 
 
@@ -127,15 +134,27 @@ def list_capture_reads(
         capture_ids=[capture.id for capture in captures],
     )
 
-    return CaptureListRead(
-        items=[
+    items: list[CaptureListItemRead] = []
+    for capture in captures:
+        parse_result = parse_results.get(capture.id)
+        pending_item = pending_items.get(capture.id)
+        formal_result = _build_formal_result_read(
+            db,
+            capture=capture,
+            parse_result=parse_result,
+            pending_item=pending_item,
+        )
+        items.append(
             _build_capture_list_item(
                 capture,
-                parse_result=parse_results.get(capture.id),
-                pending_item=pending_items.get(capture.id),
+                parse_result=parse_result,
+                pending_item=pending_item,
+                formal_result=formal_result,
             )
-            for capture in captures
-        ],
+        )
+
+    return CaptureListRead(
+        items=items,
         page=validated_page,
         page_size=validated_page_size,
         total=total,
@@ -235,6 +254,76 @@ def submit_capture_and_process(
         raise
 
 
+def preview_bulk_capture_intake(
+    *,
+    file_name: str,
+    text_content: str,
+) -> BulkCapturePreviewRead:
+    validated_file_name = _validate_bulk_file_name(file_name)
+    segments = _split_bulk_capture_candidates(text_content)
+    candidates = [
+        _build_bulk_preview_candidate(index=index, raw_text=segment)
+        for index, segment in enumerate(segments, start=1)
+    ]
+
+    return BulkCapturePreviewRead(
+        file_name=validated_file_name,
+        split_strategy=_BULK_PREVIEW_SPLIT_STRATEGY,
+        candidate_count=len(candidates),
+        valid_count=sum(1 for candidate in candidates if candidate.is_valid),
+        invalid_count=sum(1 for candidate in candidates if not candidate.is_valid),
+        candidates=candidates,
+    )
+
+
+def import_bulk_capture_intake(
+    db: Session,
+    *,
+    file_name: str,
+    entries: list[str],
+) -> BulkCaptureImportResultRead:
+    validated_file_name = _validate_bulk_file_name(file_name)
+    if not entries:
+        raise BadRequestError(
+            message="entries must contain at least one candidate.",
+            code="INVALID_BULK_CAPTURE_ENTRIES",
+        )
+
+    imported_count = 0
+    skipped_count = 0
+    pending_count = 0
+    committed_count = 0
+    capture_ids: list[int] = []
+
+    for index, entry in enumerate(entries, start=1):
+        normalized_entry = _normalize_optional_text(entry)
+        if normalized_entry is None:
+            skipped_count += 1
+            continue
+
+        result = submit_capture_and_process(
+            db,
+            raw_text=normalized_entry,
+            source_type=_BULK_FILE_SOURCE_TYPE,
+            source_ref=_build_bulk_source_ref(validated_file_name, index),
+        )
+        imported_count += 1
+        capture_ids.append(result.capture_id)
+        if result.route == "pending":
+            pending_count += 1
+        elif result.route == "committed":
+            committed_count += 1
+
+    return BulkCaptureImportResultRead(
+        file_name=validated_file_name,
+        imported_count=imported_count,
+        skipped_count=skipped_count,
+        pending_count=pending_count,
+        committed_count=committed_count,
+        capture_ids=capture_ids,
+    )
+
+
 def _build_capture_submit_result(
     *,
     capture: CaptureRecord,
@@ -251,11 +340,38 @@ def _build_capture_submit_result(
     )
 
 
+def _build_bulk_preview_candidate(
+    *,
+    index: int,
+    raw_text: str,
+) -> BulkCapturePreviewCandidateRead:
+    normalized_text = _normalize_optional_text(raw_text)
+    if normalized_text is None:
+        return BulkCapturePreviewCandidateRead(
+            index=index,
+            raw_text="",
+            preview=None,
+            char_count=0,
+            is_valid=False,
+            issue="blank_entry",
+        )
+
+    return BulkCapturePreviewCandidateRead(
+        index=index,
+        raw_text=normalized_text,
+        preview=_build_preview(normalized_text),
+        char_count=len(normalized_text),
+        is_valid=True,
+        issue=None,
+    )
+
+
 def _build_capture_list_item(
     capture: CaptureRecord,
     *,
     parse_result: ParseResult | None,
     pending_item: PendingItem | None,
+    formal_result: CaptureFormalResultRead | None,
 ) -> CaptureListItemRead:
     return CaptureListItemRead(
         id=capture.id,
@@ -263,14 +379,17 @@ def _build_capture_list_item(
         source_type=capture.source_type,
         source_ref=capture.source_ref,
         summary=_build_capture_summary(capture),
-        target_domain=_resolve_target_domain(parse_result=parse_result, pending_item=pending_item, formal_result=None),
-        current_stage=_resolve_current_stage(capture=capture, pending_item=pending_item, formal_result=None),
+        target_domain=_resolve_target_domain(parse_result=parse_result, pending_item=pending_item, formal_result=formal_result),
+        current_stage=_resolve_current_stage(capture=capture, pending_item=pending_item, formal_result=formal_result),
+        pending_item_id=None if pending_item is None else pending_item.id,
+        formal_record_id=None if formal_result is None else formal_result.record_id,
+        formal_source_pending_id=None if formal_result is None else formal_result.source_pending_id,
         created_at=capture.created_at,
         updated_at=_resolve_capture_updated_at(
             capture=capture,
             parse_result=parse_result,
             pending_item=pending_item,
-            formal_result=None,
+            formal_result=formal_result,
         ),
     )
 
@@ -598,6 +717,18 @@ def _validate_date_range(*, date_from: datetime | None, date_to: datetime | None
         )
 
 
+def _split_bulk_capture_candidates(text_content: str) -> list[str]:
+    normalized_text = text_content.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized_text.strip():
+        raise BadRequestError(
+            message="text_content must not be empty.",
+            code="INVALID_BULK_CAPTURE_TEXT",
+        )
+
+    parts = re.split(r"\n\s*\n", normalized_text)
+    return parts if parts else [normalized_text]
+
+
 def _build_preview(value: str | None) -> str | None:
     normalized = _normalize_optional_text(value)
     if normalized is None:
@@ -628,6 +759,24 @@ def _validate_raw_text(raw_text: str) -> str:
     return raw_text
 
 
+def _validate_bulk_file_name(file_name: str) -> str:
+    normalized_file_name = _normalize_optional_text(file_name)
+    if normalized_file_name is None:
+        raise BadRequestError(
+            message="file_name must not be empty.",
+            code="INVALID_BULK_CAPTURE_FILE_NAME",
+        )
+
+    lowered = normalized_file_name.lower()
+    if not any(lowered.endswith(suffix) for suffix in _ALLOWED_BULK_FILE_SUFFIXES):
+        raise BadRequestError(
+            message="Only .txt and .md text files are supported for bulk capture intake.",
+            code="UNSUPPORTED_BULK_CAPTURE_FILE_TYPE",
+        )
+
+    return normalized_file_name
+
+
 def _validate_source_type(source_type: str) -> str:
     normalized_source_type = _normalize_optional_text(source_type)
     if normalized_source_type is None:
@@ -643,6 +792,10 @@ def _normalize_optional_text(value: str | None) -> str | None:
         return None
     normalized = " ".join(str(value).split())
     return normalized or None
+
+
+def _build_bulk_source_ref(file_name: str, index: int) -> str:
+    return f"{file_name} · item {index}"
 
 
 def _as_optional_int(value: object) -> int | None:

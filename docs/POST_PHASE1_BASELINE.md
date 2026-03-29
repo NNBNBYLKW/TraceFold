@@ -82,6 +82,7 @@ The Web side is currently considered formally established in these areas:
 - Expense formal consumption polish
 - Knowledge detail consumption of formal content plus `knowledge_summary`
 - Health page consumption of formal records plus rule alerts
+- bounded zh/en Web UI support across shared shell, shared state, and current main surfaces
 - shared state presentation for loading / empty / unavailable / degraded and derived-state feedback
 - current Phase 2 V1 closure-ready additions recorded in `docs/PHASE2_V1_CLOSURE_BASELINE.md`
 
@@ -92,6 +93,9 @@ These are the Web baseline documents:
 - `docs/WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md`
 - `docs/WEB_SHARED_STATE_POLISH_BASELINE.md`
 - `docs/PHASE2_V1_CLOSURE_BASELINE.md`
+- `docs/POST_PHASE2_BILINGUAL_UI_CLOSURE_BASELINE.md`
+- `docs/PHASE3_V1_INPUT_PACK_CLOSURE_BASELINE.md`
+- `docs/PHASE3_READBACK_DETAIL_DENSITY_CLOSURE_BASELINE.md`
 
 ## Current Web Closure Status
 
@@ -134,6 +138,51 @@ That closure-ready pack is recorded in:
 This does not mean the whole product or the whole frontend is complete.
 It records a bounded Phase 2 V1 closure-ready state only.
 
+A later bounded bilingual Web UI support layer is also now implementation-complete and closure-ready.
+
+That bounded closure includes:
+
+- zh/en Web UI switching
+- locale persistence
+- shared shell and shared state copy switching
+- page-level zh/en coverage for Workbench / Dashboard, Pending, Capture, Expense, Knowledge, and Health
+- built-in template and mode localization where safe
+- preserved raw, formal, user-authored, and AI-derived content boundaries
+
+That closure-ready state is recorded in:
+
+- `docs/POST_PHASE2_BILINGUAL_UI_CLOSURE_BASELINE.md`
+
+This still does not mean backend i18n, API localization, Desktop / Telegram switching, or a generalized multilingual platform have been introduced.
+
+A later bounded Phase 3 V1 input-side pack is also now implementation-complete and closure-ready.
+
+That bounded closure includes:
+
+- Quick Capture
+- Bulk Intake with Preview
+- Intake Triage / Capture Inbox
+
+That closure-ready state is recorded in:
+
+- `docs/PHASE3_V1_INPUT_PACK_CLOSURE_BASELINE.md`
+
+This still does not mean broader Phase 3 work, desktop or Telegram quick entry, AI parsing/suggestions, or generic import platformization have been introduced.
+
+A later bounded Phase 3 readback/detail-density pack is now also implementation-complete and closure-ready.
+
+That bounded closure includes:
+
+- detail hierarchy tightening across Pending, Capture, Expense, Knowledge, and Health detail pages
+- readback/density polish around compact facts first, longer readback content second, and provenance/support later
+- bounded Workbench / Dashboard readback-support polish without reopening entry-layer or center roles
+
+That closure-ready state is recorded in:
+
+- `docs/PHASE3_READBACK_DETAIL_DENSITY_CLOSURE_BASELINE.md`
+
+This still does not mean broader Phase 3 work, charts/analytics expansion, AI expansion, dashboard-center growth, design-system work, or whole-frontend completion have been introduced.
+
 ## Desktop And Telegram Reality Check
 
 Desktop and Telegram remain intentionally narrow:
@@ -154,11 +203,14 @@ For current work, use this order:
 2. `docs/DEVELOPMENT_ENTRYPOINTS.md`
 3. `docs/WEB_CONSUMPTION_BASELINE.md`
 4. `docs/PHASE2_V1_CLOSURE_BASELINE.md` when the task touches current Phase 2 V1 Web scope
-5. `docs/PHASE1_SUMMARY.md`
-6. `docs/ARCHITECTURE_RULES.md`
-7. `docs/ENV_CONVENTIONS.md`
-8. The specific `docs/API_*_BASELINE.md` or `docs/WEB_*_BASELINE.md` relevant to the task
-9. `docs/archive/README.md` and then `docs/archive/phase1/**` only when historical traceability is needed
+5. `docs/POST_PHASE2_BILINGUAL_UI_CLOSURE_BASELINE.md` when the task touches current bounded Web bilingual UI support
+6. `docs/PHASE3_V1_INPUT_PACK_CLOSURE_BASELINE.md` when the task touches current Phase 3 input-side Web scope
+7. `docs/PHASE3_READBACK_DETAIL_DENSITY_CLOSURE_BASELINE.md` when the task touches current bounded detail/readback Web polish
+8. `docs/PHASE1_SUMMARY.md`
+9. `docs/ARCHITECTURE_RULES.md`
+10. `docs/ENV_CONVENTIONS.md`
+11. The specific `docs/API_*_BASELINE.md` or `docs/WEB_*_BASELINE.md` relevant to the task
+12. `docs/archive/README.md` and then `docs/archive/phase1/**` only when historical traceability is needed
 
 ## Hot Docs Vs Archive
 

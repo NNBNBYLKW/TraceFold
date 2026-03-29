@@ -220,10 +220,14 @@ def test_capture_list_shows_upstream_status_and_stage_visibility(
     assert pending_item["current_stage"] == "pending_review"
     assert pending_item["target_domain"] == "expense"
     assert pending_item["source_ref"] == "wechat"
+    assert pending_item["pending_item_id"] is not None
+    assert pending_item["formal_record_id"] is None
 
     assert committed_item["status"] == CaptureStatus.COMMITTED
     assert committed_item["current_stage"] == "formal_record"
     assert committed_item["target_domain"] == "expense"
+    assert committed_item["pending_item_id"] is None
+    assert committed_item["formal_record_id"] is not None
 
 
 def test_capture_detail_shows_parse_pending_and_formal_linkage_after_pending_resolution(

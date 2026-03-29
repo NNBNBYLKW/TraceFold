@@ -10,13 +10,15 @@ def test_health_detail_keeps_formal_source_and_alerts_without_ai_section() -> No
     end = source.index("function renderDetailErrorView(")
     block = source[start:end]
 
-    detail_position = block.index("title: 'Formal Record'")
+    detail_position = block.index("Formal Record")
     source_position = block.index("renderSourceSection(")
     alerts_position = block.index("renderHealthAlertSection(")
 
     assert detail_position < source_position < alerts_position
     assert "renderHealthAiSummarySection(" not in block
     assert "AI Derivation" not in block
+    assert "Recorded Value" in block
+    assert "Supporting Note" in block
 
 
 def test_health_pages_do_not_include_health_ai_actions_or_copy() -> None:

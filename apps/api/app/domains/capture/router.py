@@ -9,6 +9,10 @@ from app.core.responses import ApiResponse, created_response, success_response
 from app.db.session import get_db
 from app.domains.capture import service
 from app.domains.capture.schemas import (
+    BulkCaptureImportRequest,
+    BulkCaptureImportResultRead,
+    BulkCapturePreviewRead,
+    BulkCapturePreviewRequest,
     CaptureDetailRead,
     CaptureListRead,
     CaptureSubmitRequest,
@@ -16,6 +20,30 @@ from app.domains.capture.schemas import (
 )
 
 router = APIRouter()
+
+
+@router.post("/bulk-intake/preview", response_model=ApiResponse[BulkCapturePreviewRead])
+def preview_bulk_capture_intake(
+    payload: BulkCapturePreviewRequest,
+) -> ApiResponse[BulkCapturePreviewRead]:
+    result = service.preview_bulk_capture_intake(
+        file_name=payload.file_name,
+        text_content=payload.text_content,
+    )
+    return success_response(data=result, message="Bulk capture preview generated.")
+
+
+@router.post("/bulk-intake/import", response_model=ApiResponse[BulkCaptureImportResultRead])
+def import_bulk_capture_intake(
+    payload: BulkCaptureImportRequest,
+    db: Session = Depends(get_db),
+) -> ApiResponse[BulkCaptureImportResultRead]:
+    result = service.import_bulk_capture_intake(
+        db,
+        file_name=payload.file_name,
+        entries=payload.entries,
+    )
+    return success_response(data=result, message="Bulk capture import completed.")
 
 
 @router.get("", response_model=ApiResponse[CaptureListRead])

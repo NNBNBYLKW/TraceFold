@@ -248,6 +248,33 @@ export interface CaptureSubmitResult {
   formal_record_id: number | null
 }
 
+export interface BulkCapturePreviewCandidate {
+  index: number
+  raw_text: string
+  preview: string | null
+  char_count: number
+  is_valid: boolean
+  issue: string | null
+}
+
+export interface BulkCapturePreviewResult {
+  file_name: string
+  split_strategy: string
+  candidate_count: number
+  valid_count: number
+  invalid_count: number
+  candidates: BulkCapturePreviewCandidate[]
+}
+
+export interface BulkCaptureImportResult {
+  file_name: string
+  imported_count: number
+  skipped_count: number
+  pending_count: number
+  committed_count: number
+  capture_ids: number[]
+}
+
 export interface CaptureListItem {
   id: number
   status: string
@@ -256,6 +283,9 @@ export interface CaptureListItem {
   summary: string | null
   target_domain: string | null
   current_stage: string
+  pending_item_id: number | null
+  formal_record_id: number | null
+  formal_source_pending_id: number | null
   created_at: string
   updated_at: string
 }
@@ -611,6 +641,18 @@ export async function submitCapture(
   payload: Record<string, unknown>,
 ): Promise<CaptureSubmitResult> {
   return request<CaptureSubmitResult>('/api/capture', undefined, 'POST', payload)
+}
+
+export async function previewBulkCapture(
+  payload: Record<string, unknown>,
+): Promise<BulkCapturePreviewResult> {
+  return request<BulkCapturePreviewResult>('/api/capture/bulk-intake/preview', undefined, 'POST', payload)
+}
+
+export async function importBulkCapture(
+  payload: Record<string, unknown>,
+): Promise<BulkCaptureImportResult> {
+  return request<BulkCaptureImportResult>('/api/capture/bulk-intake/import', undefined, 'POST', payload)
 }
 
 export async function fetchPendingList(

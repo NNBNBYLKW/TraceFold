@@ -50,12 +50,12 @@ def test_workbench_shortcut_ui_flow_uses_shared_api_contract() -> None:
 def test_recent_restore_flow_uses_route_snapshot_and_keeps_resume_semantics() -> None:
     assert "Resume" in MAIN_TS
     assert "recent.route_snapshot" in MAIN_TS
-    assert "Recent helps you resume active work after you already know the next mode or page." in MAIN_TS
+    assert "Recent helps you reopen active detail work after you already know the next mode or page." in MAIN_TS
 
 
 def test_dashboard_summary_is_present_but_not_dominant() -> None:
     block = _render_workbench_view_block()
-    assert "Summary stays support. Use it after choosing a mode or entry path to confirm where pressure or recent movement exists." in MAIN_TS
+    assert "Summary stays support. Use it after choosing a mode or entry path to confirm where pressure exists or which detail area is worth reopening next." in MAIN_TS
     current_mode_position = block.index("renderWorkbenchCurrentModeSection(")
     templates_position = block.index("renderWorkbenchTemplatesSection(")
     shortcuts_position = block.index("renderWorkbenchShortcutsSection(")

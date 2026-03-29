@@ -22,7 +22,7 @@ For deeper detail, follow the linked baseline docs after this file.
 4. `docs/API_SEEDED_INTEGRATION_SMOKE.md`
 5. `docs/WEB_CONSUMPTION_BASELINE.md`
 
-## Current Web Entry (Post-Phase-1 / Phase 2 V1 Closure-Ready State)
+## Current Web Entry (Post-Phase-1 / Phase 2 V1 / Phase 3 Input Pack Closure-Ready State)
 
 For the current closed Web state, use this reading order:
 
@@ -35,12 +35,20 @@ For the current closed Web state, use this reading order:
 7. `docs/WEB_PP1_CROSS_PAGE_CONSISTENCY_AND_SMOKE_BASELINE.md`
 8. `docs/PHASE2_V1_CLOSURE_BASELINE.md`
 9. `docs/PHASE2_TECHNICAL_SUMMARY_V1.md`
+10. `docs/POST_PHASE2_BILINGUAL_UI_CLOSURE_BASELINE.md` when the task touches current bounded Web bilingual UI support
+11. `docs/PHASE3_V1_INPUT_PACK_CLOSURE_BASELINE.md` when the task touches current Phase 3 input-side Web scope
+12. `docs/PHASE3_READBACK_DETAIL_DENSITY_CLOSURE_BASELINE.md` when the task touches the current bounded detail/readback Web polish pack
+13. `docs/PHASE3_WAVE1_SUMMARY_V1.md` when you need the higher-level implementation-grounded summary spanning both closed Phase 3 Wave 1 packs
 
 The first four define the current formal Web baseline.
 The optimization and hierarchy docs define the restrained Post-Phase-1 polish direction.
 The closure baseline records the currently closed state for the first Web optimization round.
 The Phase 2 V1 closure baseline records the currently implemented closure-ready expansion across Pending, Capture, Expense, Workbench Round 2, Templates restraint, and local operability.
 The Phase 2 technical summary records the same bounded pack in implementation-facing terms.
+The bilingual UI closure baseline records the currently implemented zh/en Web UI layer without implying backend i18n or broader multilingual platform support.
+The Phase 3 V1 input-pack closure baseline records the currently implemented Quick Capture, Bulk Intake with Preview, and Capture Inbox / Intake Triage surfaces without implying broader Phase 3 completion.
+The Phase 3 readback/detail-density closure baseline records the currently implemented detail-page hierarchy/readback polish without implying broader Phase 3 completion or a broader redesign wave.
+The Phase 3 Wave 1 summary records the same two closed packs at a more concrete summary level without turning them into a new roadmap or a broader completion claim.
 
 This closed round should not be implicitly reopened.
 Any further Web work should be opened as a new scoped task.
@@ -132,10 +140,14 @@ Check these API routes first:
 - `GET http://127.0.0.1:8000/api/tasks?limit=20`
 - `GET http://127.0.0.1:8000/api/dashboard`
 - `GET http://127.0.0.1:8000/api/workbench/home`
+- `POST http://127.0.0.1:8000/api/capture/bulk-intake/preview`
+- `POST http://127.0.0.1:8000/api/capture/bulk-intake/import`
 
 Then check these Web routes:
 
 - `http://127.0.0.1:3000/workbench`
+- `http://127.0.0.1:3000/quick-capture`
+- `http://127.0.0.1:3000/bulk-intake`
 - `http://127.0.0.1:3000/capture`
 - `http://127.0.0.1:3000/pending`
 - `http://127.0.0.1:3000/expense`
@@ -147,6 +159,8 @@ Expected baseline:
 - API starts cleanly on the seeded DB
 - runtime status is readable
 - local continuity status is readable
+- quick capture route is reachable and can submit plain text into Capture
+- bulk intake route is reachable and can preview/import text-file candidates into Capture
 - capture and pending list routes are readable
 - expenses, knowledge, and health are not empty
 - at least one health alert exists

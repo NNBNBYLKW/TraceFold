@@ -10,8 +10,8 @@ def test_knowledge_detail_ai_summary_section_stays_below_formal_content_and_sour
     end = source.index("function renderHealthDetailView(")
     block = source[start:end]
 
-    content_position = block.index("title: 'Formal Content'")
-    source_position = block.index("title: 'Source Reference'")
+    content_position = block.index("Formal Content")
+    source_position = block.index("Source Reference")
     ai_position = block.index("renderKnowledgeAiSummarySection(")
 
     assert content_position < source_position < ai_position

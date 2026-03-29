@@ -25,13 +25,19 @@ def test_knowledge_detail_distinguishes_ready_failed_invalidated_and_not_generat
 
 
 def test_knowledge_detail_keeps_formal_content_as_primary_section() -> None:
-    formal_position = MAIN_TS.index("title: 'Formal Content'")
-    source_position = MAIN_TS.index("title: 'Source Reference'")
-    ai_position = MAIN_TS.index("title: 'AI-derived Summary'")
+    start = MAIN_TS.index("function renderKnowledgeDetailView(")
+    end = MAIN_TS.index("function renderHealthDetailView(")
+    block = MAIN_TS[start:end]
+
+    formal_position = block.index("Formal Content")
+    source_position = block.index("Source Reference")
+    ai_position = block.index("renderKnowledgeAiSummarySection(")
 
     assert formal_position < source_position < ai_position
-    assert "Formal content remains the record of truth for this knowledge entry." in MAIN_TS
+    assert "Formal content remains the record of truth for this knowledge entry." in block
+    assert "Formal Body" in block
+    assert "Source Text Snapshot" in block
     assert "Generated summary" in MAIN_TS
     assert "Derivation Context" in MAIN_TS
-    assert "<h3>Summary</h3>" in MAIN_TS
+    assert "Summary" in MAIN_TS
     assert "Recompute AI-derived Summary" in MAIN_TS

@@ -20,7 +20,7 @@ def test_pending_detail_keeps_workbench_sections_in_frozen_order() -> None:
     block = MAIN_TS[start:end]
 
     positions = [
-        block.index("title: 'Current Pending Item'"),
+        block.index("Current Pending Item"),
         block.index("renderPendingCurrentPayloadSection(detail)"),
         block.index("renderPendingSourceContextSection(detail)"),
         block.index("renderPendingActionSection(detail)"),
@@ -28,7 +28,10 @@ def test_pending_detail_keeps_workbench_sections_in_frozen_order() -> None:
     ]
 
     assert positions == sorted(positions)
-    assert "Pending detail is a single-item review workbench. Read the current payload first, then make the formal review decision." in block
+    assert "Pending detail is a single-item review workbench. Keep the current payload primary, then use source context, actions, and history as support." in block
+    assert "Review Reason" in block
+    assert "Linked Formal Result" in block
+    assert "Recorded Review Actions" in block
 
 
 def test_pending_action_zone_copy_preserves_backend_review_semantics() -> None:

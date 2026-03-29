@@ -19,15 +19,16 @@ def test_expense_detail_keeps_formal_record_before_context() -> None:
     end = MAIN_TS.index("function renderExpenseSourceContextSection(")
     detail_block = MAIN_TS[start:end]
 
-    assert "title: 'Expense Record'" in detail_block
-    assert "title: 'Formal Expense Record'" in detail_block
+    assert "Expense Record" in detail_block
+    assert "Formal Expense Record" in detail_block
     assert "Formal expense fields remain the truth-bearing content for this page." in detail_block
+    assert "Formal Note" in detail_block
 
     source_start = MAIN_TS.index("function renderExpenseSourceContextSection(")
     source_end = MAIN_TS.index("function renderKnowledgeDetailView(")
     source_block = MAIN_TS[source_start:source_end]
 
-    assert "title: 'Source and Record Context'" in source_block
+    assert "Source and Record Context" in source_block
     assert "Source reference stays contextual support. It helps trace formal provenance without turning Expense into a workflow or analytics center." in source_block
 
 
