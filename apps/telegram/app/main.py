@@ -23,6 +23,9 @@ def main() -> None:
     app = create_app()
     try:
         app.probe_dependencies()
+        app.run_polling()
+    except KeyboardInterrupt:
+        return
     finally:
         app.close()
 

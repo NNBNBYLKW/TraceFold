@@ -25,13 +25,14 @@ def test_capture_success_uses_short_consistent_text():
     result = render_capture_success(
         _message(),
         {
+            "route": "formal",
             "status": "committed",
             "target_domain": "expense",
             "pending_item_id": None,
         },
     )
 
-    assert result.text == "Recorded. Added to expense record."
+    assert result.text == "Captured first. You can send the next text now."
 
 
 def test_pending_list_empty_state_is_short_and_consistent():
@@ -77,7 +78,7 @@ def test_error_mapping_hides_internal_error_text():
         ),
     )
 
-    assert result.text == "Capture failed."
+    assert result.text == "Not recorded. Try again."
 
 
 def test_pending_error_mapping_uses_stable_not_found_text():

@@ -35,7 +35,15 @@ class TelegramAdapterApp:
         }
 
     def process_updates_once(self, *, offset: int | None = None) -> int | None:
-        updates = self.telegram_api.get_updates(offset=offset)
+        return self.process_updates_once_with_timeout(offset=offset, timeout_seconds=int(self.settings.timeout_seconds))
+
+    def process_updates_once_with_timeout(
+        self,
+        *,
+        offset: int | None = None,
+        timeout_seconds: int = 0,
+    ) -> int | None:
+        updates = self.telegram_api.get_updates(offset=offset, timeout_seconds=timeout_seconds)
         next_offset = offset
 
         for update in updates:
@@ -43,6 +51,20 @@ class TelegramAdapterApp:
             if isinstance(update_id, int):
                 next_offset = update_id + 1
             self.handle_update(update)
+
+        return next_offset
+
+    def run_polling(self, *, offset: int | None = None, max_iterations: int | None = None) -> int | None:
+        next_offset = offset
+        iterations = 0
+        timeout_seconds = max(1, int(self.settings.timeout_seconds))
+
+        while max_iterations is None or iterations < max_iterations:
+            next_offset = self.process_updates_once_with_timeout(
+                offset=next_offset,
+                timeout_seconds=timeout_seconds,
+            )
+            iterations += 1
 
         return next_offset
 

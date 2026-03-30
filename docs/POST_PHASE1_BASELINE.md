@@ -34,7 +34,7 @@ The current baseline still freezes these boundaries:
 
 - Web is the main business interface
 - Desktop is still a shell-level entry, not a desktop business client
-- Telegram is still a lightweight adapter, not a management surface
+- Telegram and Feishu are still lightweight adapters, not management surfaces
 - formal facts, rule alerts, AI derivations, and task runtime remain separate layers
 - AI stays in the derivation / explanation layer and must not mutate formal facts
 - task runtime stays an execution layer and must not become a second business center
@@ -183,17 +183,20 @@ That closure-ready state is recorded in:
 
 This still does not mean broader Phase 3 work, charts/analytics expansion, AI expansion, dashboard-center growth, design-system work, or whole-frontend completion have been introduced.
 
-## Desktop And Telegram Reality Check
+## Desktop And Lightweight Adapter Reality Check
 
-Desktop and Telegram remain intentionally narrow:
+Desktop, Telegram, and Feishu remain intentionally narrow:
 
 - Desktop credibility has been improved at the shell level, but it is still not a desktop business client
-- Telegram can still capture and read lightweight status, but it is still not a management console
+- Telegram is a lightweight capture adapter, not a management console
+- Feishu is a lightweight capture adapter, not a management console
 
 The current hot supporting docs are:
 
 - `docs/POST_PHASE1_DESKTOP_R2_ACCEPTANCE.md`
 - `docs/TELEGRAM_BOT_SETUP_GUIDE.md`
+- `docs/FEISHU_BOT_SETUP_GUIDE.md`
+- `docs/PHASE3_WAVE2_ADAPTERS_CROSS_PLATFORM_CLOSURE_BASELINE.md`
 
 ## Recommended Reading Order
 
@@ -206,11 +209,12 @@ For current work, use this order:
 5. `docs/POST_PHASE2_BILINGUAL_UI_CLOSURE_BASELINE.md` when the task touches current bounded Web bilingual UI support
 6. `docs/PHASE3_V1_INPUT_PACK_CLOSURE_BASELINE.md` when the task touches current Phase 3 input-side Web scope
 7. `docs/PHASE3_READBACK_DETAIL_DENSITY_CLOSURE_BASELINE.md` when the task touches current bounded detail/readback Web polish
-8. `docs/PHASE1_SUMMARY.md`
-9. `docs/ARCHITECTURE_RULES.md`
-10. `docs/ENV_CONVENTIONS.md`
-11. The specific `docs/API_*_BASELINE.md` or `docs/WEB_*_BASELINE.md` relevant to the task
-12. `docs/archive/README.md` and then `docs/archive/phase1/**` only when historical traceability is needed
+8. `docs/PHASE3_WAVE2_ADAPTERS_CROSS_PLATFORM_CLOSURE_BASELINE.md` when the task touches the current bounded lightweight adapter pack
+9. `docs/PHASE1_SUMMARY.md`
+10. `docs/ARCHITECTURE_RULES.md`
+11. `docs/ENV_CONVENTIONS.md`
+12. The specific `docs/API_*_BASELINE.md` or `docs/WEB_*_BASELINE.md` relevant to the task
+13. `docs/archive/README.md` and then `docs/archive/phase1/**` only when historical traceability is needed
 
 ## Hot Docs Vs Archive
 

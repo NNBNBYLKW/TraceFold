@@ -47,7 +47,7 @@ def test_private_plain_text_submits_capture_and_returns_pending_feedback():
     )
 
     assert result is not None
-    assert result.text == "Recorded. Pending item: #88"
+    assert result.text == "Captured first. Pending review created. You can send the next text now."
     assert api_client.calls == [
         {
             "raw_text": "今天午饭 25 元",
@@ -57,7 +57,40 @@ def test_private_plain_text_submits_capture_and_returns_pending_feedback():
     ]
 
 
-def test_capture_command_can_submit_and_render_formal_feedback():
+def test_start_and_help_commands_remain_minimal():
+    handler = TelegramMessageHandler()
+
+    start_result = handler.handle_update(
+        {
+            "message": {
+                "message_id": 10,
+                "chat": {"id": 12, "type": "private"},
+                "from": {"id": 13},
+                "text": "/start",
+            }
+        }
+    )
+    help_result = handler.handle_update(
+        {
+            "message": {
+                "message_id": 11,
+                "chat": {"id": 12, "type": "private"},
+                "from": {"id": 13},
+                "text": "/help",
+            }
+        }
+    )
+
+    assert start_result is not None
+    assert help_result is not None
+    assert "quick capture is ready" in start_result.text.lower()
+    assert "capture record first" in start_result.text.lower()
+    assert "send plain text" in help_result.text.lower()
+    assert "/start" in help_result.text
+    assert "/help" in help_result.text
+
+
+def test_formal_route_still_returns_capture_first_feedback():
     api_client = FakeTraceFoldApiClient(
         result={
             "capture_created": True,
@@ -77,13 +110,13 @@ def test_capture_command_can_submit_and_render_formal_feedback():
                 "message_id": 10,
                 "chat": {"id": 12, "type": "private"},
                 "from": {"id": 13},
-                "text": "/capture 今天午饭 25 元",
+                "text": "今天午饭 25 元",
             }
         }
     )
 
     assert result is not None
-    assert result.text == "Recorded. Added to expense record."
+    assert result.text == "Captured first. You can send the next text now."
 
 
 def test_capture_failure_returns_short_unavailable_feedback():
@@ -104,7 +137,7 @@ def test_capture_failure_returns_short_unavailable_feedback():
     )
 
     assert result is not None
-    assert result.text == "Service status unavailable. Try again later."
+    assert result.text == "Not recorded. Service unavailable. Try again later."
 
 
 def test_capture_validation_failure_returns_short_invalid_input_feedback():
@@ -129,7 +162,7 @@ def test_capture_validation_failure_returns_short_invalid_input_feedback():
     )
 
     assert result is not None
-    assert result.text == "Input is invalid."
+    assert result.text == "Not recorded. Input is invalid."
 
 
 def test_blank_private_text_does_not_submit_capture():
@@ -149,4 +182,24 @@ def test_blank_private_text_does_not_submit_capture():
 
     assert result is not None
     assert result.text == "Text is required."
+    assert api_client.calls == []
+
+
+def test_unknown_command_does_not_submit_capture():
+    api_client = FakeTraceFoldApiClient()
+    handler = TelegramMessageHandler(tracefold_api=api_client)
+
+    result = handler.handle_update(
+        {
+            "message": {
+                "message_id": 10,
+                "chat": {"id": 12, "type": "private"},
+                "from": {"id": 13},
+                "text": "/pending",
+            }
+        }
+    )
+
+    assert result is not None
+    assert result.text == "Only /start and /help are available. Send plain text to record quickly."
     assert api_client.calls == []

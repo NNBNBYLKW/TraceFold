@@ -8,36 +8,29 @@ _INVALID_INPUT_TEXT = "Input is invalid."
 _EMPTY_TEXT_REQUIRED = "Text is required."
 _NO_OPEN_PENDING_TEXT = "No open pending items."
 _NO_OPEN_ALERTS_TEXT = "No open alerts."
+_CAPTURE_RECORDED_TEXT = "Captured first. You can send the next text now."
+_CAPTURE_PENDING_TEXT = "Captured first. Pending review created. You can send the next text now."
 
 
 def render_start(message: IncomingMessage) -> OutgoingMessage:
     return _message(
         message,
-        "TraceFold Telegram adapter is online.\n"
-        "Step 7 Chapter 2 currently exposes only lightweight entry commands.",
+        "TraceFold Telegram quick capture is ready.\n"
+        "Send plain text to create a capture record first.",
     )
 
 
 def render_help(message: IncomingMessage) -> OutgoingMessage:
     return _message(
         message,
-        "Available commands:\n"
-        "/start\n"
-        "/help\n"
-        "/capture <text>\n"
-        "/pending\n"
-        "/pending <id>\n"
-        "/confirm <id>\n"
-        "/discard <id>\n"
-        "/fix <id> <text>\n"
-        "/dashboard\n"
-        "/alerts\n"
-        "/status",
+        "Send plain text to record quickly.\n"
+        "Use /start or /help if needed.\n"
+        "Capture is stored first. Review or formal follow-up happens later in TraceFold Web.",
     )
 
 
 def render_unknown_command(message: IncomingMessage) -> OutgoingMessage:
-    return _message(message, "This command is not available.")
+    return _message(message, "Only /start and /help are available. Send plain text to record quickly.")
 
 
 def render_unsupported_message(message: IncomingMessage) -> OutgoingMessage:
@@ -52,17 +45,13 @@ def render_capture_success(
     message: IncomingMessage,
     capture_result: dict,
 ) -> OutgoingMessage:
-    status = capture_result.get("status")
+    route = capture_result.get("route")
     pending_item_id = capture_result.get("pending_item_id")
-    target_domain = capture_result.get("target_domain")
 
-    if status == "pending" and pending_item_id is not None:
-        return _message(message, f"Recorded. Pending item: #{pending_item_id}")
+    if route == "pending" and pending_item_id is not None:
+        return _message(message, _CAPTURE_PENDING_TEXT)
 
-    if status == "committed" and target_domain:
-        return _message(message, f"Recorded. Added to {target_domain} record.")
-
-    return _message(message, "Recorded.")
+    return _message(message, _CAPTURE_RECORDED_TEXT)
 
 
 def render_capture_failure(
@@ -71,9 +60,10 @@ def render_capture_failure(
 ) -> OutgoingMessage:
     text = _map_api_error(
         error,
+        unavailable_text="Not recorded. Service unavailable. Try again later.",
         invalid_codes={"INVALID_CAPTURE_INPUT"},
-        invalid_text=_INVALID_INPUT_TEXT,
-        default_text="Capture failed.",
+        invalid_text="Not recorded. Input is invalid.",
+        default_text="Not recorded. Try again.",
     )
     return _message(message, text)
 

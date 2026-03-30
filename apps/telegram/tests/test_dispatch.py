@@ -20,10 +20,10 @@ def test_dispatcher_returns_start_message_for_start_command():
     result = dispatcher.dispatch(context)
 
     assert result.chat_id == 1
-    assert "adapter is online" in result.text.lower()
+    assert "quick capture is ready" in result.text.lower()
 
 
-def test_message_handler_returns_blank_feedback_for_empty_capture_command():
+def test_message_handler_rejects_removed_capture_command_surface():
     handler = TelegramMessageHandler()
 
     result = handler.handle_update(
@@ -38,4 +38,4 @@ def test_message_handler_returns_blank_feedback_for_empty_capture_command():
 
     assert result is not None
     assert result.chat_id == 10
-    assert result.text == "Text is required."
+    assert result.text == "Only /start and /help are available. Send plain text to record quickly."

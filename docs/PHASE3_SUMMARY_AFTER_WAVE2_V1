@@ -1,0 +1,423 @@
+Purpose
+
+This document summarizes the current state of Phase 3 after the closure of:
+
+Phase 3 Wave 1
+Phase 3 Wave 2 lightweight adapter pack
+
+It records:
+
+why Phase 3 was opened
+what Phase 3 has actually delivered so far
+how Wave 1 and Wave 2 relate to each other
+what product meaning Phase 3 now has in TraceFold
+what boundaries have remained preserved
+what remains intentionally undecided or outside current closure
+what kinds of next-step directions are reasonable after this point
+
+This document does not claim full Phase 3 completion.
+It records the current bounded state of Phase 3 after two completed waves.
+
+Project Position
+
+TraceFold remains:
+
+a local-first personal data workbench / personal data platform
+centered on the main chain
+Capture -> Parse -> Pending -> Confirm -> Formal Record -> Query / Analysis / Derivation
+centered on the application service layer as the only business-logic center
+centered on SQLite as the single source of truth
+centered on Web as the main business interface
+with Desktop as shell-level entry
+with Telegram as lightweight adapter
+with Feishu now also established as a lightweight adapter within bounded scope
+
+Phase 1 is complete and closed.
+Post-Phase-1 Web main consumption-line optimization is closed.
+Phase 2 V1 bounded closure is closed.
+Post-Phase-2 bounded bilingual Web UI support is closed.
+
+Phase 3 therefore began from a sufficiently stable product and architecture baseline.
+
+Why Phase 3 Was Opened
+
+Phase 3 was not opened to expand AI, graphization, automation, or multi-surface platformization.
+
+It was opened because the next major user-facing weakness had become clear:
+
+the system had become more usable, but daily repeated use still did not feel smooth enough.
+
+In practice, this problem appeared in several connected ways:
+
+quick single-item input still felt too deliberate
+larger-volume input still lacked a bounded practical intake path
+easier input needed better upstream triage rather than just more records
+detail/readback surfaces still needed more coherent hierarchy and density for repeated use
+after Web-side intake improvements, message-based entry surfaces became the next natural friction point
+
+So Phase 3 became a stage centered on:
+
+improving daily-use usability while preserving the same main chain, the same service-centered architecture, and the same formal-first downstream model.
+
+High-Level Meaning of Phase 3 So Far
+
+At this point, Phase 3 should be understood as having improved two things together:
+
+how information gets into the system
+how information is read back and resumed in use
+
+Wave 1 focused primarily on improving intake and readback inside the current workbench/Web surfaces.
+
+Wave 2 extended low-friction intake outward into lightweight chat-based adapters, while still preserving the same capture-first contract.
+
+Together, these waves make TraceFold materially more like a system that can be used repeatedly in ordinary life rather than only as a structurally correct but more deliberate workbench.
+
+Phase 3 Wave 1 — Closed Scope
+
+Phase 3 Wave 1 is already established as a bounded, closed first wave.
+
+It consists of two closed packs.
+
+A. Input-side daily-use improvement pack
+
+This pack includes:
+
+Quick Capture
+Web-only
+pure-text
+stay-on-page repeated entry
+capture-first semantics
+Bulk Intake with Preview
+bounded text-file intake
+preview-before-import
+import into Capture only
+bounded result feedback
+Capture Inbox / Intake Triage
+Capture list strengthened as inbox/triage surface
+bounded next-step cues
+downstream linkage visibility
+triage context in Capture detail
+
+This pack improved the practical ease of getting data into the system.
+
+B. Readback / Detail Density pack
+
+This pack includes:
+
+detail hierarchy tightening across:
+Pending detail
+Capture detail
+Expense detail
+Knowledge detail
+Health detail
+density/readback polish around:
+compact facts first
+longer readback content second
+provenance/support later
+bounded Workbench / Dashboard readback-support polish
+
+This pack improved the ease of reading, scanning, and resuming work across existing domain surfaces.
+
+Product Meaning of Wave 1
+
+Wave 1 answered a very practical product problem:
+
+how can TraceFold become easier to use every day without changing what the system fundamentally is?
+
+It did so by making:
+
+single-item input lighter
+larger-volume intake more practical
+upstream capture handling more triage-friendly
+detail pages easier to scan and compare across domains
+
+Wave 1 therefore made TraceFold feel more usable in repeated daily work, but still primarily within the existing Web-centered surface model.
+
+Phase 3 Wave 2 — Closed Scope
+
+Phase 3 Wave 2, in its currently closed bounded form, is the Lightweight Capture Adapters Pack.
+
+This pack includes:
+
+Unified adapter contract baseline
+Telegram bot V1
+Telegram acceptance / hardening
+Feishu bot V1
+Feishu acceptance / hardening
+TG / Feishu cross-platform closure
+A. Adapter contract baseline
+
+This baseline established that lightweight adapters must remain:
+
+text-only in first version
+one message -> one capture
+capture-first
+structure-later
+review-later
+light success/failure acknowledgement
+no direct-to-formal path
+no Pending bypass
+no review actions
+no AI behavior
+no workflow/control-surface drift
+
+This was essential to prevent adapter drift into independent product lines.
+
+B. Telegram adapter baseline
+
+Telegram was formalized as:
+
+a lightweight text-to-capture adapter
+minimal /start and /help
+light success/failure acknowledgement
+source traceability aligned with contract
+no broader bot-surface drift
+
+Telegram then received bounded acceptance/hardening around:
+
+runtime/startup clarity
+setup guide alignment
+contract inheritance verification
+source metadata verification
+C. Feishu adapter baseline
+
+Feishu was formalized as:
+
+a lightweight text-to-capture adapter
+webhook-based message-to-capture path
+minimal help/usage behavior
+light success/failure acknowledgement
+source traceability aligned with contract
+no workflow / review / approval-bot drift
+
+Feishu then received bounded acceptance/hardening around:
+
+webhook/runtime clarity
+URL verification behavior
+setup/config clarity
+contract inheritance verification
+source metadata verification
+D. Cross-platform adapter closure
+
+Telegram and Feishu were then reviewed together and confirmed to be:
+
+true contract siblings
+semantically parallel
+similarly bounded in product scope
+sufficiently mature to close together as one bounded lightweight adapter pack
+
+This closure does not claim a bot platform.
+It claims only a bounded lightweight adapter pack.
+
+Product Meaning of Wave 2
+
+Wave 2 answered the next natural product question after Wave 1:
+
+once Web-side intake is smoother, how can recording begin more naturally from message-based environments without creating new business centers?
+
+Wave 2’s significance is that TraceFold now supports lower-friction entry not only inside Web, but also from bounded external chat-like surfaces.
+
+This matters because it extends the rhythm of use:
+
+not just “open the workbench and then record”
+but also “start recording naturally where you already are”
+
+And it does so without abandoning:
+
+capture-first semantics
+one business-logic center
+one main chain
+Web as the main business interface
+How Wave 1 and Wave 2 Relate
+
+Wave 1 and Wave 2 are not separate themes by accident.
+They are two layers of the same broader Phase 3 logic.
+
+Wave 1
+
+Improved daily-use intake and readback inside the main workbench surfaces.
+
+Wave 2
+
+Extended low-friction intake outside the main workbench surfaces, but only through bounded adapters that still feed the same chain.
+
+This means Phase 3 so far is coherent:
+
+Wave 1 improved internal daily-use usability
+Wave 2 improved external low-friction entry
+neither wave changed the architecture center
+neither wave created a new product center
+
+Together they form a believable Phase 3 progression rather than a bag of unrelated work.
+
+Boundaries Preserved Across Phase 3 So Far
+
+A major success condition of Phase 3 so far is not just what was added, but what did not happen.
+
+Input-side and adapter-side boundaries preserved
+
+Phase 3 so far did not become:
+
+a direct-to-formal shortcut system
+a workflow engine
+a review-in-adapter system
+a generic ETL/import platform
+a bot platform
+a desktop productization phase
+a Telegram or Feishu product line
+an AI-assisted intake system
+Readback-side boundaries preserved
+
+Phase 3 so far did not become:
+
+a redesign program
+a chart/analytics phase
+a dashboard-center expansion
+an AI-summary expansion phase
+a design-system project
+System-level boundaries preserved
+
+Phase 3 so far did not redefine:
+
+the main chain
+the service-centered architecture
+SQLite as single source of truth
+Web as main business interface
+Desktop as shell-level entry
+lightweight adapter role of messaging surfaces
+
+This is what makes the current closures credible.
+
+Verification and Closure Status
+
+All currently closed Phase 3 packs were closed using bounded verification appropriate to the environment.
+
+That verification includes combinations of:
+
+focused backend tests
+focused frontend tests
+build verification where relevant
+route/render/code-path inspection
+setup/runtime consistency checks
+explicit bounded substitute acceptance records
+explicit acknowledgement when live end-to-end manual chat/browser validation was not performed
+
+The closures do not rely on pretending stronger validation than actually happened.
+
+Current closure result
+
+The following are now formally closed within bounded scope:
+
+Phase 3 Wave 1 Input-side pack
+Phase 3 Wave 1 Readback / Detail Density pack
+Phase 3 Wave 2 Lightweight Capture Adapters pack
+
+This still does not mean full Phase 3 completion.
+It means only that the currently implemented bounded waves/packs now have credible closure.
+
+What Phase 3 So Far Does Not Claim
+
+Phase 3 so far does not claim:
+
+full Phase 3 completion
+whole-frontend completion
+whole-product completion
+complete bot platformization
+AI expansion
+graphization
+automation/workflow expansion
+chart/analytics/dashboard-center expansion
+generalized design-system abstraction
+broader desktop or Telegram/Feishu productization
+
+It also does not include:
+
+advanced import formats beyond current bounded intake
+desktop quick entry
+richer adapter menus/cards/approval/workflow behavior
+AI parsing / suggestions / prioritization
+broad list-page redesign
+generalized adapter-platform abstraction
+broader security/operations hardening beyond bounded baselines
+any broader new Phase 3 wave not yet explicitly defined
+Current Interpretation of Phase 3
+
+At this point, Phase 3 should be interpreted as a stage that has already delivered:
+
+smoother intake
+better upstream triage
+clearer detail/readback usability
+bounded low-friction chat-based entry adapters
+
+This is a meaningful shift in TraceFold’s maturity.
+
+It means TraceFold is no longer only improving isolated screens or isolated bounded packs.
+It is increasingly improving the actual rhythm of repeated use:
+
+how a record begins
+how it re-enters the workbench
+how it gets read back
+how it stays within one trustworthy chain
+
+That is the real significance of current Phase 3.
+
+Reasonable Next-Step Directions After Wave 2
+
+This summary does not choose the next wave, but it clarifies what kinds of next steps are now reasonable.
+
+Possible next directions include:
+
+1. Further daily-use hardening
+
+A future bounded pack could continue improving stability, operability, or cumulative daily-use smoothness.
+
+2. Read/list consistency extension
+
+A future bounded pack could extend current detail/readback consistency logic into broader list-level consistency and readback continuity.
+
+3. Adapter usability extension
+
+A future bounded pack could improve adapter ergonomics, operations, or setup quality without changing their role.
+
+4. Broader Phase 3 re-evaluation
+
+If enough usage evidence accumulates, it may become appropriate to define a new Phase 3 wave with a clearer next theme.
+
+What should not happen is silently appending unrelated work into already-closed bounded packs.
+
+Recommended Post-Summary Rule
+
+After this summary, no additional work should be silently folded back into:
+
+Phase 3 Wave 1 Input-side pack
+Phase 3 Wave 1 Readback / Detail Density pack
+Phase 3 Wave 2 Lightweight Capture Adapters pack
+
+Any further work should be opened as a new explicitly scoped pack or wave.
+
+That keeps the closure history trustworthy and makes future planning clearer.
+
+Final Statement
+
+Phase 3 now has a credible current state after the closure of:
+
+Wave 1 internal daily-use usability improvements
+Wave 2 lightweight capture adapters
+
+Together, these make TraceFold materially better at:
+
+beginning records
+moving records into the main chain
+triaging early-stage input
+reading records back
+resuming work from the workbench and from bounded message-based entry points
+
+All of this has been achieved while preserving:
+
+one main chain
+one service-centered architecture
+one local-first data core
+one restrained product direction
+
+This summary records that current state.
+It does not claim that the broader future direction of Phase 3 has already been fully decided or completed.
