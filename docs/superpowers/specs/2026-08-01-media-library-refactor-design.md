@@ -180,6 +180,7 @@ discovered
 任意分析、处理或入库阶段 → failed
 failed → analyzing | processing | ready_to_tag
 conflict → ready_to_tag | ingesting
+ready_to_tag → analyzing（仅当入库开始前新发现可配对的伴随文件）
 ```
 
 状态变化只能由后端应用服务执行，并在同一数据库事务中记录状态事件。API 返回当前状态和允许的下一步动作，避免前后端分别维护一套规则。
@@ -301,20 +302,25 @@ POST  /api/inbox/scan
 GET   /api/inbox/items
 GET   /api/inbox/items/{id}
 PATCH /api/inbox/items/{id}/metadata
+PATCH /api/inbox/items/bulk-metadata
 POST  /api/inbox/items/{id}/process
 POST  /api/inbox/items/{id}/ingest
+GET   /api/inbox/items/{id}/preview
 
 POST  /api/conflicts/{id}/resolve
 
 GET   /api/library/assets
 GET   /api/library/assets/{id}
 PATCH /api/library/assets/{id}/metadata
+GET   /api/library/assets/{id}/preview
 POST  /api/library/assets/{id}/reveal
 
 GET/POST/PATCH /api/authors
 GET/POST/PATCH /api/series
 GET/POST/PATCH /api/tags
 
+GET/PATCH /api/settings
+GET   /api/system/status
 GET   /api/events
 ```
 
