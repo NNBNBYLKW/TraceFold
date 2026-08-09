@@ -17,6 +17,7 @@ from media_api.intake.repository import InboxRepository
 from media_api.intake.scanner import InboxScanner
 from media_api.intake.state import InboxStatus
 from media_api.storage.local import LocalStorage
+from media_api.taxonomy.models import Author, Series, Tag
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,22 @@ class ScanResult:
     observed_candidates: int
     stable_candidates: int
     created_items: int
+
+
+class InboxCommandError(ValueError):
+    pass
+
+
+class InboxItemNotFound(InboxCommandError):
+    pass
+
+
+class InboxActionNotAllowed(InboxCommandError):
+    pass
+
+
+class TaxonomySelectionNotFound(InboxCommandError):
+    pass
 
 
 class InboxService:
@@ -36,6 +53,90 @@ class InboxService:
 
     def get_item(self, item_id: str) -> InboxItem | None:
         return self.items.get(item_id)
+
+
+class InboxMetadataService(InboxService):
+    def update_metadata(
+        self,
+        item_id: str,
+        *,
+        display_name: str | None,
+        author_ids: list[str],
+        series_id: str | None,
+        tag_ids: list[str],
+    ) -> InboxItem:
+        item = self._require_editable(item_id)
+        authors = self._resolve_many(Author, author_ids)
+        series = self._resolve_one(Series, series_id)
+        tags = self._resolve_many(Tag, tag_ids)
+
+        item.display_name = display_name
+        item.authors = authors
+        item.series = series
+        item.tags = tags
+        self.session.commit()
+        return item
+
+    def bulk_update_metadata(
+        self,
+        *,
+        item_ids: list[str],
+        append_author_ids: list[str],
+        append_tag_ids: list[str],
+        replace_series: bool,
+        replace_series_id: str | None,
+    ) -> int:
+        unique_item_ids = _unique(item_ids)
+        items = [self._require_editable(item_id) for item_id in unique_item_ids]
+        authors = self._resolve_many(Author, append_author_ids)
+        tags = self._resolve_many(Tag, append_tag_ids)
+        series = (
+            self._resolve_one(Series, replace_series_id)
+            if replace_series
+            else None
+        )
+
+        for item in items:
+            existing_author_ids = {author.id for author in item.authors}
+            item.authors.extend(
+                author for author in authors if author.id not in existing_author_ids
+            )
+            existing_tag_ids = {tag.id for tag in item.tags}
+            item.tags.extend(tag for tag in tags if tag.id not in existing_tag_ids)
+            if replace_series:
+                item.series = series
+
+        self.session.commit()
+        return len(items)
+
+    def _require_editable(self, item_id: str) -> InboxItem:
+        item = self.items.get(item_id)
+        if item is None:
+            raise InboxItemNotFound(item_id)
+        if item.status is not InboxStatus.READY_TO_TAG:
+            raise InboxActionNotAllowed(item.status)
+        return item
+
+    def _resolve_many(self, model: type, entry_ids: list[str]) -> list:
+        unique_ids = _unique(entry_ids)
+        if not unique_ids:
+            return []
+        entries = list(
+            self.session.scalars(select(model).where(model.id.in_(unique_ids)))
+        )
+        by_id = {entry.id: entry for entry in entries}
+        missing = [entry_id for entry_id in unique_ids if entry_id not in by_id]
+        if missing:
+            raise TaxonomySelectionNotFound(missing[0])
+        return [by_id[entry_id] for entry_id in unique_ids]
+
+    def _resolve_one(self, model: type, entry_id: str | None):
+        if entry_id is None:
+            return None
+        entry = self.session.get(model, entry_id)
+        if entry is None:
+            raise TaxonomySelectionNotFound(entry_id)
+        return entry
 
 
 class ScanService(InboxService):
@@ -104,3 +205,7 @@ class ScanService(InboxService):
             stable_candidates=len(stable_candidates),
             created_items=created_items,
         )
+
+
+def _unique(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))

@@ -7,6 +7,7 @@ from media_api.infrastructure.db import create_engine_and_session
 from media_api.intake.router import build_inbox_router
 from media_api.storage.contracts import RuntimePaths
 from media_api.storage.local import LocalStorage
+from media_api.taxonomy.router import build_taxonomy_router
 
 
 def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
@@ -33,5 +34,6 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
             app.state.storage,
         )
     )
+    app.include_router(build_taxonomy_router(app.state.session_factory))
 
     return app

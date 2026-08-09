@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from media_api.intake.models import InboxItem, SourceFile
 from media_api.intake.service import ScanResult
@@ -76,3 +76,22 @@ class InboxItemRead(BaseModel):
                 )
             ],
         )
+
+
+class InboxMetadataPatch(BaseModel):
+    display_name: str | None
+    author_ids: list[str]
+    series_id: str | None
+    tag_ids: list[str]
+
+
+class BulkMetadataPatch(BaseModel):
+    item_ids: list[str] = Field(min_length=1)
+    append_author_ids: list[str] = Field(default_factory=list)
+    append_tag_ids: list[str] = Field(default_factory=list)
+    replace_series: bool = False
+    replace_series_id: str | None = None
+
+
+class BulkMetadataResult(BaseModel):
+    updated_count: int
