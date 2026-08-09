@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from media_api.catalog.router import build_catalog_router
 from media_api.infrastructure.config import BootstrapSettings
 from media_api.infrastructure.db import create_engine_and_session
 from media_api.intake.router import build_inbox_router
@@ -35,5 +36,11 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
         )
     )
     app.include_router(build_taxonomy_router(app.state.session_factory))
+    app.include_router(
+        build_catalog_router(
+            app.state.session_factory,
+            app.state.storage,
+        )
+    )
 
     return app

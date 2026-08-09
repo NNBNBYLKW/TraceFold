@@ -168,6 +168,20 @@ class LocalStorage:
             raise FileChangedError(f"file changed before verified deletion: {resolved}")
         resolved.unlink()
 
+    def remove_empty_stage(self, operation_id: str) -> None:
+        safe_operation_id = _safe_component(operation_id, label="operation_id")
+        operation_dir = ensure_within(
+            self.staging_dir / safe_operation_id,
+            self.staging_dir,
+        )
+        if not operation_dir.exists():
+            return
+        if not operation_dir.is_dir() or any(operation_dir.iterdir()):
+            raise UnsafePathError(
+                f"operation staging directory is not empty: {operation_dir}"
+            )
+        operation_dir.rmdir()
+
     def next_available_name(self, actual_filename: str) -> str:
         safe_filename = _safe_component(actual_filename, label="actual_filename")
         existing_names = {path.name.casefold() for path in self.library_dir.iterdir()}
