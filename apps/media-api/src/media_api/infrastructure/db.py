@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from sqlalchemy import Engine, create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from media_api.infrastructure.config import BootstrapSettings
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def new_uuid() -> str:
+    return str(uuid4())
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def create_engine_and_session(settings: BootstrapSettings) -> sessionmaker[Session]:
