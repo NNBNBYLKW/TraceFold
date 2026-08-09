@@ -70,3 +70,9 @@ desktop.ini
 .env
 .env.*
 !.env.example
+
+# =========================
+# Local agent / E2E artifacts
+# =========================
+.superpowers/
+apps/media-web/.e2e-data/
