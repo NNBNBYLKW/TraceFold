@@ -5,9 +5,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from media_api.infrastructure.config import BootstrapSettings
+from media_api.infrastructure.db import Base, create_engine_and_session
 from media_api.main import create_app
 from media_api.storage.contracts import RuntimePaths
 from media_api.storage.local import LocalStorage
+
+# Register every model before creating isolated test schemas.
+import media_api.catalog.models  # noqa: F401, E402
+import media_api.intake.models  # noqa: F401, E402
+import media_api.processing.models  # noqa: F401, E402
+import media_api.settings.models  # noqa: F401, E402
+import media_api.taxonomy.models  # noqa: F401, E402
 
 
 @pytest.fixture
@@ -22,8 +30,21 @@ def settings(tmp_path: Path) -> BootstrapSettings:
 
 @pytest.fixture
 def client(settings: BootstrapSettings) -> Generator[TestClient, None, None]:
-    with TestClient(create_app(settings)) as test_client:
+    session_factory = create_engine_and_session(settings)
+    engine = session_factory.kw["bind"]
+    Base.metadata.create_all(engine)
+    application = create_app(settings)
+    with TestClient(application) as test_client:
         yield test_client
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+    application_session_factory = getattr(
+        application.state,
+        "session_factory",
+        None,
+    )
+    if application_session_factory is not None:
+        application_session_factory.kw["bind"].dispose()
 
 
 @pytest.fixture

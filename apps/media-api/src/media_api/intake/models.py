@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import (
     Boolean,
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from media_api.infrastructure.db import Base, UTCDateTime, new_uuid, utc_now
 from media_api.intake.state import InboxStatus
+from media_api.storage.contracts import FileSnapshot
 from media_api.taxonomy.models import Author, Series, Tag
 
 
@@ -158,6 +160,23 @@ class SourceFile(Base):
     )
 
     inbox_item: Mapped[InboxItem] = relationship(back_populates="sources")
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: FileSnapshot,
+        *,
+        is_primary: bool,
+    ) -> SourceFile:
+        return cls(
+            canonical_path=str(snapshot.path),
+            extension=Path(snapshot.path).suffix.casefold(),
+            size=snapshot.size,
+            modified_ns=snapshot.modified_ns,
+            scan_fingerprint=f"{snapshot.size}:{snapshot.modified_ns}",
+            is_primary=is_primary,
+            is_present=True,
+        )
 
 
 class InboxStatusEvent(Base):
