@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, UniqueConstraint
+from sqlalchemy import String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from media_api.infrastructure.db import Base, new_uuid, utc_now
+from media_api.infrastructure.db import Base, UTCDateTime, new_uuid, utc_now
 
 
 class Author(Base):
@@ -18,10 +18,10 @@ class Author(Base):
     normalized_name: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
 
@@ -35,10 +35,10 @@ class Series(Base):
     normalized_name: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
 
@@ -52,8 +52,8 @@ class Tag(Base):
     normalized_name: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )

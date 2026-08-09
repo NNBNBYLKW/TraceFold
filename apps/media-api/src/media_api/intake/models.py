@@ -5,7 +5,6 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     Column,
-    DateTime,
     Enum,
     ForeignKey,
     Integer,
@@ -16,7 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from media_api.infrastructure.db import Base, new_uuid, utc_now
+from media_api.infrastructure.db import Base, UTCDateTime, new_uuid, utc_now
 from media_api.intake.state import InboxStatus
 from media_api.taxonomy.models import Author, Series, Tag
 
@@ -87,10 +86,10 @@ class ScanCandidate(Base):
     is_stable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_claimed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     last_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
 
@@ -112,13 +111,13 @@ class InboxItem(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     processing_plan_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     discovered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
     sources: Mapped[list[SourceFile]] = relationship(
@@ -152,10 +151,10 @@ class SourceFile(Base):
     is_present: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     content_sha256: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
     inbox_item: Mapped[InboxItem] = relationship(back_populates="sources")
@@ -176,5 +175,5 @@ class InboxStatusEvent(Base):
     to_status: Mapped[InboxStatus] = mapped_column(_inbox_status_type(), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )

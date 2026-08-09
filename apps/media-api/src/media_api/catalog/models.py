@@ -4,7 +4,6 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
-    DateTime,
     Column,
     Enum,
     ForeignKey,
@@ -17,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from media_api.infrastructure.db import Base, new_uuid, utc_now
+from media_api.infrastructure.db import Base, UTCDateTime, new_uuid, utc_now
 from media_api.intake.models import InboxItem
 from media_api.taxonomy.models import Author, Series, Tag
 
@@ -97,17 +96,17 @@ class MediaAsset(Base):
     )
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    source_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_created_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     preview_path: Mapped[str | None] = mapped_column(Text)
     preview_sha256: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     ingested_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
     authors: Mapped[list[Author]] = relationship(
@@ -150,10 +149,10 @@ class IngestOperation(Base):
     replacement_snapshot_json: Mapped[dict[str, object] | None] = mapped_column(JSON)
     diagnostic_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
     inbox_item: Mapped[InboxItem] = relationship()

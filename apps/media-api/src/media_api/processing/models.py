@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from media_api.infrastructure.db import Base, new_uuid, utc_now
+from media_api.infrastructure.db import Base, UTCDateTime, new_uuid, utc_now
 from media_api.intake.models import InboxItem
 
 
@@ -48,7 +48,7 @@ class ProcessingPlan(Base):
     declared_inputs_json: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     expected_output_name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
 
     inbox_item: Mapped[InboxItem] = relationship()
@@ -82,13 +82,13 @@ class ProcessingJob(Base):
     user_message: Mapped[str | None] = mapped_column(Text)
     diagnostic_message: Mapped[str | None] = mapped_column(Text)
     retryable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, onupdate=utc_now, nullable=False
     )
 
     inbox_item: Mapped[InboxItem] = relationship()
