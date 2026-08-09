@@ -3,11 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 
 
-CH6_DOD = Path("docs/STEP9_CH6_PHASE1_DEFINITION_OF_DONE.md").read_text(encoding="utf-8")
-CH6_COMPLETED = Path("docs/STEP9_CH6_PHASE1_COMPLETED_CAPABILITIES.md").read_text(encoding="utf-8")
-CH6_GAPS = Path("docs/STEP9_CH6_PHASE1_ACCEPTABLE_GAPS_AND_TECH_DEBT.md").read_text(encoding="utf-8")
-CH6_BOUNDARIES = Path("docs/STEP9_CH6_PHASE1_LOCKED_BOUNDARIES.md").read_text(encoding="utf-8")
-CH6_BASELINE = Path("docs/STEP9_CH6_POST_PHASE1_BASELINE.md").read_text(encoding="utf-8")
+REPO_ROOT = Path(__file__).resolve().parents[4]
+PHASE1_STEP9_ARCHIVE = REPO_ROOT / "docs/archive/phase1/step9"
+CH6_DOD = (PHASE1_STEP9_ARCHIVE / "STEP9_CH6_PHASE1_DEFINITION_OF_DONE.md").read_text(
+    encoding="utf-8"
+)
+CH6_COMPLETED = (
+    PHASE1_STEP9_ARCHIVE / "STEP9_CH6_PHASE1_COMPLETED_CAPABILITIES.md"
+).read_text(encoding="utf-8")
+CH6_GAPS = (
+    PHASE1_STEP9_ARCHIVE / "STEP9_CH6_PHASE1_ACCEPTABLE_GAPS_AND_TECH_DEBT.md"
+).read_text(encoding="utf-8")
+CH6_BOUNDARIES = (
+    PHASE1_STEP9_ARCHIVE / "STEP9_CH6_PHASE1_LOCKED_BOUNDARIES.md"
+).read_text(encoding="utf-8")
+CH6_BASELINE = (PHASE1_STEP9_ARCHIVE / "STEP9_CH6_POST_PHASE1_BASELINE.md").read_text(
+    encoding="utf-8"
+)
 
 
 def test_phase1_definition_of_done_locks_unified_mainline_and_entry_boundaries() -> None:

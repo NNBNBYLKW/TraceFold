@@ -1,12 +1,17 @@
 from pathlib import Path
 
 
-WEB_API_TS = Path("apps/web/src/api.ts").read_text(encoding="utf-8")
-WEB_MAIN_TS = Path("apps/web/src/main.ts").read_text(encoding="utf-8")
-DESKTOP_APP_TS = Path("apps/desktop/app/shell/app.py").read_text(encoding="utf-8")
-DESKTOP_MAIN_TS = Path("apps/desktop/app/main.py").read_text(encoding="utf-8")
-TASK3_SIGNALS = Path("docs/POST_PHASE1_A3_TASK3_FAILURE_SIGNALS.md").read_text(encoding="utf-8")
-TASK3_HINTS = Path("docs/POST_PHASE1_A3_TASK3_RECOVERY_HINTS.md").read_text(encoding="utf-8")
+REPO_ROOT = Path(__file__).resolve().parents[4]
+WEB_API_TS = (REPO_ROOT / "apps/web/src/api.ts").read_text(encoding="utf-8")
+WEB_MAIN_TS = (REPO_ROOT / "apps/web/src/main.ts").read_text(encoding="utf-8")
+DESKTOP_APP_TS = (REPO_ROOT / "apps/desktop/app/shell/app.py").read_text(encoding="utf-8")
+DESKTOP_MAIN_TS = (REPO_ROOT / "apps/desktop/app/main.py").read_text(encoding="utf-8")
+TASK3_SIGNALS = (
+    REPO_ROOT / "docs/archive/phase1/post_phase1_a3/POST_PHASE1_A3_TASK3_FAILURE_SIGNALS.md"
+).read_text(encoding="utf-8")
+TASK3_HINTS = (
+    REPO_ROOT / "docs/archive/phase1/post_phase1_a3/POST_PHASE1_A3_TASK3_RECOVERY_HINTS.md"
+).read_text(encoding="utf-8")
 
 
 def test_web_failure_wording_distinguishes_api_unavailable_and_invalid_response() -> None:
@@ -18,7 +23,7 @@ def test_web_failure_signals_keep_formal_fact_safety_visible() -> None:
     assert "This entry-side failure does not change existing formal records." in WEB_MAIN_TS
     assert "This response failure does not change existing formal records." in WEB_MAIN_TS
     assert "AI derivation failed. The formal record remains available." in WEB_MAIN_TS
-    assert "AI derivation has not been generated for this knowledge record yet. The formal record remains available." in WEB_MAIN_TS
+    assert "The formal content remains available." in WEB_MAIN_TS
 
 
 def test_desktop_failure_signals_distinguish_api_and_workbench_failures() -> None:

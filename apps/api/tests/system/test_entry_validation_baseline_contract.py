@@ -40,7 +40,9 @@ def test_task4_validation_baseline_lists_minimum_commands() -> None:
 
 
 def test_task4_validation_notes_point_back_to_task1_to_task3_docs() -> None:
-    content = _read("docs/POST_PHASE1_A3_TASK4_VALIDATION_NOTES.md")
+    content = _read(
+        "docs/archive/phase1/post_phase1_a3/POST_PHASE1_A3_TASK4_VALIDATION_NOTES.md"
+    )
 
     assert "docs/POST_PHASE1_A3_TASK1_ACCEPTANCE.md" in content
     assert "docs/POST_PHASE1_A3_TASK2_STARTUP_BASELINE.md" in content
@@ -52,7 +54,7 @@ def test_task4_validation_notes_point_back_to_task1_to_task3_docs() -> None:
 
 
 def test_task4_scope_keeps_task4_small_and_entry_only() -> None:
-    content = _read("docs/POST_PHASE1_A3_TASK4_SCOPE.md")
+    content = _read("docs/archive/phase1/post_phase1_a3/POST_PHASE1_A3_TASK4_SCOPE.md")
 
     assert "Desktop shell runtime validation" in content
     assert "startup and config baseline validation" in content

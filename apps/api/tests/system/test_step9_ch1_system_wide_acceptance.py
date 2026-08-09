@@ -241,7 +241,7 @@ def test_chain_a_web_mainline_flow_closes_through_pending_confirm_formal_and_das
     assert len(dashboard["recent_activity"]) >= 1
 
 
-def test_chain_b_telegram_capture_stays_on_shared_capture_and_pending_semantics(
+def test_chain_b_telegram_stays_capture_only_while_pending_remains_api_visible(
     api_client: TestClient,
 ) -> None:
     telegram_api = _TestClientTelegramApi(api_client)
@@ -249,11 +249,11 @@ def test_chain_b_telegram_capture_stays_on_shared_capture_and_pending_semantics(
 
     capture_result = handler.handle_update(_telegram_update("买了咖啡"))
     assert capture_result is not None
-    assert "Recorded. Pending item:" in capture_result.text
+    assert capture_result.text == "Captured first. Pending review created. You can send the next text now."
 
     pending_list_result = handler.handle_update(_telegram_update("/pending"))
     assert pending_list_result is not None
-    assert "Open pending items:" in pending_list_result.text
+    assert pending_list_result.text == "Only /start and /help are available. Send plain text to record quickly."
 
     pending_list_response = api_client.get("/api/pending", params={"status": "open"})
     assert pending_list_response.status_code == 200
@@ -267,8 +267,8 @@ def test_chain_b_telegram_capture_stays_on_shared_capture_and_pending_semantics(
 
     unsupported = handler.handle_update(_telegram_update("/force_insert 1"))
     assert unsupported is not None
-    assert unsupported.text == "This command is not available."
-    assert [call[0] for call in telegram_api.calls] == ["capture", "pending_list"]
+    assert unsupported.text == "Only /start and /help are available. Send plain text to record quickly."
+    assert [call[0] for call in telegram_api.calls] == ["capture"]
 
 
 def test_chain_c_formal_facts_rules_and_ai_derivations_remain_separate_and_visible(

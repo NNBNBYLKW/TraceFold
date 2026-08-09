@@ -1,12 +1,19 @@
 from pathlib import Path
 
 
-STARTUP_BASELINE = Path("docs/POST_PHASE1_A3_TASK2_STARTUP_BASELINE.md").read_text(encoding="utf-8")
-RECOVERY_PATHS = Path("docs/POST_PHASE1_A3_TASK2_RECOVERY_PATHS.md").read_text(encoding="utf-8")
-RUNNER = Path("apps/api/scripts/step9_ch1_acceptance_smoke.py").read_text(encoding="utf-8")
-API_ENV = Path("apps/api/.env.example").read_text(encoding="utf-8")
-WEB_ENV = Path("apps/web/.env.example").read_text(encoding="utf-8")
-DESKTOP_ENV = Path("apps/desktop/.env.example").read_text(encoding="utf-8")
+REPO_ROOT = Path(__file__).resolve().parents[4]
+STARTUP_BASELINE = (REPO_ROOT / "docs/POST_PHASE1_A3_TASK2_STARTUP_BASELINE.md").read_text(
+    encoding="utf-8"
+)
+RECOVERY_PATHS = (
+    REPO_ROOT / "docs/archive/phase1/post_phase1_a3/POST_PHASE1_A3_TASK2_RECOVERY_PATHS.md"
+).read_text(encoding="utf-8")
+RUNNER = (REPO_ROOT / "apps/api/scripts/step9_ch1_acceptance_smoke.py").read_text(
+    encoding="utf-8"
+)
+API_ENV = (REPO_ROOT / "apps/api/.env.example").read_text(encoding="utf-8")
+WEB_ENV = (REPO_ROOT / "apps/web/.env.example").read_text(encoding="utf-8")
+DESKTOP_ENV = (REPO_ROOT / "apps/desktop/.env.example").read_text(encoding="utf-8")
 
 
 def test_startup_baseline_freezes_daily_entry_commands() -> None:

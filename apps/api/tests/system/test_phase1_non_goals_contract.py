@@ -3,11 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 
-STEP8_SCOPE = Path("docs/STEP8_SCOPE.md").read_text(encoding="utf-8")
-STEP8_DRIFT = Path("docs/STEP8_DRIFT_WARNINGS.md").read_text(encoding="utf-8")
-CH5_REVIEW = Path("docs/STEP9_CH5_PHASE1_NON_GOALS_REVIEW.md").read_text(encoding="utf-8")
-DESKTOP_ENV = Path("apps/desktop/.env.example").read_text(encoding="utf-8")
-TELEGRAM_ENV = Path("apps/telegram/.env.example").read_text(encoding="utf-8")
+REPO_ROOT = Path(__file__).resolve().parents[4]
+STEP8_ARCHIVE = REPO_ROOT / "docs/archive/phase1/step8"
+STEP9_ARCHIVE = REPO_ROOT / "docs/archive/phase1/step9"
+STEP8_SCOPE = (STEP8_ARCHIVE / "STEP8_SCOPE.md").read_text(encoding="utf-8")
+STEP8_DRIFT = (STEP8_ARCHIVE / "STEP8_DRIFT_WARNINGS.md").read_text(encoding="utf-8")
+CH5_REVIEW = (STEP9_ARCHIVE / "STEP9_CH5_PHASE1_NON_GOALS_REVIEW.md").read_text(
+    encoding="utf-8"
+)
+DESKTOP_ENV = (REPO_ROOT / "apps/desktop/.env.example").read_text(encoding="utf-8")
+TELEGRAM_ENV = (REPO_ROOT / "apps/telegram/.env.example").read_text(encoding="utf-8")
 
 
 def test_step8_scope_relocks_key_non_goals() -> None:

@@ -4,7 +4,8 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT_PATH = Path("apps/api/scripts/step9_ch1_acceptance_smoke.py")
+REPO_ROOT = Path(__file__).resolve().parents[4]
+SCRIPT_PATH = REPO_ROOT / "apps/api/scripts/step9_ch1_acceptance_smoke.py"
 
 
 def _load_module():

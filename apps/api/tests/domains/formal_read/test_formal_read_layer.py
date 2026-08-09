@@ -56,10 +56,14 @@ def db(tmp_path: Path) -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def api_client(db: Session) -> Generator[TestClient, None, None]:
+def api_client(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
         yield db
 
+    monkeypatch.setattr("app.main.init_db", lambda: None)
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:
         yield test_client
