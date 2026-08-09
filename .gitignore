@@ -47,6 +47,7 @@ dist/
 # =========================
 # IDE / editor files
 # =========================
+.worktrees/
 .idea/
 .vscode/
 *.code-workspace
