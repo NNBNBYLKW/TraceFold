@@ -55,3 +55,45 @@ def test_ingest_requires_idempotency_key(
     response = client.post(f"/api/inbox/items/{ready_item.id}/ingest")
 
     assert response.status_code == 422
+
+
+def test_ingest_key_cannot_be_reused_for_a_different_item(
+    client: TestClient,
+    ready_item: InboxItem,
+    storage: LocalStorage,
+) -> None:
+    second_source = storage.inbox_dir / "second.mp4"
+    second_source.write_bytes(b"second-video")
+    second_item = InboxItem(
+        media_type="video",
+        status=InboxStatus.READY_TO_TAG,
+        suggested_actual_filename=second_source.name,
+    )
+    second_item.sources.append(
+        SourceFile.from_snapshot(
+            storage.snapshot(second_source),
+            is_primary=True,
+        )
+    )
+    with client.app.state.session_factory() as session:
+        session.add(second_item)
+        session.commit()
+
+    headers = {"Idempotency-Key": "one-command-one-item"}
+    first = client.post(
+        f"/api/inbox/items/{ready_item.id}/ingest",
+        headers=headers,
+    )
+    reused = client.post(
+        f"/api/inbox/items/{second_item.id}/ingest",
+        headers=headers,
+    )
+
+    assert first.status_code == 200
+    assert reused.status_code == 409
+    assert second_source.exists()
+    with client.app.state.session_factory() as session:
+        assert session.query(MediaAsset).count() == 1
+        unchanged = session.get(InboxItem, second_item.id)
+        assert unchanged is not None
+        assert unchanged.status == "ready_to_tag"

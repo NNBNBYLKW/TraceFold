@@ -40,6 +40,10 @@ class FinalInputNotFound(IngestError):
     pass
 
 
+class IdempotencyKeyReused(IngestError):
+    pass
+
+
 @dataclass(frozen=True)
 class IngestResult:
     kind: Literal["completed", "conflict"]
@@ -63,6 +67,10 @@ class IngestService:
             raise IngestError("idempotency key must not be empty")
         existing = self.operations.by_idempotency_key(idempotency_key)
         if existing is not None:
+            if existing.inbox_item_id != item_id:
+                raise IdempotencyKeyReused(
+                    "idempotency key belongs to a different inbox item"
+                )
             return existing
 
         item = self.items.get(item_id)
