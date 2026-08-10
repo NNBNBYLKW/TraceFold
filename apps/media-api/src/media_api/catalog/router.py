@@ -5,6 +5,14 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy.orm import Session, sessionmaker
 
+from media_api.catalog.conflicts import (
+    ConflictAlreadyResolved,
+    ConflictChoiceExpired,
+    ConflictIdempotencyKeyReused,
+    ConflictNotFound,
+    ConflictReplacementUnavailable,
+    ConflictService,
+)
 from media_api.catalog.ingest import (
     InboxNotReady,
     IngestError,
@@ -12,6 +20,9 @@ from media_api.catalog.ingest import (
     SourceChanged,
 )
 from media_api.catalog.schemas import (
+    ConflictRead,
+    ConflictResolutionRead,
+    ConflictResolutionRequest,
     IngestResultRead,
     MediaAssetMetadataPatch,
     MediaAssetRead,
@@ -29,6 +40,48 @@ def build_catalog_router(
     storage: LocalStorage,
 ) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["catalog"])
+
+    @router.get("/conflicts/{operation_id}", response_model=ConflictRead)
+    def get_conflict(operation_id: str) -> ConflictRead:
+        with session_factory() as session:
+            try:
+                details = ConflictService(
+                    session=session,
+                    storage=storage,
+                ).get_details(operation_id)
+            except ConflictNotFound as exc:
+                raise HTTPException(status_code=404, detail="Conflict not found") from exc
+            return ConflictRead.from_details(details)
+
+    @router.post(
+        "/conflicts/{operation_id}/resolve",
+        response_model=ConflictResolutionRead,
+    )
+    def resolve_conflict(
+        operation_id: str,
+        payload: ConflictResolutionRequest,
+        idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    ) -> ConflictResolutionRead:
+        with session_factory() as session:
+            try:
+                result = ConflictService(
+                    session=session,
+                    storage=storage,
+                ).resolve(
+                    operation_id,
+                    payload.resolution,
+                    idempotency_key=idempotency_key,
+                )
+            except ConflictNotFound as exc:
+                raise HTTPException(status_code=404, detail="Conflict not found") from exc
+            except (
+                ConflictAlreadyResolved,
+                ConflictChoiceExpired,
+                ConflictIdempotencyKeyReused,
+                ConflictReplacementUnavailable,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return ConflictResolutionRead.from_result(result)
 
     @router.post(
         "/inbox/items/{item_id}/ingest",

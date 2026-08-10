@@ -17,6 +17,16 @@ class IngestOperationRepository:
             )
         )
 
+    def by_resolution_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> IngestOperation | None:
+        return self.session.scalar(
+            select(IngestOperation).where(
+                IngestOperation.resolution_idempotency_key == idempotency_key
+            )
+        )
+
     def get(self, operation_id: str) -> IngestOperation | None:
         return self.session.get(IngestOperation, operation_id)
 

@@ -89,27 +89,25 @@ class IngestService:
             if current != discovery:
                 raise SourceChanged(item_id)
             source.content_sha256 = self.storage.sha256(path)
-        processing_job = self._completed_processing_job(item_id)
-        if processing_job is None:
-            final_input = Path(_primary_source(item).canonical_path)
-            final_input_hash = self.storage.sha256(final_input)
-        else:
-            final_input, final_input_hash = self._validated_processing_output(
-                processing_job
-            )
+        final_input, final_input_hash = self._validated_final_input(item)
 
-        conflict_kinds = self._detect_conflicts(
-            item.suggested_actual_filename,
-            final_input_hash,
+        from media_api.catalog.conflicts import ConflictService
+
+        conflict = ConflictService(session=self.session, storage=self.storage).detect(
+            actual_filename=item.suggested_actual_filename,
+            sha256=final_input_hash,
         )
-        if conflict_kinds:
+        if conflict.kinds:
             operation = IngestOperation(
                 inbox_item_id=item.id,
                 idempotency_key=idempotency_key,
                 state=IngestOperationState.PREPARED,
                 requested_actual_filename=item.suggested_actual_filename,
                 source_hash=final_input_hash,
-                conflict_kinds_json=conflict_kinds,
+                conflict_kinds_json=[
+                    kind for kind in ("name", "content") if kind in conflict.kinds
+                ],
+                replacement_asset_id=conflict.existing_asset_id,
             )
             item.status = InboxStatus.CONFLICT
             self.session.add(operation)
@@ -136,29 +134,46 @@ class IngestService:
         self.session.commit()
         self.session.refresh(operation)
 
-        try:
-            staged = self.storage.copy_to_stage(
-                operation.id,
-                final_input,
-                item.suggested_actual_filename,
-            )
-            if self.storage.sha256(staged) != final_input_hash:
-                raise SourceChanged("final input changed before staging completed")
-        except Exception as exc:
-            operation.state = IngestOperationState.FAILED
-            operation.diagnostic_message = str(exc)
-            self.session.commit()
-            raise
-
-        operation.staged_path = str(staged)
-        self.session.commit()
-        self.session.refresh(operation)
-        return operation
+        return self.stage_operation(operation.id)
 
     def ingest(self, item_id: str, idempotency_key: str) -> IngestResult:
         operation = self.prepare(item_id, idempotency_key)
         if operation.conflict_kinds_json:
             return self._conflict_result(operation)
+        return self.resume(operation.id)
+
+    def stage_operation(self, operation_id: str) -> IngestOperation:
+        operation = self.operations.require(operation_id)
+        if operation.staged_path is not None:
+            return operation
+        item = self.items.get(operation.inbox_item_id)
+        if item is None or operation.source_hash is None:
+            raise IngestError("prepared operation is incomplete")
+        final_input, current_hash = self._validated_final_input(item)
+        if current_hash != operation.source_hash:
+            raise SourceChanged(item.id)
+        try:
+            staged = self.storage.copy_to_stage(
+                operation.id,
+                final_input,
+                operation.requested_actual_filename,
+            )
+            if self.storage.sha256(staged) != operation.source_hash:
+                raise SourceChanged("final input changed before staging completed")
+        except Exception as exc:
+            operation.diagnostic_message = str(exc)
+            self.session.commit()
+            raise
+        operation.staged_path = str(staged)
+        operation.diagnostic_message = None
+        self.session.commit()
+        self.session.refresh(operation)
+        return operation
+
+    def resume(self, operation_id: str) -> IngestResult:
+        operation = self.operations.require(operation_id)
+        if operation.conflict_kinds_json:
+            raise IngestError("conflict must be resolved before ingest can resume")
         if operation.state is IngestOperationState.COMPLETED:
             return self._result(operation)
         if operation.asset_id is not None and operation.state in {
@@ -169,33 +184,73 @@ class IngestService:
         if operation.staged_path is None:
             raise IngestError("prepared operation has no verified staged file")
 
-        item = self.items.get(item_id)
-        if item is None or item.status is not InboxStatus.READY_TO_TAG:
-            raise InboxNotReady(item_id)
+        item = self.items.get(operation.inbox_item_id)
+        if item is None or item.status not in {
+            InboxStatus.READY_TO_TAG,
+            InboxStatus.CONFLICT,
+            InboxStatus.INGESTING,
+        }:
+            raise InboxNotReady(operation.inbox_item_id)
 
-        item.status = InboxStatus.INGESTING
-        self.session.add(
-            InboxStatusEvent(
-                inbox_item_id=item.id,
-                from_status=InboxStatus.READY_TO_TAG,
-                to_status=InboxStatus.INGESTING,
-                reason="direct ingest started",
+        if operation.state is IngestOperationState.PREPARED:
+            previous = item.status
+            item.status = InboxStatus.INGESTING
+            self.session.add(
+                InboxStatusEvent(
+                    inbox_item_id=item.id,
+                    from_status=previous,
+                    to_status=InboxStatus.INGESTING,
+                    reason="resolved ingest started",
+                )
             )
-        )
-        self.session.commit()
+            self.session.commit()
 
-        final_path = self.storage.commit_stage(
-            Path(operation.staged_path),
-            Path(operation.requested_actual_filename),
-        )
-        operation.state = IngestOperationState.FILE_COMMITTED
-        operation.final_relative_path = final_path.name
-        self.session.commit()
+            if operation.resolution == "replace":
+                final_path = self._commit_replacement_file(operation)
+            else:
+                final_path = self.storage.commit_stage(
+                    Path(operation.staged_path),
+                    Path(operation.requested_actual_filename),
+                )
+            operation.state = IngestOperationState.FILE_COMMITTED
+            operation.final_relative_path = final_path.name
+            self.session.commit()
 
         operation = self.finish_database_commit(operation.id)
         operation.state = IngestOperationState.CLEANUP_PENDING
         self.session.commit()
         return self._cleanup(operation)
+
+    def _commit_replacement_file(self, operation: IngestOperation) -> Path:
+        if (
+            operation.replacement_asset_id is None
+            or operation.replacement_snapshot_json is None
+            or operation.staged_path is None
+        ):
+            raise IngestError("replacement operation is incomplete")
+        asset = self.assets.get(operation.replacement_asset_id)
+        if asset is None:
+            raise IngestError("replacement asset no longer exists")
+        target = self.storage.library_dir / operation.requested_actual_filename
+        if asset.final_relative_path != operation.requested_actual_filename:
+            raise IngestError("replacement target does not match the registered asset")
+        old_hash = str(operation.replacement_snapshot_json["sha256"])
+        planned_backup = (
+            self.storage.backups_dir / operation.id / operation.requested_actual_filename
+        )
+        if operation.backup_path is None:
+            operation.backup_path = str(planned_backup)
+            self.session.commit()
+        if target.exists():
+            if self.storage.sha256(target) != old_hash:
+                raise SourceChanged("registered formal file changed before replacement")
+            self.storage.backup_existing(operation.id, target)
+        elif not planned_backup.is_file():
+            raise IngestError("replacement target and backup are both missing")
+        return self.storage.commit_stage(
+            Path(operation.staged_path),
+            Path(operation.requested_actual_filename),
+        )
 
     def finish_database_commit(self, operation_id: str) -> IngestOperation:
         operation = self.operations.require(operation_id)
@@ -225,23 +280,47 @@ class IngestService:
         final_path = self.storage.library_dir / operation.final_relative_path
         primary = _primary_source(item)
         final_snapshot = self.storage.snapshot(final_path)
-        asset = MediaAsset(
-            media_type=item.media_type,
-            actual_filename=final_path.name,
-            final_relative_path=operation.final_relative_path,
-            display_name=item.display_name,
-            series=item.series,
-            size=final_snapshot.size,
-            sha256=operation.source_hash,
-            source_created_at=datetime.fromtimestamp(
+        if operation.resolution == "replace":
+            if operation.replacement_asset_id is None:
+                raise IngestError("replacement asset is missing")
+            asset = self.assets.get(operation.replacement_asset_id)
+            if asset is None:
+                raise IngestError("replacement asset no longer exists")
+            asset.media_type = item.media_type
+            asset.actual_filename = final_path.name
+            asset.final_relative_path = operation.final_relative_path
+            asset.display_name = item.display_name
+            asset.series = item.series
+            asset.size = final_snapshot.size
+            asset.sha256 = operation.source_hash
+            asset.source_created_at = datetime.fromtimestamp(
                 primary.modified_ns / 1_000_000_000,
                 tz=UTC,
-            ),
-            authors=list(item.authors),
-            tags=list(item.tags),
-        )
-        self.session.add(asset)
-        self.session.flush()
+            )
+            asset.preview_path = None
+            asset.preview_sha256 = None
+            asset.authors = list(item.authors)
+            asset.tags = list(item.tags)
+            asset.ingested_at = utc_now()
+            asset.updated_at = utc_now()
+        else:
+            asset = MediaAsset(
+                media_type=item.media_type,
+                actual_filename=final_path.name,
+                final_relative_path=operation.final_relative_path,
+                display_name=item.display_name,
+                series=item.series,
+                size=final_snapshot.size,
+                sha256=operation.source_hash,
+                source_created_at=datetime.fromtimestamp(
+                    primary.modified_ns / 1_000_000_000,
+                    tz=UTC,
+                ),
+                authors=list(item.authors),
+                tags=list(item.tags),
+            )
+            self.session.add(asset)
+            self.session.flush()
         item.status = InboxStatus.COMPLETED
         operation.asset_id = asset.id
         operation.state = IngestOperationState.DB_COMMITTED
@@ -316,6 +395,13 @@ class IngestService:
             raise SourceChanged("processing output changed after validation")
         return path, job.output_sha256
 
+    def _validated_final_input(self, item: InboxItem) -> tuple[Path, str]:
+        processing_job = self._completed_processing_job(item.id)
+        if processing_job is not None:
+            return self._validated_processing_output(processing_job)
+        final_input = Path(_primary_source(item).canonical_path)
+        return final_input, self.storage.sha256(final_input)
+
     def _cleanup(self, operation: IngestOperation) -> IngestResult:
         item = self.items.get(operation.inbox_item_id)
         if item is None or operation.asset_id is None:
@@ -344,6 +430,13 @@ class IngestService:
                     operation.source_hash,
                 )
             self.storage.remove_empty_stage(operation.id)
+            if operation.backup_path is not None:
+                snapshot = operation.replacement_snapshot_json or {}
+                old_hash = snapshot.get("sha256")
+                if not isinstance(old_hash, str):
+                    raise IngestError("replacement backup hash is missing")
+                self.storage.delete_verified(Path(operation.backup_path), old_hash)
+                self.storage.remove_empty_backup(operation.id)
         except Exception as exc:
             operation.state = IngestOperationState.CLEANUP_PENDING
             operation.diagnostic_message = str(exc)
@@ -354,21 +447,6 @@ class IngestService:
         operation.diagnostic_message = None
         self.session.commit()
         return self._result(operation)
-
-    def _detect_conflicts(
-        self,
-        actual_filename: str,
-        digest: str | None,
-    ) -> list[str]:
-        conflict_kinds: list[str] = []
-        if (
-            (self.storage.library_dir / actual_filename).exists()
-            or self.assets.by_actual_filename(actual_filename) is not None
-        ):
-            conflict_kinds.append("name")
-        if digest is not None and self.assets.by_sha256(digest) is not None:
-            conflict_kinds.append("content")
-        return conflict_kinds
 
     def _conflict_result(self, operation: IngestOperation) -> IngestResult:
         return IngestResult(

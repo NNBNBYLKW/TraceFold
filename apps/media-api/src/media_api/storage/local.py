@@ -156,7 +156,9 @@ class LocalStorage:
         if calculate_sha256(staged) != expected_hash:
             raise FileChangedError("restored staging copy does not match the backup")
         self.commit_stage(staged, Path(target_path.name))
+        self.remove_empty_stage(recovery_id)
         self.delete_verified(backup_path, expected_hash)
+        self.remove_empty_backup(backup_path.parent.name)
 
     def delete_verified(self, path: Path, expected_sha256: str) -> None:
         resolved = self._ensure_managed(path)
@@ -169,16 +171,36 @@ class LocalStorage:
         resolved.unlink()
 
     def remove_empty_stage(self, operation_id: str) -> None:
+        self._remove_empty_operation_dir(
+            operation_id,
+            root=self.staging_dir,
+            label="staging",
+        )
+
+    def remove_empty_backup(self, operation_id: str) -> None:
+        self._remove_empty_operation_dir(
+            operation_id,
+            root=self.backups_dir,
+            label="backup",
+        )
+
+    @staticmethod
+    def _remove_empty_operation_dir(
+        operation_id: str,
+        *,
+        root: Path,
+        label: str,
+    ) -> None:
         safe_operation_id = _safe_component(operation_id, label="operation_id")
         operation_dir = ensure_within(
-            self.staging_dir / safe_operation_id,
-            self.staging_dir,
+            root / safe_operation_id,
+            root,
         )
         if not operation_dir.exists():
             return
         if not operation_dir.is_dir() or any(operation_dir.iterdir()):
             raise UnsafePathError(
-                f"operation staging directory is not empty: {operation_dir}"
+                f"operation {label} directory is not empty: {operation_dir}"
             )
         operation_dir.rmdir()
 

@@ -27,6 +27,7 @@ class IngestOperationState(StrEnum):
     DB_COMMITTED = "db_committed"
     CLEANUP_PENDING = "cleanup_pending"
     COMPLETED = "completed"
+    SKIPPED = "skipped"
     FAILED = "failed"
 
 
@@ -120,6 +121,10 @@ class IngestOperation(Base):
     __tablename__ = "ingest_operations"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_ingest_operation_idempotency"),
+        UniqueConstraint(
+            "resolution_idempotency_key",
+            name="uq_ingest_operation_resolution_idempotency",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -132,6 +137,7 @@ class IngestOperation(Base):
         String(36), ForeignKey("media_assets.id", name="fk_ingest_operations_asset")
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    resolution_idempotency_key: Mapped[str | None] = mapped_column(String(255))
     state: Mapped[IngestOperationState] = mapped_column(
         _ingest_state_type(), default=IngestOperationState.PREPARED, nullable=False
     )

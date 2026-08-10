@@ -51,3 +51,5 @@ def test_backup_and_restore_round_trip_preserves_formal_bytes(
 
     assert target.read_bytes() == b"existing-media"
     assert not backup.exists()
+    assert list(storage.staging_dir.iterdir()) == []
+    assert list(storage.backups_dir.iterdir()) == []

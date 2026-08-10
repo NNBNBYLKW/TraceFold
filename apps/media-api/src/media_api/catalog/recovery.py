@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from media_api.catalog.ingest import IngestService
-from media_api.catalog.models import IngestOperation, IngestOperationState
+from media_api.catalog.models import IngestOperation, IngestOperationState, MediaAsset
 from media_api.catalog.repository import IngestOperationRepository
+from media_api.intake.models import InboxStatusEvent
 from media_api.intake.repository import InboxRepository
+from media_api.intake.state import InboxStatus
 from media_api.storage.contracts import StoragePort, TargetExistsError
+from media_api.taxonomy.models import Author, Series, Tag
 
 
 class RecoveryError(RuntimeError):
@@ -59,6 +63,11 @@ class IngestRecoveryService:
                 self.session.commit()
             else:
                 staged = self._staged_path(operation)
+                if (
+                    operation.resolution == "replace"
+                    and not staged.is_file()
+                ):
+                    return self._restore_replacement(operation)
                 self._require_hash(staged, operation.source_hash, label="staged file")
                 try:
                     final = self.storage.commit_stage(
@@ -87,6 +96,86 @@ class IngestRecoveryService:
             return self.retry_cleanup(operation.id)
 
         return self._result(operation)
+
+    def _restore_replacement(self, operation: IngestOperation) -> RecoveryResult:
+        snapshot = operation.replacement_snapshot_json
+        if (
+            snapshot is None
+            or operation.replacement_asset_id is None
+            or operation.backup_path is None
+        ):
+            raise RecoveryRequiresAttention("replacement rollback data is incomplete")
+        asset = self.session.get(MediaAsset, operation.replacement_asset_id)
+        if asset is None:
+            raise RecoveryRequiresAttention("replacement asset is missing")
+        backup = Path(operation.backup_path)
+        target = self._final_path(operation)
+        old_hash = snapshot.get("sha256")
+        if not isinstance(old_hash, str):
+            raise RecoveryRequiresAttention("replacement snapshot hash is missing")
+        self._require_hash(backup, old_hash, label="replacement backup")
+        if target.exists():
+            self._require_hash(target, old_hash, label="restored final file")
+            self.storage.delete_verified(backup, old_hash)
+        else:
+            self.storage.restore_backup(backup, target)
+        self.storage.remove_empty_backup(operation.id)
+        self.storage.remove_empty_stage(operation.id)
+        self._restore_asset_metadata(asset, snapshot)
+
+        item = self.items.get(operation.inbox_item_id)
+        if item is None:
+            raise RecoveryRequiresAttention("replacement inbox item is missing")
+        previous = item.status
+        item.status = InboxStatus.READY_TO_TAG
+        operation.state = IngestOperationState.FAILED
+        operation.diagnostic_message = "replacement rolled back during recovery"
+        self.session.add(
+            InboxStatusEvent(
+                inbox_item_id=item.id,
+                from_status=previous,
+                to_status=InboxStatus.READY_TO_TAG,
+                reason="interrupted replacement restored the previous asset",
+            )
+        )
+        self.session.commit()
+        return self._result(operation)
+
+    def _restore_asset_metadata(
+        self,
+        asset: MediaAsset,
+        snapshot: dict[str, object],
+    ) -> None:
+        asset.media_type = str(snapshot["media_type"])
+        asset.actual_filename = str(snapshot["actual_filename"])
+        asset.final_relative_path = str(snapshot["final_relative_path"])
+        asset.display_name = _optional_string(snapshot.get("display_name"))
+        asset.size = int(snapshot["size"])
+        asset.sha256 = str(snapshot["sha256"])
+        asset.source_created_at = _optional_datetime(snapshot.get("source_created_at"))
+        asset.preview_path = _optional_string(snapshot.get("preview_path"))
+        asset.preview_sha256 = _optional_string(snapshot.get("preview_sha256"))
+        asset.created_at = datetime.fromisoformat(str(snapshot["created_at"]))
+        asset.ingested_at = datetime.fromisoformat(str(snapshot["ingested_at"]))
+        asset.updated_at = datetime.fromisoformat(str(snapshot["updated_at"]))
+        author_ids = [str(value) for value in snapshot.get("author_ids", [])]
+        tag_ids = [str(value) for value in snapshot.get("tag_ids", [])]
+        asset.authors = [
+            author
+            for author_id in author_ids
+            if (author := self.session.get(Author, author_id)) is not None
+        ]
+        asset.tags = [
+            tag
+            for tag_id in tag_ids
+            if (tag := self.session.get(Tag, tag_id)) is not None
+        ]
+        series_id = snapshot.get("series_id")
+        asset.series = (
+            self.session.get(Series, str(series_id))
+            if series_id is not None
+            else None
+        )
 
     def finish_database_commit(self, operation_id: str) -> RecoveryResult:
         operation = self.operations.require(operation_id)
@@ -177,3 +266,11 @@ class IngestRecoveryService:
             state=operation.state.value,
             warning_code=warning,
         )
+
+
+def _optional_string(value: object) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _optional_datetime(value: object) -> datetime | None:
+    return datetime.fromisoformat(str(value)) if value is not None else None
