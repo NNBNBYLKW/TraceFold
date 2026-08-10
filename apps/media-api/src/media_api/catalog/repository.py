@@ -20,6 +20,31 @@ class IngestOperationRepository:
     def get(self, operation_id: str) -> IngestOperation | None:
         return self.session.get(IngestOperation, operation_id)
 
+    def require(self, operation_id: str) -> IngestOperation:
+        operation = self.get(operation_id)
+        if operation is None:
+            raise LookupError(f"ingest operation not found: {operation_id}")
+        return operation
+
+    def recoverable(self) -> list[IngestOperation]:
+        return list(
+            self.session.scalars(
+                select(IngestOperation)
+                .where(
+                    IngestOperation.state.in_(
+                        (
+                            "prepared",
+                            "file_committed",
+                            "db_committed",
+                            "cleanup_pending",
+                        )
+                    ),
+                    IngestOperation.conflict_kinds_json.is_(None),
+                )
+                .order_by(IngestOperation.created_at, IngestOperation.id)
+            )
+        )
+
 
 class MediaAssetRepository:
     def __init__(self, session: Session) -> None:

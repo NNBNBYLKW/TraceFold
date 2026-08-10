@@ -40,6 +40,11 @@ class TargetExistsError(StorageError):
 
 
 class StoragePort(Protocol):
+    inbox_dir: Path
+    library_dir: Path
+    work_dir: Path
+    staging_dir: Path
+
     def snapshot(self, path: Path) -> FileSnapshot: ...
 
     def sha256(self, path: Path) -> str: ...

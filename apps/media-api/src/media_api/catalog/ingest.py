@@ -20,8 +20,7 @@ from media_api.infrastructure.db import utc_now
 from media_api.intake.models import InboxItem, InboxStatusEvent, SourceFile
 from media_api.intake.repository import InboxRepository
 from media_api.intake.state import InboxStatus
-from media_api.storage.contracts import FileSnapshot
-from media_api.storage.local import LocalStorage
+from media_api.storage.contracts import FileSnapshot, StoragePort
 
 
 class IngestError(RuntimeError):
@@ -55,7 +54,7 @@ class IngestResult:
 
 
 class IngestService:
-    def __init__(self, *, session: Session, storage: LocalStorage) -> None:
+    def __init__(self, *, session: Session, storage: StoragePort) -> None:
         self.session = session
         self.storage = storage
         self.items = InboxRepository(session)
@@ -182,12 +181,43 @@ class IngestService:
         operation.final_relative_path = final_path.name
         self.session.commit()
 
+        operation = self.finish_database_commit(operation.id)
+        operation.state = IngestOperationState.CLEANUP_PENDING
+        self.session.commit()
+        return self._cleanup(operation)
+
+    def finish_database_commit(self, operation_id: str) -> IngestOperation:
+        operation = self.operations.require(operation_id)
+        if operation.asset_id is not None:
+            if self.assets.get(operation.asset_id) is None:
+                raise IngestError("ingest operation refers to a missing media asset")
+            return operation
+        if operation.final_relative_path is None or operation.source_hash is None:
+            raise IngestError("file-committed operation is incomplete")
+
+        item = self.items.get(operation.inbox_item_id)
+        if item is None:
+            raise IngestError("ingest operation refers to a missing inbox item")
+        if item.status is not InboxStatus.INGESTING:
+            previous = item.status
+            item.status = InboxStatus.INGESTING
+            self.session.add(
+                InboxStatusEvent(
+                    inbox_item_id=item.id,
+                    from_status=previous,
+                    to_status=InboxStatus.INGESTING,
+                    reason="interrupted ingest resumed",
+                    created_at=utc_now(),
+                )
+            )
+
+        final_path = self.storage.library_dir / operation.final_relative_path
         primary = _primary_source(item)
         final_snapshot = self.storage.snapshot(final_path)
         asset = MediaAsset(
             media_type=item.media_type,
             actual_filename=final_path.name,
-            final_relative_path=final_path.name,
+            final_relative_path=operation.final_relative_path,
             display_name=item.display_name,
             series=item.series,
             size=final_snapshot.size,
@@ -215,9 +245,18 @@ class IngestService:
             )
         )
         self.session.commit()
+        self.session.refresh(operation)
+        return operation
 
-        operation.state = IngestOperationState.CLEANUP_PENDING
-        self.session.commit()
+    def retry_cleanup(self, operation_id: str) -> IngestResult:
+        operation = self.operations.require(operation_id)
+        if operation.state is IngestOperationState.COMPLETED:
+            return self._result(operation)
+        if operation.state not in {
+            IngestOperationState.DB_COMMITTED,
+            IngestOperationState.CLEANUP_PENDING,
+        }:
+            raise IngestError("cleanup is allowed only after database commit")
         return self._cleanup(operation)
 
     def _cleanup(self, operation: IngestOperation) -> IngestResult:
@@ -234,6 +273,11 @@ class IngestService:
                     source.content_sha256,
                 )
                 source.is_present = False
+            if operation.staged_path is not None and operation.source_hash is not None:
+                self.storage.delete_verified(
+                    Path(operation.staged_path),
+                    operation.source_hash,
+                )
             self.storage.remove_empty_stage(operation.id)
         except Exception as exc:
             operation.state = IngestOperationState.CLEANUP_PENDING
