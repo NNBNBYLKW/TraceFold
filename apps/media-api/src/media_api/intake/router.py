@@ -13,6 +13,10 @@ from media_api.intake.schemas import (
     InboxMetadataPatch,
     ScanResultRead,
 )
+from media_api.api.events import EventBus, MediaEvent
+from media_api.api.errors import domain_api_error
+from media_api.api.dependencies import RuntimeState
+from media_api.infrastructure.db import utc_now
 from media_api.intake.service import (
     InboxActionNotAllowed,
     InboxItemNotFound,
@@ -32,6 +36,8 @@ def build_inbox_router(
     session_factory: sessionmaker[Session],
     storage: LocalStorage,
     registry: ProcessorRegistry | None = None,
+    event_bus: EventBus | None = None,
+    runtime_state: RuntimeState | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/inbox", tags=["inbox"])
 
@@ -43,6 +49,16 @@ def build_inbox_router(
                 storage=storage,
                 registry=registry,
             ).scan()
+            if runtime_state is not None:
+                runtime_state.last_scan_at = utc_now()
+            if event_bus is not None:
+                event_bus.publish_threadsafe(
+                    MediaEvent(
+                        type="inbox.scanned",
+                        entity_id="inbox",
+                        status=str(result.created_items),
+                    )
+                )
             return ScanResultRead.from_result(result)
 
     @router.get("/items", response_model=list[InboxItemRead])
@@ -66,12 +82,13 @@ def build_inbox_router(
                     replace_series_id=payload.replace_series_id,
                 )
             except (InboxItemNotFound, TaxonomySelectionNotFound) as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
+                raise domain_api_error(exc) from exc
             except InboxActionNotAllowed as exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Inbox item metadata is not editable in its current state",
-                ) from exc
+                raise domain_api_error(exc) from exc
+            if event_bus is not None:
+                event_bus.publish_threadsafe(
+                    MediaEvent(type="inbox.updated", entity_id="inbox")
+                )
             return BulkMetadataResult(updated_count=updated_count)
 
     @router.patch("/items/{item_id}/metadata", response_model=InboxItemRead)
@@ -90,12 +107,19 @@ def build_inbox_router(
                     tag_ids=payload.tag_ids,
                 )
             except (InboxItemNotFound, TaxonomySelectionNotFound) as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
+                raise domain_api_error(exc, details={"item_id": item_id}) from exc
             except InboxActionNotAllowed as exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Inbox item metadata is not editable in its current state",
+                raise domain_api_error(
+                    exc, details={"item_id": item_id}
                 ) from exc
+            if event_bus is not None:
+                event_bus.publish_threadsafe(
+                    MediaEvent(
+                        type="inbox.updated",
+                        entity_id=item.id,
+                        status=item.status.value,
+                    )
+                )
             return InboxItemRead.from_model(item)
 
     @router.get("/items/{item_id}", response_model=InboxItemRead)

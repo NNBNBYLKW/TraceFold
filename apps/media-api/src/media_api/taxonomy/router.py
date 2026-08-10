@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_api.taxonomy.schemas import TaxonomyNameWrite, TaxonomyRead
+from media_api.api.errors import domain_api_error
 from media_api.taxonomy.service import (
     AuthorService,
     EmptyTaxonomyName,
@@ -56,7 +57,7 @@ def _register_resource(
             try:
                 entry = service_factory(session).create(payload.name)
             except EmptyTaxonomyName as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+                raise domain_api_error(exc) from exc
             return TaxonomyRead.from_model(entry)
 
     @router.patch(
@@ -72,9 +73,9 @@ def _register_resource(
             try:
                 entry = service_factory(session).update(entry_id, payload.name)
             except EmptyTaxonomyName as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+                raise domain_api_error(exc) from exc
             except TaxonomyNotFound as exc:
-                raise HTTPException(status_code=404, detail="Taxonomy entry not found") from exc
+                raise domain_api_error(exc, details={"entry_id": entry_id}) from exc
             except TaxonomyNameConflict as exc:
-                raise HTTPException(status_code=409, detail="Taxonomy name already exists") from exc
+                raise domain_api_error(exc) from exc
             return TaxonomyRead.from_model(entry)

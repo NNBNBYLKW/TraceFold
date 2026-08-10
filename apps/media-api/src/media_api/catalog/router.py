@@ -14,6 +14,9 @@ from media_api.catalog.conflicts import (
     ConflictReplacementUnavailable,
     ConflictService,
 )
+from media_api.api.dependencies import RuntimeState
+from media_api.api.errors import ApiError, SYSTEM_RECOVERING, domain_api_error
+from media_api.api.events import EventBus, MediaEvent
 from media_api.catalog.ingest import (
     InboxNotReady,
     IngestError,
@@ -49,6 +52,8 @@ def build_catalog_router(
     session_factory: sessionmaker[Session],
     storage: LocalStorage,
     reveal_port: RevealPort | None = None,
+    runtime_state: RuntimeState | None = None,
+    event_bus: EventBus | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["catalog"])
     resolved_reveal_port = reveal_port or PlatformRevealPort()
@@ -62,7 +67,9 @@ def build_catalog_router(
                     storage=storage,
                 ).get_details(operation_id)
             except ConflictNotFound as exc:
-                raise HTTPException(status_code=404, detail="Conflict not found") from exc
+                raise domain_api_error(
+                    exc, details={"operation_id": operation_id}
+                ) from exc
             return ConflictRead.from_details(details)
 
     @router.post(
@@ -85,14 +92,26 @@ def build_catalog_router(
                     idempotency_key=idempotency_key,
                 )
             except ConflictNotFound as exc:
-                raise HTTPException(status_code=404, detail="Conflict not found") from exc
+                raise domain_api_error(
+                    exc, details={"operation_id": operation_id}
+                ) from exc
             except (
                 ConflictAlreadyResolved,
                 ConflictChoiceExpired,
                 ConflictIdempotencyKeyReused,
                 ConflictReplacementUnavailable,
             ) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+                raise domain_api_error(
+                    exc, details={"operation_id": operation_id}
+                ) from exc
+            if event_bus is not None:
+                event_bus.publish_threadsafe(
+                    MediaEvent(
+                        type="conflict.resolved",
+                        entity_id=operation_id,
+                        status=result.resolution.value,
+                    )
+                )
             return ConflictResolutionRead.from_result(result)
 
     @router.post(
@@ -103,6 +122,8 @@ def build_catalog_router(
         item_id: str,
         idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     ) -> IngestResultRead:
+        if runtime_state is not None and not runtime_state.ingest_enabled:
+            raise ApiError(SYSTEM_RECOVERING, details={"item_id": item_id})
         with session_factory() as session:
             try:
                 result = IngestService(
@@ -110,11 +131,27 @@ def build_catalog_router(
                     storage=storage,
                 ).ingest(item_id, idempotency_key)
             except SourceChanged as exc:
-                raise HTTPException(status_code=409, detail="Source file changed") from exc
+                raise domain_api_error(
+                    exc,
+                    details={"item_id": item_id},
+                ) from exc
             except InboxNotReady as exc:
-                raise HTTPException(status_code=409, detail="Inbox item is not ready") from exc
+                raise domain_api_error(
+                    exc,
+                    details={"item_id": item_id},
+                ) from exc
             except IngestError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+                raise domain_api_error(
+                    exc, details={"item_id": item_id}
+                ) from exc
+            if event_bus is not None:
+                event_bus.publish_threadsafe(
+                    MediaEvent(
+                        type="inbox.updated",
+                        entity_id=item_id,
+                        status=result.kind,
+                    )
+                )
             return IngestResultRead.from_result(result)
 
     @router.get("/library/assets", response_model=list[MediaAssetRead])
@@ -141,7 +178,9 @@ def build_catalog_router(
             try:
                 asset = CatalogService(session).get_asset(asset_id)
             except MediaAssetNotFound as exc:
-                raise HTTPException(status_code=404, detail="Media asset not found") from exc
+                raise domain_api_error(
+                    exc, details={"asset_id": asset_id}
+                ) from exc
             return MediaAssetRead.from_model(asset)
 
     @router.get("/library/assets/{asset_id}/preview", response_class=FileResponse)
@@ -150,7 +189,9 @@ def build_catalog_router(
             try:
                 asset = CatalogService(session).get_asset(asset_id)
             except MediaAssetNotFound as exc:
-                raise HTTPException(status_code=404, detail="Media asset not found") from exc
+                raise domain_api_error(
+                    exc, details={"asset_id": asset_id}
+                ) from exc
             try:
                 media_path = ensure_within(
                     storage.library_dir / asset.final_relative_path,
@@ -182,13 +223,21 @@ def build_catalog_router(
                     reveal_port=resolved_reveal_port,
                 ).reveal_asset(asset_id)
             except MediaAssetNotFound as exc:
-                raise HTTPException(status_code=404, detail="Media asset not found") from exc
+                raise domain_api_error(
+                    exc, details={"asset_id": asset_id}
+                ) from exc
             except RegisteredAssetFileMissing as exc:
-                raise HTTPException(status_code=409, detail="Media asset file is missing") from exc
+                raise domain_api_error(
+                    exc, details={"asset_id": asset_id}
+                ) from exc
             except UnsafeRegisteredAssetPath as exc:
-                raise HTTPException(status_code=409, detail="Media asset path is invalid") from exc
+                raise domain_api_error(
+                    exc, details={"asset_id": asset_id}
+                ) from exc
             except RevealFailed as exc:
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
+                raise domain_api_error(
+                    exc, details={"asset_id": asset_id}
+                ) from exc
             return RevealResultRead(asset_id=asset_id)
 
     @router.patch(
@@ -209,9 +258,19 @@ def build_catalog_router(
                     tag_ids=payload.tag_ids,
                 )
             except MediaAssetNotFound as exc:
-                raise HTTPException(status_code=404, detail="Media asset not found") from exc
+                raise domain_api_error(
+                    exc, details={"asset_id": asset_id}
+                ) from exc
             except CatalogTaxonomyNotFound as exc:
-                raise HTTPException(status_code=404, detail="Taxonomy entry not found") from exc
+                raise domain_api_error(exc) from exc
+            if event_bus is not None:
+                event_bus.publish_threadsafe(
+                    MediaEvent(
+                        type="library.updated",
+                        entity_id=asset.id,
+                        status="metadata_updated",
+                    )
+                )
             return MediaAssetRead.from_model(asset)
 
     return router

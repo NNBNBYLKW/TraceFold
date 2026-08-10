@@ -16,6 +16,8 @@ from media_api.processing.planner import (
     ProcessingPlanError,
 )
 from media_api.processing.registry import ProcessorRegistry
+from media_api.api.events import EventBus, MediaEvent
+from media_api.api.errors import domain_api_error
 
 
 class ProcessingJobRead(BaseModel):
@@ -43,6 +45,7 @@ class ProcessingJobRead(BaseModel):
 def build_processing_router(
     session_factory: sessionmaker[Session],
     registry: ProcessorRegistry,
+    event_bus: EventBus | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/inbox/items", tags=["processing"])
 
@@ -58,11 +61,23 @@ def build_processing_router(
                     registry=registry,
                 ).create_job(item_id, idempotency_key)
             except ProcessingItemNotFound as exc:
-                raise HTTPException(status_code=404, detail="Inbox item not found") from exc
+                raise domain_api_error(
+                    exc, details={"item_id": item_id}
+                ) from exc
             except ProcessingIdempotencyKeyReused as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+                raise domain_api_error(exc) from exc
             except (NoApplicableProcessor, ProcessingPlanError, ProcessingCommandError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+                raise domain_api_error(
+                    exc, details={"item_id": item_id}
+                ) from exc
+            if event_bus is not None:
+                event_bus.publish_threadsafe(
+                    MediaEvent(
+                        type="processing.updated",
+                        entity_id=job.id,
+                        status=job.status.value,
+                    )
+                )
             return ProcessingJobRead.from_model(job)
 
     return router

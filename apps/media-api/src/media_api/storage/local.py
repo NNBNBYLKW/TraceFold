@@ -62,6 +62,23 @@ class LocalStorage:
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
+    def reconfigure(self, settings: BootstrapSettings) -> None:
+        candidate = LocalStorage(settings)
+        candidate.provision_directories(
+            RuntimePaths(
+                inbox_dir=candidate.inbox_dir,
+                library_dir=candidate.library_dir,
+                work_dir=candidate.work_dir,
+            )
+        )
+        self.inbox_dir = candidate.inbox_dir
+        self.library_dir = candidate.library_dir
+        self.work_dir = candidate.work_dir
+        self.staging_dir = candidate.staging_dir
+        self.jobs_dir = candidate.jobs_dir
+        self.backups_dir = candidate.backups_dir
+        self.previews_dir = candidate.previews_dir
+
     def copy_to_stage(
         self,
         operation_id: str,

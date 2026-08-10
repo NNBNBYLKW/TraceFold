@@ -41,7 +41,39 @@ class IngestRecoveryService:
 
     def recover_all(self) -> list[RecoveryResult]:
         operation_ids = [operation.id for operation in self.operations.recoverable()]
-        return [self.recover(operation_id) for operation_id in operation_ids]
+        results: list[RecoveryResult] = []
+        for operation_id in operation_ids:
+            try:
+                results.append(self.recover(operation_id))
+            except RecoveryRequiresAttention as exc:
+                self.session.rollback()
+                operation = self.operations.require(operation_id)
+                operation.state = IngestOperationState.FAILED
+                operation.diagnostic_message = str(exc)
+                item = self.items.get(operation.inbox_item_id)
+                if item is not None:
+                    previous = item.status
+                    item.failed_from_status = previous
+                    item.status = InboxStatus.FAILED
+                    item.error_code = "RECOVERY_REQUIRES_ATTENTION"
+                    item.error_message = "启动恢复需要人工处理"
+                    self.session.add(
+                        InboxStatusEvent(
+                            inbox_item_id=item.id,
+                            from_status=previous,
+                            to_status=InboxStatus.FAILED,
+                            reason="startup recovery requires attention",
+                        )
+                    )
+                self.session.commit()
+                results.append(
+                    RecoveryResult(
+                        operation_id=operation.id,
+                        state=operation.state.value,
+                        warning_code="RECOVERY_REQUIRES_ATTENTION",
+                    )
+                )
+        return results
 
     def recover(self, operation_id: str) -> RecoveryResult:
         operation = self.operations.require(operation_id)

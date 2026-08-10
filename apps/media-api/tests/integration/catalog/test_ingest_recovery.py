@@ -198,3 +198,43 @@ def test_missing_source_before_database_commit_requires_attention(
 
     assert session.scalar(select(MediaAsset)) is None
     assert (storage.library_dir / operation.requested_actual_filename).exists()
+
+
+def test_recover_all_isolates_operation_that_requires_attention(
+    session: Session,
+    storage: LocalStorage,
+) -> None:
+    def prepared(filename: str, key: str) -> tuple[IngestOperation, InboxItem, Path]:
+        source = storage.inbox_dir / filename
+        source.write_bytes(filename.encode())
+        item = InboxItem(
+            media_type="video",
+            status=InboxStatus.READY_TO_TAG,
+            suggested_actual_filename=filename,
+        )
+        item.sources.append(
+            SourceFile.from_snapshot(storage.snapshot(source), is_primary=True)
+        )
+        session.add(item)
+        session.commit()
+        operation = IngestService(session=session, storage=storage).prepare(item.id, key)
+        return operation, item, source
+
+    bad, bad_item, bad_source = prepared("bad.mp4", "bad-recovery")
+    unexpected = storage.library_dir / bad.requested_actual_filename
+    unexpected.write_bytes(b"unrelated")
+    good, _, good_source = prepared("good.mp4", "good-recovery")
+
+    results = IngestRecoveryService(session=session, storage=storage).recover_all()
+    session.refresh(bad)
+    session.refresh(bad_item)
+    session.refresh(good)
+
+    assert [result.operation_id for result in results] == [bad.id, good.id]
+    assert bad.state is IngestOperationState.FAILED
+    assert bad_item.status is InboxStatus.FAILED
+    assert bad_item.error_code == "RECOVERY_REQUIRES_ATTENTION"
+    assert bad_source.exists()
+    assert unexpected.read_bytes() == b"unrelated"
+    assert good.state is IngestOperationState.COMPLETED
+    assert not good_source.exists()

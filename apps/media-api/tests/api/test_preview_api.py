@@ -102,8 +102,8 @@ def test_preview_failure_returns_typed_placeholder_without_changing_item(
     response = client.get(f"/api/inbox/items/{item_id}/preview")
 
     assert response.status_code == 422
-    assert response.json()["detail"]["kind"] == "placeholder"
-    assert response.json()["detail"]["code"] == "PREVIEW_GENERATION_FAILED"
+    assert response.json()["error"]["details"]["kind"] == "placeholder"
+    assert response.json()["error"]["code"] == "PREVIEW_GENERATION_FAILED"
     with client.app.state.session_factory() as session:
         assert session.get(InboxItem, item_id).status is InboxStatus.READY_TO_TAG
 

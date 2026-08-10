@@ -40,6 +40,12 @@ class PersistentWorker:
         self.jobs_dir = work_dir.resolve() / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
 
+    def reconfigure_work_dir(self, work_dir: Path) -> None:
+        jobs_dir = work_dir.resolve() / "jobs"
+        if not jobs_dir.is_dir():
+            raise RuntimeError("processing jobs directory is not provisioned")
+        self.jobs_dir = jobs_dir
+
     def run_once(self) -> WorkerResult | None:
         job_id = self._claim_one()
         if job_id is None:
