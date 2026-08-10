@@ -151,6 +151,9 @@ def test_worker_marks_only_failed_item_and_continues(
         assert success_item is not None
         assert failure_item is not None
         assert success_job.status is ProcessingJobStatus.COMPLETED
+        assert success_job.output_size == len(b"processed")
+        assert success_job.output_modified_ns is not None
+        assert success_job.output_sha256 is not None
         assert success_item.status is InboxStatus.READY_TO_TAG
         assert failure_job.status is ProcessingJobStatus.FAILED
         assert failure_job.retryable is True

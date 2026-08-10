@@ -1,3 +1,4 @@
+import shutil
 from collections.abc import Generator
 from pathlib import Path
 
@@ -71,3 +72,16 @@ def inbox_file(storage: LocalStorage) -> Path:
     source = storage.inbox_dir / "clip.mp4"
     source.write_bytes(b"media-bytes")
     return source
+
+
+@pytest.fixture
+def copy_media_fixture():
+    fixture_dir = Path(__file__).parent / "fixtures" / "media"
+
+    def copy_fixture(name: str, destination: Path) -> Path:
+        destination.mkdir(parents=True, exist_ok=True)
+        target = (destination / name).resolve()
+        shutil.copy2(fixture_dir / name, target)
+        return target
+
+    return copy_fixture

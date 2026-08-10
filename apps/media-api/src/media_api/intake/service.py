@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from media_api.catalog.models import IngestOperation, IngestOperationState
 from media_api.infrastructure.db import utc_now
 from media_api.intake.models import (
     InboxItem,
@@ -16,6 +18,11 @@ from media_api.intake.models import (
 from media_api.intake.repository import InboxRepository
 from media_api.intake.scanner import InboxScanner
 from media_api.intake.state import InboxStatus
+from media_api.processing.planner import ProcessingCommandService
+from media_api.processing.contracts import Processor
+from media_api.processing.registry import ProcessorRegistry
+from media_api.settings.models import ProcessorSetting
+from media_api.storage.contracts import FileSnapshot
 from media_api.storage.local import LocalStorage
 from media_api.taxonomy.models import Author, Series, Tag
 
@@ -140,13 +147,21 @@ class InboxMetadataService(InboxService):
 
 
 class ScanService(InboxService):
-    def __init__(self, *, session: Session, storage: LocalStorage) -> None:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        storage: LocalStorage,
+        registry: ProcessorRegistry | None = None,
+    ) -> None:
         super().__init__(session)
         self.scanner = InboxScanner(session=session, storage=storage)
+        self.registry = registry or ProcessorRegistry()
 
     def scan(self, now: datetime | None = None) -> ScanResult:
         stable_candidates = self.scanner.observe(now=now)
-        created_items = 0
+        created_items = self._create_detected_items()
+        self._upgrade_ready_items()
 
         for stable in stable_candidates:
             canonical_path = str(stable.snapshot.path)
@@ -204,6 +219,164 @@ class ScanService(InboxService):
             observed_candidates=self.scanner.last_observed_count,
             stable_candidates=len(stable_candidates),
             created_items=created_items,
+        )
+
+    def _create_detected_items(self) -> int:
+        candidates = self._stable_unclaimed_candidates()
+        detections = self.registry.claim_detections(
+            (self._candidate_snapshot(candidate) for candidate in candidates),
+            include=self._processor_enabled,
+        )
+        by_path = {
+            self._path_key(Path(candidate.canonical_path)): candidate
+            for candidate in candidates
+        }
+        created = 0
+        for detection in detections:
+            source_candidates = [
+                by_path[self._path_key(snapshot.path)]
+                for snapshot in detection.inputs
+            ]
+            item = InboxItem(
+                media_type=detection.output_media_type,
+                status=InboxStatus.DISCOVERED,
+                suggested_actual_filename=detection.expected_output_name,
+            )
+            item.sources.append(
+                SourceFile.from_snapshot(detection.primary, is_primary=True)
+            )
+            item.sources.extend(
+                SourceFile.from_snapshot(snapshot, is_primary=False)
+                for snapshot in detection.companions
+            )
+            self.session.add(item)
+            self.session.flush()
+            self.session.add(
+                InboxStatusEvent(
+                    inbox_item_id=item.id,
+                    from_status=None,
+                    to_status=InboxStatus.DISCOVERED,
+                    reason=f"{detection.processor_name} claimed stable source files",
+                )
+            )
+            for candidate in source_candidates:
+                candidate.is_claimed = True
+            processor = self.registry.require(detection.processor_name)
+            if self._processor_auto_enabled(processor):
+                ProcessingCommandService(
+                    session=self.session,
+                    registry=self.registry,
+                ).create_job(
+                    item.id,
+                    f"auto-process:{item.id}:1",
+                    automatic=True,
+                )
+            else:
+                self.session.commit()
+            created += 1
+        return created
+
+    def _upgrade_ready_items(self) -> None:
+        candidates = self._stable_unclaimed_candidates()
+        if not candidates:
+            return
+        by_path = {
+            self._path_key(Path(candidate.canonical_path)): candidate
+            for candidate in candidates
+        }
+        for item in self.items.list_items():
+            if item.status is not InboxStatus.READY_TO_TAG:
+                continue
+            active_operation = self.session.scalar(
+                select(IngestOperation.id).where(
+                    IngestOperation.inbox_item_id == item.id,
+                    IngestOperation.state.not_in(
+                        (
+                            IngestOperationState.COMPLETED,
+                            IngestOperationState.FAILED,
+                        )
+                    ),
+                )
+            )
+            if active_operation is not None:
+                continue
+            available = [candidate for candidate in candidates if not candidate.is_claimed]
+            if not available:
+                return
+            existing_snapshots = tuple(
+                FileSnapshot(
+                    path=Path(source.canonical_path),
+                    size=source.size,
+                    modified_ns=source.modified_ns,
+                )
+                for source in item.sources
+            )
+            detection = self.registry.find_upgrade(
+                existing_snapshots,
+                (self._candidate_snapshot(candidate) for candidate in available),
+                include=self._processor_auto_enabled,
+            )
+            if detection is None:
+                continue
+            existing_keys = {
+                self._path_key(Path(source.canonical_path)) for source in item.sources
+            }
+            additions = [
+                snapshot
+                for snapshot in detection.inputs
+                if self._path_key(snapshot.path) not in existing_keys
+            ]
+            if not additions:
+                continue
+            for snapshot in additions:
+                item.sources.append(
+                    SourceFile.from_snapshot(snapshot, is_primary=False)
+                )
+                by_path[self._path_key(snapshot.path)].is_claimed = True
+            self.session.flush()
+            ProcessingCommandService(
+                session=self.session,
+                registry=self.registry,
+            ).create_job(
+                item.id,
+                f"auto-process:{item.id}:{item.processing_plan_version + 1}",
+                automatic=True,
+            )
+
+    def _stable_unclaimed_candidates(self) -> list[ScanCandidate]:
+        return list(
+            self.session.scalars(
+                select(ScanCandidate)
+                .where(
+                    ScanCandidate.is_stable.is_(True),
+                    ScanCandidate.is_claimed.is_(False),
+                )
+                .order_by(ScanCandidate.canonical_path)
+            )
+        )
+
+    @staticmethod
+    def _candidate_snapshot(candidate: ScanCandidate) -> FileSnapshot:
+        return FileSnapshot(
+            path=Path(candidate.canonical_path),
+            size=candidate.size,
+            modified_ns=candidate.modified_ns,
+        )
+
+    @staticmethod
+    def _path_key(path: Path) -> str:
+        return str(path.resolve()).casefold()
+
+    def _processor_enabled(self, processor: Processor) -> bool:
+        setting = self.session.get(ProcessorSetting, processor.descriptor.name)
+        return setting is None or setting.enabled
+
+    def _processor_auto_enabled(self, processor: Processor) -> bool:
+        setting = self.session.get(ProcessorSetting, processor.descriptor.name)
+        return (
+            (setting is None or setting.enabled)
+            and processor.descriptor.auto_run_default
+            and (setting is None or setting.auto_run_default)
         )
 
 

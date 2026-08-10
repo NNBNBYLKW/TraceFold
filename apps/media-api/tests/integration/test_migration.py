@@ -68,6 +68,15 @@ def test_initial_migration_creates_only_media_tables(migrated_engine: Engine) ->
         }
         assert constraint_name in names
 
+    processing_job_columns = {
+        column["name"] for column in inspector.get_columns("processing_jobs")
+    }
+    assert {
+        "output_size",
+        "output_modified_ns",
+        "output_sha256",
+    }.issubset(processing_job_columns)
+
     with migrated_engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260809_0001"
+    assert revision == "20260810_0002"

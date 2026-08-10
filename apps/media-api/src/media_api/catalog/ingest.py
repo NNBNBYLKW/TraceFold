@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from media_api.catalog.models import (
@@ -20,6 +21,7 @@ from media_api.infrastructure.db import utc_now
 from media_api.intake.models import InboxItem, InboxStatusEvent, SourceFile
 from media_api.intake.repository import InboxRepository
 from media_api.intake.state import InboxStatus
+from media_api.processing.models import ProcessingJob, ProcessingJobStatus
 from media_api.storage.contracts import FileSnapshot, StoragePort
 
 
@@ -76,7 +78,6 @@ class IngestService:
         if item is None or item.status is not InboxStatus.READY_TO_TAG:
             raise InboxNotReady(item_id)
 
-        primary = _primary_source(item)
         for source in item.sources:
             path = Path(source.canonical_path)
             current = self.storage.snapshot(path)
@@ -88,10 +89,18 @@ class IngestService:
             if current != discovery:
                 raise SourceChanged(item_id)
             source.content_sha256 = self.storage.sha256(path)
+        processing_job = self._completed_processing_job(item_id)
+        if processing_job is None:
+            final_input = Path(_primary_source(item).canonical_path)
+            final_input_hash = self.storage.sha256(final_input)
+        else:
+            final_input, final_input_hash = self._validated_processing_output(
+                processing_job
+            )
 
         conflict_kinds = self._detect_conflicts(
             item.suggested_actual_filename,
-            primary.content_sha256,
+            final_input_hash,
         )
         if conflict_kinds:
             operation = IngestOperation(
@@ -99,7 +108,7 @@ class IngestService:
                 idempotency_key=idempotency_key,
                 state=IngestOperationState.PREPARED,
                 requested_actual_filename=item.suggested_actual_filename,
-                source_hash=primary.content_sha256,
+                source_hash=final_input_hash,
                 conflict_kinds_json=conflict_kinds,
             )
             item.status = InboxStatus.CONFLICT
@@ -121,7 +130,7 @@ class IngestService:
             idempotency_key=idempotency_key,
             state=IngestOperationState.PREPARED,
             requested_actual_filename=item.suggested_actual_filename,
-            source_hash=primary.content_sha256,
+            source_hash=final_input_hash,
         )
         self.session.add(operation)
         self.session.commit()
@@ -130,9 +139,11 @@ class IngestService:
         try:
             staged = self.storage.copy_to_stage(
                 operation.id,
-                Path(primary.canonical_path),
+                final_input,
                 item.suggested_actual_filename,
             )
+            if self.storage.sha256(staged) != final_input_hash:
+                raise SourceChanged("final input changed before staging completed")
         except Exception as exc:
             operation.state = IngestOperationState.FAILED
             operation.diagnostic_message = str(exc)
@@ -259,10 +270,58 @@ class IngestService:
             raise IngestError("cleanup is allowed only after database commit")
         return self._cleanup(operation)
 
+    def final_input_path(self, item_id: str) -> Path:
+        item = self.items.get(item_id)
+        if item is None:
+            raise FinalInputNotFound(item_id)
+        job = self._completed_processing_job(item_id)
+        if job is not None and job.output_path is not None:
+            return Path(job.output_path)
+        return Path(_primary_source(item).canonical_path)
+
+    def _completed_processing_job(self, item_id: str) -> ProcessingJob | None:
+        return self.session.scalar(
+            select(ProcessingJob)
+            .where(
+                ProcessingJob.inbox_item_id == item_id,
+                ProcessingJob.status == ProcessingJobStatus.COMPLETED,
+                ProcessingJob.output_path.is_not(None),
+            )
+            .order_by(
+                ProcessingJob.finished_at.desc(),
+                ProcessingJob.created_at.desc(),
+                ProcessingJob.id,
+            )
+            .limit(1)
+        )
+
+    def _validated_processing_output(
+        self,
+        job: ProcessingJob,
+    ) -> tuple[Path, str]:
+        if (
+            job.output_path is None
+            or job.output_size is None
+            or job.output_modified_ns is None
+            or job.output_sha256 is None
+        ):
+            raise SourceChanged("processing output has no persisted fingerprint")
+        path = Path(job.output_path)
+        current = self.storage.snapshot(path)
+        if (
+            current.size != job.output_size
+            or current.modified_ns != job.output_modified_ns
+            or self.storage.sha256(path) != job.output_sha256
+        ):
+            raise SourceChanged("processing output changed after validation")
+        return path, job.output_sha256
+
     def _cleanup(self, operation: IngestOperation) -> IngestResult:
         item = self.items.get(operation.inbox_item_id)
         if item is None or operation.asset_id is None:
             raise IngestError("committed ingest operation is incomplete")
+        if operation.source_hash is None:
+            raise IngestError("committed ingest operation has no final input hash")
 
         try:
             for source in item.sources:
@@ -273,6 +332,12 @@ class IngestService:
                     source.content_sha256,
                 )
                 source.is_present = False
+            source_paths = {
+                Path(source.canonical_path).resolve() for source in item.sources
+            }
+            final_input = self.final_input_path(item.id).resolve()
+            if final_input not in source_paths:
+                self.storage.delete_verified(final_input, operation.source_hash)
             if operation.staged_path is not None and operation.source_hash is not None:
                 self.storage.delete_verified(
                     Path(operation.staged_path),

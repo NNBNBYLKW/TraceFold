@@ -18,19 +18,25 @@ from media_api.intake.service import (
     ScanService,
     TaxonomySelectionNotFound,
 )
+from media_api.processing.registry import ProcessorRegistry
 from media_api.storage.local import LocalStorage
 
 
 def build_inbox_router(
     session_factory: sessionmaker[Session],
     storage: LocalStorage,
+    registry: ProcessorRegistry | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/inbox", tags=["inbox"])
 
     @router.post("/scan", response_model=ScanResultRead)
     def scan() -> ScanResultRead:
         with session_factory() as session:
-            result = ScanService(session=session, storage=storage).scan()
+            result = ScanService(
+                session=session,
+                storage=storage,
+                registry=registry,
+            ).scan()
             return ScanResultRead.from_result(result)
 
     @router.get("/items", response_model=list[InboxItemRead])

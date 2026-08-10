@@ -7,6 +7,7 @@ from media_api.infrastructure.config import BootstrapSettings
 from media_api.infrastructure.db import create_engine_and_session
 from media_api.intake.router import build_inbox_router
 from media_api.processing.registry import ProcessorRegistry
+from media_api.processing.processors.mp4_m4a import Mp4M4aMergeProcessor
 from media_api.processing.router import build_processing_router
 from media_api.processing.worker import PersistentWorker
 from media_api.storage.contracts import RuntimePaths
@@ -27,7 +28,7 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
             work_dir=resolved.work_dir,
         )
     )
-    app.state.processor_registry = ProcessorRegistry()
+    app.state.processor_registry = ProcessorRegistry([Mp4M4aMergeProcessor()])
     app.state.processing_worker = PersistentWorker(
         session_factory=app.state.session_factory,
         registry=app.state.processor_registry,
@@ -43,6 +44,7 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
         build_inbox_router(
             app.state.session_factory,
             app.state.storage,
+            app.state.processor_registry,
         )
     )
     app.include_router(build_taxonomy_router(app.state.session_factory))

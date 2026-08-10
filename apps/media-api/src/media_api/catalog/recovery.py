@@ -123,6 +123,14 @@ class IngestRecoveryService:
                     f"source file is missing before database commit: {path}"
                 )
             self._require_hash(path, source.content_sha256, label="source file")
+        final_input = self.ingest.final_input_path(item.id)
+        source_paths = {Path(source.canonical_path).resolve() for source in item.sources}
+        if final_input.resolve() not in source_paths:
+            self._require_hash(
+                final_input,
+                operation.source_hash,
+                label="processing output",
+            )
 
     def _require_hash(
         self,

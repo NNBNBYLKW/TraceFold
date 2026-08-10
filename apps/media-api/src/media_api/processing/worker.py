@@ -17,6 +17,7 @@ from media_api.processing.contracts import (
 )
 from media_api.processing.models import ProcessingJob, ProcessingJobStatus
 from media_api.processing.registry import ProcessorNotRegistered, ProcessorRegistry
+from media_api.storage.hashing import sha256
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,9 @@ class PersistentWorker:
                 raise LookupError(f"processing job not found: {job_id}")
             try:
                 output = self._execute_steps(session, persisted)
+                output_size, output_modified_ns, output_sha256 = self._fingerprint_output(
+                    output.path
+                )
             except ProcessorExecutionError as exc:
                 self._fail_job(session, persisted, exc)
                 return WorkerResult(
@@ -76,6 +80,9 @@ class PersistentWorker:
 
             persisted.status = ProcessingJobStatus.COMPLETED
             persisted.output_path = str(output.path)
+            persisted.output_size = output_size
+            persisted.output_modified_ns = output_modified_ns
+            persisted.output_sha256 = output_sha256
             persisted.finished_at = utc_now()
             persisted.error_code = None
             persisted.user_message = None
@@ -114,6 +121,9 @@ class PersistentWorker:
             for job in jobs:
                 self._delete_owned_job_dir(job.id)
                 job.output_path = None
+                job.output_size = None
+                job.output_modified_ns = None
+                job.output_sha256 = None
                 job.current_step = 0
                 job.started_at = None
                 job.finished_at = None
@@ -260,6 +270,23 @@ class PersistentWorker:
                 retryable=False,
             )
         return job_dir
+
+    @staticmethod
+    def _fingerprint_output(path: Path) -> tuple[int, int, str]:
+        before = path.stat()
+        digest = sha256(path)
+        after = path.stat()
+        if (
+            before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+        ):
+            raise ProcessorExecutionError(
+                error_code="PROCESSOR_OUTPUT_CHANGED_DURING_VALIDATION",
+                user_message="Processor output changed during validation",
+                diagnostic_message=str(path),
+                retryable=True,
+            )
+        return after.st_size, after.st_mtime_ns, digest
 
     def _delete_owned_job_dir(self, job_id: str) -> None:
         job_dir = self._owned_job_dir(job_id)

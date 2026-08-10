@@ -22,6 +22,7 @@ class Detection:
     primary: FileSnapshot
     companions: tuple[FileSnapshot, ...]
     expected_output_name: str
+    output_media_type: Literal["image", "video"] = "video"
 
     @property
     def inputs(self) -> tuple[FileSnapshot, ...]:
