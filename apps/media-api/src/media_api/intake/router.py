@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_api.intake.schemas import (
@@ -20,6 +23,9 @@ from media_api.intake.service import (
 )
 from media_api.processing.registry import ProcessorRegistry
 from media_api.storage.local import LocalStorage
+from media_api.storage.local import ensure_within
+from media_api.storage.contracts import UnsafePathError
+from media_api.storage.preview import PreviewGenerationFailed, PreviewService
 
 
 def build_inbox_router(
@@ -99,5 +105,39 @@ def build_inbox_router(
             if item is None:
                 raise HTTPException(status_code=404, detail="Inbox item not found")
             return InboxItemRead.from_model(item)
+
+    @router.get("/items/{item_id}/preview", response_class=FileResponse)
+    def preview_item(item_id: str) -> FileResponse:
+        with session_factory() as session:
+            item = InboxService(session).get_item(item_id)
+            if item is None:
+                raise HTTPException(status_code=404, detail="Inbox item not found")
+            primary = next(
+                (source for source in item.sources if source.is_primary),
+                item.sources[0] if item.sources else None,
+            )
+            if primary is None:
+                raise HTTPException(status_code=404, detail="Inbox media not found")
+            try:
+                media_path = ensure_within(Path(primary.canonical_path), storage.inbox_dir)
+            except UnsafePathError as exc:
+                raise HTTPException(status_code=404, detail="Inbox media not found") from exc
+            if not media_path.is_file():
+                raise HTTPException(
+                    status_code=422,
+                    detail={"kind": "placeholder", "code": "MEDIA_NOT_FOUND"},
+                )
+            try:
+                digest = storage.sha256(media_path)
+                preview = PreviewService(
+                    work_dir=storage.work_dir,
+                    registered_paths={media_path},
+                ).get_or_create(media_path, item.media_type, digest)
+            except PreviewGenerationFailed as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"kind": "placeholder", "code": exc.code},
+                ) from exc
+            return FileResponse(preview, media_type="image/jpeg")
 
     return router

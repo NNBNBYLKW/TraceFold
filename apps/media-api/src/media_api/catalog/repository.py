@@ -4,6 +4,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from media_api.catalog.models import IngestOperation, MediaAsset
+from media_api.taxonomy.models import Author, Tag
 
 
 class IngestOperationRepository:
@@ -82,7 +83,15 @@ class MediaAssetRepository:
             select(MediaAsset).where(MediaAsset.sha256 == digest)
         )
 
-    def list(self, *, search: str | None = None) -> list[MediaAsset]:
+    def list(
+        self,
+        *,
+        search: str | None = None,
+        author_id: str | None = None,
+        series_id: str | None = None,
+        tag_id: str | None = None,
+        media_type: str | None = None,
+    ) -> list[MediaAsset]:
         statement = (
             select(MediaAsset)
             .options(
@@ -102,6 +111,14 @@ class MediaAssetRepository:
                     MediaAsset.actual_filename.ilike(pattern),
                 )
             )
-        return list(
-            self.session.scalars(statement).unique()
-        )
+        if author_id is not None:
+            statement = statement.where(
+                MediaAsset.authors.any(Author.id == author_id)
+            )
+        if series_id is not None:
+            statement = statement.where(MediaAsset.series_id == series_id)
+        if tag_id is not None:
+            statement = statement.where(MediaAsset.tags.any(Tag.id == tag_id))
+        if media_type is not None:
+            statement = statement.where(MediaAsset.media_type == media_type)
+        return list(self.session.scalars(statement).unique())

@@ -65,6 +65,11 @@ class MediaAssetMetadataPatch(BaseModel):
     tag_ids: list[str]
 
 
+class RevealResultRead(BaseModel):
+    asset_id: str
+    revealed: bool = True
+
+
 class ConflictResolutionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
