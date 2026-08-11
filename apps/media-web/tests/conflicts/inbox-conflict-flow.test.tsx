@@ -17,6 +17,7 @@ const conflict: ConflictRead = {
     id: "asset-1",
     media_type: "video",
     actual_filename: readyItem.actual_filename,
+    relative_path: readyItem.actual_filename,
     display_name: "正式库旧文件",
     author_ids: [],
     series_id: null,

@@ -1,5 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 
+import { useMediaEvents } from "../shared/events/useMediaEvents";
+
 
 const destinations = [
   { to: "/inbox", label: "待入库", marker: "01" },
@@ -8,6 +10,12 @@ const destinations = [
 ] as const;
 
 export function App() {
+  const eventConnection = useMediaEvents();
+  const eventStatus = {
+    connecting: "正在连接实时更新",
+    connected: "实时更新已连接",
+    disconnected: "实时更新已断开，可继续手动刷新",
+  }[eventConnection];
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -30,9 +38,9 @@ export function App() {
             </NavLink>
           ))}
         </nav>
-        <div className="scan-indicator" aria-label="自动扫描状态">
-          <span className="status-lamp" aria-hidden="true" />
-          <span>自动扫描状态将在连接后显示</span>
+        <div className="scan-indicator" aria-label="实时更新状态">
+          <span className={`status-lamp is-${eventConnection}`} aria-hidden="true" />
+          <span>{eventStatus}</span>
         </div>
       </header>
       <main className="app-content">

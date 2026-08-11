@@ -64,6 +64,7 @@ def test_library_lists_details_and_searches_display_or_actual_name(
     assert missing_search.json() == []
     assert detail.status_code == 200
     assert detail.json()["actual_filename"] == asset.actual_filename
+    assert detail.json()["relative_path"] == asset.actual_filename
 
 
 def test_metadata_patch_cannot_rename_physical_file(

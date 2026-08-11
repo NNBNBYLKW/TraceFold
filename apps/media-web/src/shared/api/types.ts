@@ -73,6 +73,7 @@ export interface MediaAssetRead {
   id: string;
   media_type: MediaType;
   actual_filename: string;
+  relative_path: string;
   display_name: string | null;
   author_ids: string[];
   series_id: string | null;
@@ -100,6 +101,49 @@ export interface ConflictResolutionRead {
   kind: string;
   asset_id: string | null;
   cleanup_warning: string | null;
+}
+
+export interface ProcessorSettingRead {
+  processor_name: string;
+  enabled: boolean;
+  auto_run: boolean;
+}
+
+export interface RuntimeSettingsRead {
+  inbox_dir: string;
+  library_dir: string;
+  work_dir: string;
+  database_path: string;
+  scan_interval_seconds: number;
+  automatic_scan_enabled: boolean;
+  processors: ProcessorSettingRead[];
+}
+
+export interface RuntimeSettingsPatch {
+  inbox_dir?: string;
+  library_dir?: string;
+  work_dir?: string;
+  scan_interval_seconds?: number;
+  automatic_scan_enabled?: boolean;
+  processors?: ProcessorSettingRead[];
+}
+
+export interface SystemStatusRead {
+  directories_writable: boolean;
+  ffmpeg_available: boolean;
+  ffprobe_available: boolean;
+  last_scan_at: string | null;
+  queued_jobs: number;
+  recoverable_operations: number;
+  recovery_in_progress: boolean;
+  ingest_enabled: boolean;
+}
+
+export interface MediaEventRead {
+  type: string;
+  entity_id: string;
+  status: string | null;
+  timestamp: string;
 }
 
 export interface ProcessingJobRead {

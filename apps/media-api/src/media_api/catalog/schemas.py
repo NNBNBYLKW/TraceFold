@@ -34,6 +34,7 @@ class MediaAssetRead(BaseModel):
     id: str
     media_type: str
     actual_filename: str
+    relative_path: str
     display_name: str | None
     author_ids: list[str]
     series_id: str | None
@@ -47,6 +48,7 @@ class MediaAssetRead(BaseModel):
             id=asset.id,
             media_type=asset.media_type,
             actual_filename=asset.actual_filename,
+            relative_path=asset.final_relative_path,
             display_name=asset.display_name,
             author_ids=[author.id for author in asset.authors],
             series_id=asset.series_id,

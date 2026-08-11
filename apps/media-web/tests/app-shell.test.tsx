@@ -1,15 +1,11 @@
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { screen } from "@testing-library/react";
 
 import { App } from "../src/app/App";
+import { renderWithAppProviders } from "./inbox/test-utils";
 
 
 test("shows only the three product destinations", () => {
-  render(
-    <MemoryRouter initialEntries={["/inbox"]}>
-      <App />
-    </MemoryRouter>,
-  );
+  renderWithAppProviders(<App />);
 
   expect(screen.getByRole("link", { name: /待入库/ })).toBeVisible();
   expect(screen.getByRole("link", { name: /文件库/ })).toBeVisible();

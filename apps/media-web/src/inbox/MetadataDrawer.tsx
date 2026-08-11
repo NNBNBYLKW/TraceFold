@@ -11,6 +11,7 @@ import type {
 } from "../shared/api/types";
 import { MediaPreview } from "../shared/components/MediaPreview";
 import { TaxonomyPicker } from "../shared/components/TaxonomyPicker";
+import { useSystemStatus } from "../settings/queries";
 import { inboxKeys } from "./queries";
 import { formatInboxStatus } from "./status";
 
@@ -31,6 +32,7 @@ export function MetadataDrawer({
   onCompleted,
 }: MetadataDrawerProps) {
   const queryClient = useQueryClient();
+  const systemStatus = useSystemStatus();
   const [displayName, setDisplayName] = useState(item.display_name ?? "");
   const [authorIds, setAuthorIds] = useState(item.author_ids);
   const [seriesIds, setSeriesIds] = useState(item.series_id ? [item.series_id] : []);
@@ -79,6 +81,7 @@ export function MetadataDrawer({
     },
   });
   const commandError = save.error ?? process.error ?? ingest.error;
+  const ingestEnabled = systemStatus.data?.ingest_enabled !== false;
 
   return (
     <aside className="metadata-drawer" aria-label="文件资料">
@@ -165,6 +168,9 @@ export function MetadataDrawer({
           {commandError instanceof ApiError ? commandError.message : "操作未能完成。"}
         </p>
       )}
+      {!ingestEnabled && item.allowed_actions.includes("ingest") && (
+        <p className="recovery-note" role="status">系统正在恢复，暂时不能正式入库。</p>
+      )}
       <footer className="drawer-actions">
         {(item.allowed_actions.includes("process") || item.allowed_actions.includes("retry")) && (
           <button
@@ -181,7 +187,7 @@ export function MetadataDrawer({
             ref={ingestButtonRef}
             type="button"
             className="primary-button"
-            disabled={ingest.isPending}
+            disabled={ingest.isPending || !ingestEnabled}
             onClick={() => ingest.mutate({ idempotencyKey: crypto.randomUUID() })}
           >
             {ingest.isPending ? "正在入库…" : "正式入库"}

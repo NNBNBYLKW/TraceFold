@@ -34,6 +34,7 @@ const conflict: ConflictRead = {
     id: "asset-1",
     media_type: "video",
     actual_filename: "文件库原片.mp4",
+    relative_path: "文件库原片.mp4",
     display_name: "杭州旧片",
     author_ids: ["author-2"],
     series_id: "series-1",
