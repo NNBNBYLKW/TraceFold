@@ -38,6 +38,12 @@ export function MetadataDrawer({
   const [seriesIds, setSeriesIds] = useState(item.series_id ? [item.series_id] : []);
   const [tagIds, setTagIds] = useState(item.tag_ids);
   const canEdit = item.allowed_actions.includes("edit_metadata");
+  const metadata: MetadataPatch = {
+    display_name: displayName.trim() || null,
+    author_ids: authorIds,
+    series_id: seriesIds[0] ?? null,
+    tag_ids: tagIds,
+  };
 
   useEffect(() => {
     setDisplayName(item.display_name ?? "");
@@ -65,12 +71,17 @@ export function MetadataDrawer({
     },
   });
   const ingest = useMutation({
-    mutationFn: (command: { idempotencyKey: string }) =>
-      apiClient.post<IngestResultRead>(
+    mutationFn: async (command: { idempotencyKey: string; metadata: MetadataPatch }) => {
+      await apiClient.patch<InboxItemRead>(
+        `/inbox/items/${item.id}/metadata`,
+        command.metadata,
+      );
+      return apiClient.post<IngestResultRead>(
         `/inbox/items/${item.id}/ingest`,
         undefined,
-        command,
-      ),
+        { idempotencyKey: command.idempotencyKey },
+      );
+    },
     onSuccess: async (result) => {
       if (result.kind === "conflict" && result.conflict_id) {
         onConflict?.(result.conflict_id);
@@ -113,12 +124,7 @@ export function MetadataDrawer({
         className="metadata-form"
         onSubmit={(event) => {
           event.preventDefault();
-          save.mutate({
-            display_name: displayName.trim() || null,
-            author_ids: authorIds,
-            series_id: seriesIds[0] ?? null,
-            tag_ids: tagIds,
-          });
+          save.mutate(metadata);
         }}
       >
         <label>
@@ -188,7 +194,10 @@ export function MetadataDrawer({
             type="button"
             className="primary-button"
             disabled={ingest.isPending || !ingestEnabled}
-            onClick={() => ingest.mutate({ idempotencyKey: crypto.randomUUID() })}
+            onClick={() => ingest.mutate({
+              idempotencyKey: crypto.randomUUID(),
+              metadata,
+            })}
           >
             {ingest.isPending ? "正在入库…" : "正式入库"}
           </button>

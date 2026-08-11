@@ -93,6 +93,9 @@ test("passes a server conflict to the dialog flow without guessing a choice", as
   let idempotencyKey: string | null = null;
   let conflictId: string | null = null;
   server.use(
+    http.patch("*/api/inbox/items/item-1/metadata", async ({ request }) =>
+      HttpResponse.json({ ...readyItem, ...(await request.json()) as MetadataPatch }),
+    ),
     http.post("*/api/inbox/items/item-1/ingest", ({ request }) => {
       idempotencyKey = request.headers.get("Idempotency-Key");
       return HttpResponse.json({
@@ -117,4 +120,42 @@ test("passes a server conflict to the dialog flow without guessing a choice", as
 
   await waitFor(() => expect(conflictId).toBe("conflict-1"));
   expect(idempotencyKey).toMatch(/[0-9a-f-]{36}/i);
+});
+
+
+test("persists the current drawer metadata before formal ingest", async () => {
+  useTaxonomyHandlers();
+  const sequence: string[] = [];
+  let submitted: MetadataPatch | null = null;
+  server.use(
+    http.patch("*/api/inbox/items/item-1/metadata", async ({ request }) => {
+      sequence.push("metadata");
+      submitted = (await request.json()) as MetadataPatch;
+      return HttpResponse.json({ ...readyItem, ...submitted });
+    }),
+    http.post("*/api/inbox/items/item-1/ingest", () => {
+      sequence.push("ingest");
+      return HttpResponse.json({
+        kind: "completed",
+        operation_id: "ingest-1",
+        asset_id: "asset-1",
+        conflict_id: null,
+        cleanup_warning: null,
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithAppProviders(<MetadataDrawer item={readyItem} onClose={() => undefined} />);
+
+  await user.clear(screen.getByLabelText("显示名称"));
+  await user.type(screen.getByLabelText("显示名称"), "杭州夜景");
+  await user.click(screen.getByRole("button", { name: "正式入库" }));
+
+  await waitFor(() => expect(sequence).toEqual(["metadata", "ingest"]));
+  expect(submitted).toEqual({
+    display_name: "杭州夜景",
+    author_ids: readyItem.author_ids,
+    series_id: readyItem.series_id,
+    tag_ids: readyItem.tag_ids,
+  });
 });

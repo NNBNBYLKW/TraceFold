@@ -135,7 +135,11 @@ class InboxItem(Base):
 class SourceFile(Base):
     __tablename__ = "source_files"
     __table_args__ = (
-        UniqueConstraint("canonical_path", name="uq_source_file_path"),
+        UniqueConstraint(
+            "inbox_item_id",
+            "canonical_path",
+            name="uq_source_file_item_path",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)

@@ -58,9 +58,41 @@ class ScanCandidateRepository:
         else:
             candidate.stable_observations = 1
             candidate.is_stable = False
+            candidate.first_seen_at = observed_at
+            if not self._has_active_source(canonical_path):
+                candidate.is_claimed = False
         if candidate.stable_observations >= 2:
             candidate.is_stable = True
         return candidate
+
+    def release_missing(
+        self,
+        observed_paths: set[str],
+        *,
+        observed_at: datetime,
+    ) -> None:
+        for candidate in self.session.scalars(
+            select(ScanCandidate).where(ScanCandidate.is_claimed.is_(True))
+        ):
+            if candidate.canonical_path in observed_paths:
+                continue
+            if self._has_active_source(candidate.canonical_path):
+                continue
+            candidate.is_claimed = False
+            candidate.is_stable = False
+            candidate.stable_observations = 0
+            candidate.first_seen_at = observed_at
+
+    def _has_active_source(self, canonical_path: str) -> bool:
+        return self.session.scalar(
+            select(SourceFile.id)
+            .join(InboxItem, InboxItem.id == SourceFile.inbox_item_id)
+            .where(
+                SourceFile.canonical_path == canonical_path,
+                InboxItem.status != InboxStatus.COMPLETED,
+            )
+            .limit(1)
+        ) is not None
 
 
 class InboxRepository:
@@ -95,8 +127,11 @@ class InboxRepository:
     def has_source(self, canonical_path: str) -> bool:
         return (
             self.session.scalar(
-                select(SourceFile.id).where(
-                    SourceFile.canonical_path == canonical_path
+                select(SourceFile.id)
+                .join(InboxItem, InboxItem.id == SourceFile.inbox_item_id)
+                .where(
+                    SourceFile.canonical_path == canonical_path,
+                    InboxItem.status != InboxStatus.COMPLETED,
                 )
             )
             is not None

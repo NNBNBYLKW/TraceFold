@@ -54,6 +54,7 @@ def test_initial_migration_creates_only_media_tables(migrated_engine: Engine) ->
 
     expected_unique_constraints = {
         "scan_candidates": "uq_scan_candidate_path",
+        "source_files": "uq_source_file_item_path",
         "inbox_item_authors": "uq_inbox_author",
         "inbox_item_tags": "uq_inbox_tag",
         "media_asset_authors": "uq_asset_author",
@@ -88,4 +89,4 @@ def test_initial_migration_creates_only_media_tables(migrated_engine: Engine) ->
 
     with migrated_engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260810_0003"
+    assert revision == "20260812_0004"

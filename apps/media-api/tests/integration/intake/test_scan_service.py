@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 
 from media_api.infrastructure.config import BootstrapSettings
 from media_api.infrastructure.db import Base, create_engine_and_session
-from media_api.intake.models import InboxStatusEvent, ScanCandidate
+from media_api.intake.models import InboxStatusEvent, ScanCandidate, SourceFile
 from media_api.intake.service import ScanService
+from media_api.intake.state import InboxStatus
 from media_api.storage.local import LocalStorage
 
 
@@ -74,3 +75,54 @@ def test_created_item_records_full_analysis_history_and_claims_candidate(
     ]
     assert candidate is not None
     assert candidate.is_claimed is True
+
+
+def test_completed_source_path_can_be_discovered_again_after_file_changes(
+    scan_service: ScanService,
+    storage: LocalStorage,
+    session: Session,
+) -> None:
+    path = storage.inbox_dir / "recurring.jpg"
+    path.write_bytes(b"first-image")
+    scan_service.scan()
+    scan_service.scan()
+    completed = scan_service.list_items()[0]
+    completed.status = InboxStatus.COMPLETED
+    completed.sources[0].is_present = False
+    session.commit()
+
+    path.write_bytes(b"different-second-image")
+    scan_service.scan()
+    scan_service.scan()
+
+    active_items = scan_service.list_items()
+    assert len(active_items) == 1
+    assert active_items[0].id != completed.id
+    assert active_items[0].suggested_actual_filename == "recurring.jpg"
+    assert session.query(SourceFile).count() == 2
+
+
+def test_completed_source_path_can_be_discovered_again_after_absence(
+    scan_service: ScanService,
+    storage: LocalStorage,
+    session: Session,
+) -> None:
+    path = storage.inbox_dir / "same-again.jpg"
+    path.write_bytes(b"same-image")
+    scan_service.scan()
+    scan_service.scan()
+    completed = scan_service.list_items()[0]
+    completed.status = InboxStatus.COMPLETED
+    completed.sources[0].is_present = False
+    session.commit()
+
+    path.unlink()
+    scan_service.scan()
+    path.write_bytes(b"same-image")
+    scan_service.scan()
+    scan_service.scan()
+
+    active_items = scan_service.list_items()
+    assert len(active_items) == 1
+    assert active_items[0].id != completed.id
+    assert session.query(SourceFile).count() == 2

@@ -37,11 +37,17 @@ class InboxScanner:
         observed_at = now or utc_now()
         stable: list[StableCandidate] = []
         self.last_observed_count = 0
+        paths = [
+            path
+            for path in sorted(self.storage.inbox_dir.rglob("*"))
+            if path.is_file() and path.suffix.casefold() not in IGNORED_SUFFIXES
+        ]
+        self.candidates.release_missing(
+            {str(path.resolve()) for path in paths},
+            observed_at=observed_at,
+        )
 
-        for path in sorted(self.storage.inbox_dir.rglob("*")):
-            if not path.is_file() or path.suffix.casefold() in IGNORED_SUFFIXES:
-                continue
-
+        for path in paths:
             self.last_observed_count += 1
             extension = path.suffix.casefold()
             media_type = _media_type(extension)

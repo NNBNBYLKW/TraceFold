@@ -77,3 +77,5 @@ desktop.ini
 # =========================
 .superpowers/
 apps/media-web/.e2e-data/
+apps/media-web/playwright-report/
+apps/media-web/test-results/

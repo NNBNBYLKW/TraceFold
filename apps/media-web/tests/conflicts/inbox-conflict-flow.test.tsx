@@ -36,6 +36,7 @@ function installConflictHandlers() {
     http.get("*/api/authors", () => HttpResponse.json(authors)),
     http.get("*/api/series", () => HttpResponse.json(series)),
     http.get("*/api/tags", () => HttpResponse.json(tags)),
+    http.patch("*/api/inbox/items/item-1/metadata", () => HttpResponse.json(readyItem)),
     http.post("*/api/inbox/items/item-1/ingest", () => HttpResponse.json({
       kind: "conflict",
       operation_id: "conflict-1",
