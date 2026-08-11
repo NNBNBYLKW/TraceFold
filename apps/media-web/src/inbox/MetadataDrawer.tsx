@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import type { RefObject } from "react";
 
 import { ApiError, apiClient } from "../shared/api/client";
 import type {
@@ -17,6 +18,7 @@ import { formatInboxStatus } from "./status";
 export interface MetadataDrawerProps {
   item: InboxItemRead;
   onClose: () => void;
+  ingestButtonRef?: RefObject<HTMLButtonElement | null>;
   onConflict?: (conflictId: string) => void;
   onCompleted?: (itemId: string) => void;
 }
@@ -24,6 +26,7 @@ export interface MetadataDrawerProps {
 export function MetadataDrawer({
   item,
   onClose,
+  ingestButtonRef,
   onConflict,
   onCompleted,
 }: MetadataDrawerProps) {
@@ -175,6 +178,7 @@ export function MetadataDrawer({
         )}
         {item.allowed_actions.includes("ingest") && (
           <button
+            ref={ingestButtonRef}
             type="button"
             className="primary-button"
             disabled={ingest.isPending}

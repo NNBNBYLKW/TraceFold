@@ -1,8 +1,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
+import { ConflictDialog } from "../conflicts/ConflictDialog";
 import { ApiError, apiClient } from "../shared/api/client";
-import type { InboxItemRead, InboxStatus, MediaType } from "../shared/api/types";
+import type {
+  ConflictResolution,
+  InboxItemRead,
+  InboxStatus,
+  MediaType,
+} from "../shared/api/types";
 import { BulkMetadataBar } from "./BulkMetadataBar";
 import { MediaGrid } from "./MediaGrid";
 import { MetadataDrawer } from "./MetadataDrawer";
@@ -17,6 +23,9 @@ export function InboxPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [conflictId, setConflictId] = useState<string | null>(null);
+  const [conflictOpen, setConflictOpen] = useState(false);
+  const [conflictNotice, setConflictNotice] = useState<string | null>(null);
+  const ingestButtonRef = useRef<HTMLButtonElement>(null);
   const filters = { search, status, mediaType };
   const inbox = useInboxItems(filters);
   const items = inbox.data ?? [];
@@ -42,6 +51,23 @@ export function InboxPage() {
       else next.add(item.id);
       return next;
     });
+  }
+
+  async function handleConflictResolved(resolution: ConflictResolution) {
+    const completedItemId = activeId;
+    setConflictOpen(false);
+    setConflictId(null);
+    await queryClient.invalidateQueries({ queryKey: inboxKeys.all });
+    if (resolution === "skip") return;
+    setActiveId(null);
+    if (completedItemId) {
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        next.delete(completedItemId);
+        return next;
+      });
+    }
+    await queryClient.invalidateQueries({ queryKey: ["library"] });
   }
 
   return (
@@ -91,7 +117,15 @@ export function InboxPage() {
         </label>
         <span className="result-count">{items.length} 项</span>
       </div>
-      {conflictId && <p className="context-notice">已发现冲突 {conflictId}，正在准备对比。</p>}
+      {conflictNotice && <p className="context-notice" role="status">{conflictNotice}</p>}
+      {conflictId && !conflictOpen && (
+        <div className="context-notice" role="status">
+          <span>冲突选择已暂时关闭，文件尚未入库。</span>
+          <button type="button" className="secondary-button" onClick={() => setConflictOpen(true)}>
+            查看冲突
+          </button>
+        </div>
+      )}
       {inbox.isLoading && <div className="loading-panel">正在读取待入库目录…</div>}
       {inbox.error && (
         <div className="inline-error" role="alert">
@@ -126,7 +160,12 @@ export function InboxPage() {
         <MetadataDrawer
           item={activeItem}
           onClose={() => setActiveId(null)}
-          onConflict={setConflictId}
+          ingestButtonRef={ingestButtonRef}
+          onConflict={(id) => {
+            setConflictNotice(null);
+            setConflictId(id);
+            setConflictOpen(true);
+          }}
           onCompleted={(itemId) => {
             setActiveId(null);
             setSelectedIds((current) => {
@@ -134,6 +173,23 @@ export function InboxPage() {
               next.delete(itemId);
               return next;
             });
+            void queryClient.invalidateQueries({ queryKey: ["library"] });
+          }}
+        />
+      )}
+      {conflictId && conflictOpen && (
+        <ConflictDialog
+          conflictId={conflictId}
+          returnFocusRef={ingestButtonRef}
+          onClose={() => setConflictOpen(false)}
+          onExpired={() => {
+            setConflictOpen(false);
+            setConflictId(null);
+            setConflictNotice("源文件已变化，请重新选择。");
+            void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
+          }}
+          onResolved={(resolution) => {
+            void handleConflictResolved(resolution);
           }}
         />
       )}

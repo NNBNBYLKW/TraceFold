@@ -69,6 +69,39 @@ export interface IngestResultRead {
   cleanup_warning: string | null;
 }
 
+export interface MediaAssetRead {
+  id: string;
+  media_type: MediaType;
+  actual_filename: string;
+  display_name: string | null;
+  author_ids: string[];
+  series_id: string | null;
+  tag_ids: string[];
+  size: number;
+  ingested_at: string;
+}
+
+export interface ConflictRead {
+  operation_id: string;
+  conflict_kinds: string[];
+  incoming_item: InboxItemRead;
+  existing_asset: MediaAssetRead | null;
+  incoming_preview_url: string;
+  existing_preview_url: string | null;
+  source_hash: string;
+  requested_actual_filename: string;
+}
+
+export type ConflictResolution = "skip" | "keep_both" | "replace";
+
+export interface ConflictResolutionRead {
+  operation_id: string;
+  resolution: ConflictResolution;
+  kind: string;
+  asset_id: string | null;
+  cleanup_warning: string | null;
+}
+
 export interface ProcessingJobRead {
   id: string;
   inbox_item_id: string;
