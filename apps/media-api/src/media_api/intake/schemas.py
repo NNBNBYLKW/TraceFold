@@ -41,6 +41,11 @@ class SourceFileSummary(BaseModel):
         )
 
 
+class InboxErrorRead(BaseModel):
+    code: str
+    message: str
+
+
 class InboxItemRead(BaseModel):
     id: str
     media_type: str
@@ -52,6 +57,9 @@ class InboxItemRead(BaseModel):
     series_id: str | None
     tag_ids: list[str]
     sources: list[SourceFileSummary]
+    preview_url: str
+    progress_percent: int | None
+    error: InboxErrorRead | None
 
     @classmethod
     def from_model(cls, item: InboxItem) -> InboxItemRead:
@@ -75,6 +83,16 @@ class InboxItemRead(BaseModel):
                     key=lambda value: (not value.is_primary, value.canonical_path),
                 )
             ],
+            preview_url=f"/api/inbox/items/{item.id}/preview",
+            progress_percent=None,
+            error=(
+                InboxErrorRead(
+                    code=item.error_code or "INBOX_FAILED",
+                    message=item.error_message or "操作未能完成。",
+                )
+                if item.error_code is not None or item.error_message is not None
+                else None
+            ),
         )
 
 

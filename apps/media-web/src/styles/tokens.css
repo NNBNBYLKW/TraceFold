@@ -1,0 +1,53 @@
+:root {
+  color-scheme: light;
+  --canvas: #e9e7e1;
+  --canvas-deep: #d8d5cc;
+  --surface: #f8f7f3;
+  --surface-raised: #ffffff;
+  --text: #161a1d;
+  --muted: #686d70;
+  --border: #bbb8af;
+  --border-strong: #747873;
+  --primary: #005c69;
+  --primary-bright: #00a5b5;
+  --success: #347343;
+  --warning: #a26000;
+  --danger: #b1322c;
+  --shadow: 0 14px 40px rgb(28 33 34 / 10%);
+  --radius-small: 3px;
+  --radius-medium: 7px;
+  font-family: Bahnschrift, "Aptos Narrow", "Microsoft YaHei UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  color: var(--text);
+  background:
+    linear-gradient(90deg, rgb(22 26 29 / 4%) 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(rgb(22 26 29 / 4%) 1px, transparent 1px) 0 0 / 40px 40px,
+    var(--canvas);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  outline-color: var(--primary-bright);
+  outline-offset: 3px;
+}

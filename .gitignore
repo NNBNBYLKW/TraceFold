@@ -41,6 +41,7 @@ apps/api/data/
 # =========================
 build/
 dist/
+node_modules/
 *.egg-info/
 .eggs/
 
