@@ -1,6 +1,7 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
+import { InboxPage } from "../inbox/InboxPage";
 
 
 function PlaceholderPage({ title, index }: { title: string; index: string }) {
@@ -22,7 +23,7 @@ export const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <Navigate replace to="/inbox" /> },
-      { path: "inbox", element: <PlaceholderPage title="待入库" index="01" /> },
+      { path: "inbox", element: <InboxPage /> },
       { path: "library", element: <PlaceholderPage title="文件库" index="02" /> },
       { path: "settings", element: <PlaceholderPage title="设置" index="03" /> },
     ],

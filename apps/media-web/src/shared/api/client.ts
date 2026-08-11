@@ -38,6 +38,10 @@ function endpointUrl(endpoint: string): string {
   }
   const origin = window.location.origin === "null" ? "http://localhost" : window.location.origin;
   const base = new URL(configuredBase.endsWith("/") ? configuredBase : `${configuredBase}/`, origin);
+  const basePath = base.pathname.replace(/\/+$/, "");
+  if (endpoint === basePath || endpoint.startsWith(`${basePath}/`)) {
+    return new URL(endpoint, base.origin).toString();
+  }
   return new URL(endpoint.slice(1), base).toString();
 }
 
@@ -104,6 +108,9 @@ async function readErrorEnvelope(response: Response): Promise<ApiErrorEnvelope> 
 }
 
 export const apiClient = {
+  url(endpoint: string): string {
+    return endpointUrl(endpoint);
+  },
   get<T>(endpoint: string, options?: ApiRequestOptions): Promise<T> {
     return request<T>("GET", endpoint, undefined, options);
   },

@@ -43,3 +43,10 @@ test("sends a caller-owned idempotency key", async () => {
 
   expect(receivedKey).toBe("command-1");
 });
+
+
+test("does not duplicate the configured API prefix for server-owned URLs", () => {
+  expect(apiClient.url("/api/inbox/items/1/preview")).toBe(
+    "http://localhost:3000/api/inbox/items/1/preview",
+  );
+});
