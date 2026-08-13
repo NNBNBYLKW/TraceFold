@@ -44,6 +44,9 @@ dist/
 node_modules/
 *.egg-info/
 .eggs/
+build/windows-test-package/
+dist/TraceFold-Test-*-win-x64.zip
+dist/TraceFold-Test-*-win-x64.zip.sha256
 
 # =========================
 # IDE / editor files
