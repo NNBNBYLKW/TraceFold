@@ -22,6 +22,7 @@ from media_api.storage.local import LocalStorage
 from media_api.settings.router import build_settings_router
 from media_api.settings.service import SettingsService
 from media_api.taxonomy.router import build_taxonomy_router
+from media_api.web_distribution import install_web_distribution
 
 
 def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
@@ -167,5 +168,6 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
             event_bus=app.state.event_bus,
         )
     )
+    install_web_distribution(app, resolved.web_dist_dir)
 
     return app

@@ -21,6 +21,12 @@ class BootstrapSettings(BaseSettings):
     database_path: Path = Path("data/media/media.sqlite3")
     scan_interval_seconds: int = Field(default=10, ge=2, le=3600)
     web_origin: str | None = None
+    web_dist_dir: Path | None = None
+
+    @field_validator("web_dist_dir")
+    @classmethod
+    def resolve_web_dist_dir(cls, value: Path | None) -> Path | None:
+        return value.resolve() if value is not None else None
 
     @field_validator("web_origin")
     @classmethod
