@@ -22,7 +22,7 @@ from media_api.intake.service import (
     InboxItemNotFound,
     InboxMetadataService,
     InboxService,
-    ScanService,
+    ScanCoordinator,
     TaxonomySelectionNotFound,
 )
 from media_api.processing.registry import ProcessorRegistry
@@ -35,6 +35,7 @@ from media_api.storage.preview import PreviewGenerationFailed, PreviewService
 def build_inbox_router(
     session_factory: sessionmaker[Session],
     storage: LocalStorage,
+    scan_coordinator: ScanCoordinator,
     registry: ProcessorRegistry | None = None,
     event_bus: EventBus | None = None,
     runtime_state: RuntimeState | None = None,
@@ -43,23 +44,18 @@ def build_inbox_router(
 
     @router.post("/scan", response_model=ScanResultRead)
     def scan() -> ScanResultRead:
-        with session_factory() as session:
-            result = ScanService(
-                session=session,
-                storage=storage,
-                registry=registry,
-            ).scan()
-            if runtime_state is not None:
-                runtime_state.last_scan_at = utc_now()
-            if event_bus is not None:
-                event_bus.publish_threadsafe(
-                    MediaEvent(
-                        type="inbox.scanned",
-                        entity_id="inbox",
-                        status=str(result.created_items),
-                    )
+        result = scan_coordinator.scan()
+        if runtime_state is not None:
+            runtime_state.last_scan_at = utc_now()
+        if event_bus is not None:
+            event_bus.publish_threadsafe(
+                MediaEvent(
+                    type="inbox.scanned",
+                    entity_id="inbox",
+                    status=str(result.created_items),
                 )
-            return ScanResultRead.from_result(result)
+            )
+        return ScanResultRead.from_result(result)
 
     @router.get("/items", response_model=list[InboxItemRead])
     def list_items(include_completed: bool = False) -> list[InboxItemRead]:

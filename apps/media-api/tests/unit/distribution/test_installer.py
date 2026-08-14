@@ -80,6 +80,8 @@ def test_migration_uses_package_configuration(package_paths) -> None:
         "alembic",
         "-c",
         str(package_paths.app / "alembic.ini"),
+        "-x",
+        f"database_path={package_paths.database.resolve()}",
         "upgrade",
         "head",
     ]

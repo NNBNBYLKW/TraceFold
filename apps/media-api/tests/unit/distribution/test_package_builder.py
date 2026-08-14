@@ -41,12 +41,24 @@ def fake_repo(tmp_path: Path) -> Path:
         "__version__ = '0.1.0'\n",
         encoding="utf-8",
     )
+    (api / "src" / "media_api" / "__pycache__").mkdir()
+    (api / "src" / "media_api" / "__pycache__" / "cached.pyc").write_bytes(
+        b"cache"
+    )
     (api / "migrations" / "versions").mkdir(parents=True)
     (api / "migrations" / "env.py").write_text("# migration\n", encoding="utf-8")
     (api / "migrations" / "versions" / "001.py").write_text(
         "# revision\n",
         encoding="utf-8",
     )
+    (api / "migrations" / "versions" / "__pycache__").mkdir()
+    (
+        api
+        / "migrations"
+        / "versions"
+        / "__pycache__"
+        / "001.cpython-312.pyc"
+    ).write_bytes(b"cache")
     (api / "alembic.ini").write_text("[alembic]\n", encoding="utf-8")
     (api / "tests").mkdir()
     (api / "tests" / "secret.sqlite3").write_bytes(b"private")
@@ -122,6 +134,8 @@ def test_assembly_contains_runtime_only(fake_repo: Path, builder) -> None:
     assert not list(package.rglob("*.sqlite3"))
     assert not list(package.rglob("node_modules"))
     assert not list(package.rglob(".env"))
+    assert not list(package.rglob("__pycache__"))
+    assert not list(package.rglob("*.pyc"))
     assert (package / "data" / "inbox" / ".gitkeep").is_file()
     assert (package / "data" / "library" / ".gitkeep").is_file()
     assert (package / "data" / "work" / ".gitkeep").is_file()

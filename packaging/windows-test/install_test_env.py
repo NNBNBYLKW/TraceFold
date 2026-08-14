@@ -37,6 +37,8 @@ def migration_command(paths: PackagePaths) -> list[str]:
         "alembic",
         "-c",
         str(paths.app / "alembic.ini"),
+        "-x",
+        f"database_path={paths.database.resolve()}",
         "upgrade",
         "head",
     ]
@@ -65,8 +67,10 @@ def install(paths: PackagePaths) -> None:
         )
 
     environment = runtime_environment(paths)
+    install_command = offline_install_command(paths)
+    print(f"执行离线安装：{subprocess.list2cmdline(install_command)}")
     subprocess.run(
-        offline_install_command(paths),
+        install_command,
         cwd=paths.root,
         env=environment,
         check=True,

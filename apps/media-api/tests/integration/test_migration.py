@@ -90,3 +90,20 @@ def test_initial_migration_creates_only_media_tables(migrated_engine: Engine) ->
     with migrated_engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     assert revision == "20260812_0004"
+
+
+def test_cli_database_path_override_targets_package_database(
+    tmp_path: Path,
+) -> None:
+    api_root = Path(__file__).resolve().parents[2]
+    package_database = tmp_path / "data" / "media.sqlite3"
+    config = Config(str(api_root / "alembic.ini"))
+    config.cmd_opts = type(
+        "CommandOptions",
+        (),
+        {"x": [f"database_path={package_database}"]},
+    )()
+
+    command.upgrade(config, "head")
+
+    assert package_database.is_file()

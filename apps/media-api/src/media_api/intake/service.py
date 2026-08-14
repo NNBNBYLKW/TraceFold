@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from media_api.catalog.models import IngestOperation, IngestOperationState
 from media_api.infrastructure.db import utc_now
@@ -48,6 +49,31 @@ class InboxActionNotAllowed(InboxCommandError):
 
 class TaxonomySelectionNotFound(InboxCommandError):
     pass
+
+
+class ScanCoordinator:
+    """Serialize every scan trigger across the application process."""
+
+    def __init__(
+        self,
+        *,
+        session_factory: sessionmaker[Session],
+        storage: LocalStorage,
+        registry: ProcessorRegistry | None = None,
+    ) -> None:
+        self.session_factory = session_factory
+        self.storage = storage
+        self.registry = registry
+        self._lock = Lock()
+
+    def scan(self, now: datetime | None = None) -> ScanResult:
+        with self._lock:
+            with self.session_factory() as session:
+                return ScanService(
+                    session=session,
+                    storage=self.storage,
+                    registry=self.registry,
+                ).scan(now=now)
 
 
 class InboxService:

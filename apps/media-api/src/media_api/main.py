@@ -12,7 +12,7 @@ from media_api.infrastructure.config import BootstrapSettings
 from media_api.infrastructure.db import create_engine_and_session
 from media_api.infrastructure.lifecycle import RuntimeCoordinator, RuntimeLoopSettings
 from media_api.intake.router import build_inbox_router
-from media_api.intake.service import ScanService
+from media_api.intake.service import ScanCoordinator
 from media_api.processing.registry import ProcessorRegistry
 from media_api.processing.processors.mp4_m4a import Mp4M4aMergeProcessor
 from media_api.processing.router import build_processing_router
@@ -44,6 +44,11 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
         registry=registry,
         work_dir=resolved.work_dir,
     )
+    scan_coordinator = ScanCoordinator(
+        session_factory=session_factory,
+        storage=storage,
+        registry=registry,
+    )
 
     def recover_ingests() -> object:
         with session_factory() as session:
@@ -73,12 +78,7 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
         return processing_worker.run_once()
 
     def scan_once() -> object:
-        with session_factory() as session:
-            return ScanService(
-                session=session,
-                storage=storage,
-                registry=registry,
-            ).scan()
+        return scan_coordinator.scan()
 
     def load_loop_settings() -> RuntimeLoopSettings:
         with session_factory() as session:
@@ -127,6 +127,7 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
     app.state.storage = storage
     app.state.processor_registry = registry
     app.state.processing_worker = processing_worker
+    app.state.scan_coordinator = scan_coordinator
     app.state.runtime_coordinator = coordinator
 
     @app.get("/health")
@@ -137,6 +138,7 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
         build_inbox_router(
             app.state.session_factory,
             app.state.storage,
+            app.state.scan_coordinator,
             app.state.processor_registry,
             app.state.event_bus,
             runtime_state=app.state.runtime_state,

@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 import tomllib
+import urllib.error
+import urllib.request
 import zipfile
 from dataclasses import dataclass
 from email.parser import BytesParser
@@ -63,6 +69,18 @@ class BuildLayout:
         return self.staging_root / "build.log"
 
 
+@dataclass(frozen=True)
+class ReleaseVerification:
+    install_returncode: int
+    health_payload: dict[str, str]
+    frontend_status: int
+    api_status: int
+    port_released: bool
+    install_log_contains_no_index: bool
+    restart_preserved_data: bool
+    network_download_detected: bool
+
+
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -94,7 +112,11 @@ def reset_staging(layout: BuildLayout) -> None:
 def _copy_tree(source: Path, destination: Path) -> None:
     if not source.is_dir():
         raise FileNotFoundError(f"required directory is missing: {source}")
-    shutil.copytree(source, destination)
+    shutil.copytree(
+        source,
+        destination,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
 
 
 def _copy_file(source: Path, destination: Path) -> None:
@@ -253,13 +275,17 @@ def _run_logged(
     log: BinaryIO,
     env: dict[str, str] | None = None,
 ) -> None:
-    rendered = subprocess.list2cmdline([str(part) for part in command])
+    resolved_command = [str(part) for part in command]
+    located = shutil.which(resolved_command[0])
+    if located is not None:
+        resolved_command[0] = located
+    rendered = subprocess.list2cmdline(resolved_command)
     header = f"\n> {rendered}\n".encode("utf-8")
     log.write(header)
     log.flush()
     print(rendered)
     process = subprocess.Popen(
-        list(command),
+        resolved_command,
         cwd=cwd,
         env=env,
         stdout=subprocess.PIPE,
@@ -274,6 +300,290 @@ def _run_logged(
     returncode = process.wait()
     if returncode != 0:
         raise subprocess.CalledProcessError(returncode, command)
+
+
+def _validate_external_checksum(archive: Path) -> None:
+    checksum = archive.with_suffix(archive.suffix + ".sha256")
+    if not checksum.is_file():
+        raise FileNotFoundError(f"archive checksum is missing: {checksum}")
+    fields = checksum.read_text(encoding="utf-8").strip().split()
+    if len(fields) != 2 or fields[1] != archive.name:
+        raise ValueError("invalid external checksum file")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", fields[0]):
+        raise ValueError("invalid external SHA-256 value")
+    if _sha256(archive) != fields[0].lower():
+        raise ValueError("archive SHA-256 mismatch")
+
+
+def _safe_zip_members(archive: zipfile.ZipFile) -> tuple[list[str], str]:
+    files: list[str] = []
+    top_levels: set[str] = set()
+    for member in archive.infolist():
+        name = member.filename
+        path = PurePosixPath(name)
+        if (
+            not name
+            or "\\" in name
+            or path.is_absolute()
+            or ".." in path.parts
+            or re.match(r"^[A-Za-z]:", name)
+        ):
+            raise ValueError(f"unsafe ZIP member: {name}")
+        top_levels.add(path.parts[0])
+        if not member.is_dir():
+            files.append(name)
+    if len(top_levels) != 1:
+        raise ValueError("release ZIP must contain exactly one top-level directory")
+    top_level = next(iter(top_levels))
+    if not re.fullmatch(r"TraceFold-Test-\d+\.\d+\.\d+", top_level):
+        raise ValueError(f"unexpected release directory: {top_level}")
+    return files, top_level
+
+
+def _verify_package_manifest(package_root: Path) -> None:
+    manifest = package_root / "MANIFEST.sha256"
+    if not manifest.is_file():
+        raise FileNotFoundError("package manifest is missing")
+    expected: set[str] = set()
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        try:
+            digest, relative = line.split("  ", 1)
+        except ValueError as error:
+            raise ValueError("invalid package manifest line") from error
+        path = PurePosixPath(relative)
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or path.is_absolute()
+            or ".." in path.parts
+            or "\\" in relative
+        ):
+            raise ValueError("invalid package manifest entry")
+        target = package_root.joinpath(*path.parts)
+        if not target.is_file() or _sha256(target) != digest:
+            raise ValueError(f"package manifest mismatch: {relative}")
+        expected.add(relative)
+    actual = {
+        path.relative_to(package_root).as_posix()
+        for path in package_root.rglob("*")
+        if path.is_file() and path != manifest
+    }
+    if actual != expected:
+        raise ValueError("package manifest does not cover the extracted release")
+
+
+def _runtime_environment(package_root: Path) -> dict[str, str]:
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "TRACEFOLD_MEDIA_INBOX_DIR": str(
+                (package_root / "data" / "inbox").resolve()
+            ),
+            "TRACEFOLD_MEDIA_LIBRARY_DIR": str(
+                (package_root / "data" / "library").resolve()
+            ),
+            "TRACEFOLD_MEDIA_WORK_DIR": str(
+                (package_root / "data" / "work").resolve()
+            ),
+            "TRACEFOLD_MEDIA_DATABASE_PATH": str(
+                (package_root / "data" / "media.sqlite3").resolve()
+            ),
+            "TRACEFOLD_MEDIA_WEB_DIST_DIR": str(
+                (package_root / "app" / "web").resolve()
+            ),
+        }
+    )
+    return environment
+
+
+def _venv_python(package_root: Path) -> Path:
+    return package_root / ".venv" / "Scripts" / "python.exe"
+
+
+def _server_command(package_root: Path) -> list[str]:
+    return [
+        str(_venv_python(package_root)),
+        "-m",
+        "uvicorn",
+        "media_api.main:create_app",
+        "--factory",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8100",
+    ]
+
+
+def _port_available(host: str = "127.0.0.1", port: int = 8100) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _wait_for_port_release(timeout_seconds: float = 15) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _port_available():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _request_json(url: str) -> tuple[int, dict[str, str]]:
+    with urllib.request.urlopen(url, timeout=2) as response:
+        return response.status, json.loads(response.read())
+
+
+def _wait_for_health(
+    server: subprocess.Popen[bytes],
+    timeout_seconds: float = 30,
+) -> dict[str, str]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        returncode = server.poll()
+        if returncode is not None:
+            raise RuntimeError(f"release API exited early with code {returncode}")
+        try:
+            status, payload = _request_json("http://127.0.0.1:8100/health")
+            if status == 200 and payload.get("status") == "ok":
+                return payload
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+        time.sleep(0.1)
+    raise TimeoutError("release API health check timed out")
+
+
+def _stop_server(server: subprocess.Popen[bytes]) -> None:
+    if server.poll() is not None:
+        return
+    server.terminate()
+    try:
+        server.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        server.kill()
+        server.wait(timeout=10)
+
+
+def _start_server(package_root: Path, log: BinaryIO) -> subprocess.Popen[bytes]:
+    if not _port_available():
+        raise RuntimeError("127.0.0.1:8100 is already occupied")
+    return subprocess.Popen(
+        _server_command(package_root),
+        cwd=package_root / "app",
+        env=_runtime_environment(package_root),
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+
+
+def verify_extracted_release(
+    archive: Path,
+    python312: Path,
+    *,
+    launch_edge: bool = False,
+) -> ReleaseVerification:
+    archive = archive.resolve()
+    python312 = python312.resolve()
+    if launch_edge:
+        raise ValueError(
+            "Edge acceptance is interactive; run 启动 TraceFold.cmd from the extraction"
+        )
+    if not archive.is_file():
+        raise FileNotFoundError(f"release archive is missing: {archive}")
+    if not python312.is_file():
+        raise FileNotFoundError(f"Python interpreter is missing: {python312}")
+    _validate_external_checksum(archive)
+
+    with tempfile.TemporaryDirectory(prefix="tracefold-release-verify-") as temporary:
+        extraction_root = Path(temporary)
+        with zipfile.ZipFile(archive) as source:
+            _members, top_level = _safe_zip_members(source)
+            source.extractall(extraction_root)
+        package_root = extraction_root / top_level
+        _verify_package_manifest(package_root)
+
+        install_environment = dict(os.environ)
+        install_environment.update(
+            {
+                "PIP_NO_INDEX": "1",
+                "PIP_INDEX_URL": "https://invalid.tracefold.test/simple",
+                "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            }
+        )
+        install = subprocess.run(
+            [str(python312), str(package_root / "app" / "install_test_env.py")],
+            cwd=package_root,
+            env=install_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=600,
+            check=False,
+        )
+        install_log = install.stdout
+        no_index = "--no-index" in install_log
+        network_download = any(
+            ("http://" in line or "https://" in line)
+            and ("download" in line.casefold() or "collecting" in line.casefold())
+            for line in install_log.splitlines()
+        )
+        if install.returncode != 0:
+            raise RuntimeError(
+                f"offline release installation failed ({install.returncode}):\n"
+                f"{install_log}"
+            )
+        if not no_index or network_download:
+            raise RuntimeError("release installation did not prove offline pip usage")
+
+        sentinel = package_root / "data" / "inbox" / "restart-sentinel.txt"
+        database = package_root / "data" / "media.sqlite3"
+        server_log_path = package_root / "runtime" / "logs" / "verification.log"
+        server_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with server_log_path.open("ab") as server_log:
+            first = _start_server(package_root, server_log)
+            try:
+                health_payload = _wait_for_health(first)
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:8100/",
+                    timeout=2,
+                ) as frontend:
+                    frontend_status = frontend.status
+                api_status, _api_payload = _request_json(
+                    "http://127.0.0.1:8100/api/settings"
+                )
+                sentinel.write_text("preserve me", encoding="utf-8")
+                if not database.is_file():
+                    raise RuntimeError("package database was not created")
+            finally:
+                _stop_server(first)
+            first_release = _wait_for_port_release()
+
+            second = _start_server(package_root, server_log)
+            try:
+                _wait_for_health(second)
+                restart_preserved = (
+                    sentinel.read_text(encoding="utf-8") == "preserve me"
+                    and database.is_file()
+                )
+            finally:
+                _stop_server(second)
+            second_release = _wait_for_port_release()
+
+        return ReleaseVerification(
+            install_returncode=install.returncode,
+            health_payload=health_payload,
+            frontend_status=frontend_status,
+            api_status=api_status,
+            port_released=first_release and second_release,
+            install_log_contains_no_index=no_index,
+            restart_preserved_data=restart_preserved,
+            network_download_detected=network_download,
+        )
 
 
 def acquire_wheels(layout: BuildLayout, log: BinaryIO) -> None:
@@ -411,7 +721,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.verify_only is not None:
-        raise SystemExit("--verify-only will be implemented by the release verifier")
+        result = verify_extracted_release(
+            args.verify_only,
+            Path(sys.executable),
+        )
+        print(json.dumps(result.__dict__, ensure_ascii=False, indent=2))
+        return 0
     build_release(_repo_root_from_script(), args.version)
     return 0
 

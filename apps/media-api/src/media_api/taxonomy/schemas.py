@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel
 
 from media_api.taxonomy.models import Author, Series, Tag

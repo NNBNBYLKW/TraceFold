@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
@@ -15,6 +17,23 @@ import media_api.taxonomy.models  # noqa: F401, E402
 
 config = context.config
 target_metadata = Base.metadata
+
+
+def apply_database_path_override() -> None:
+    database_path = context.get_x_argument(as_dictionary=True).get(
+        "database_path"
+    )
+    if database_path is None:
+        return
+    resolved = Path(database_path).resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    config.set_main_option(
+        "sqlalchemy.url",
+        f"sqlite+pysqlite:///{resolved.as_posix()}",
+    )
+
+
+apply_database_path_override()
 
 
 def run_migrations_offline() -> None:
