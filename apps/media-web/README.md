@@ -17,14 +17,24 @@ npm run dev
 
 ### Windows 一键源码测试
 
-完成 Python 和前端依赖安装后，可直接双击仓库根目录的
-`启动源码测试版.cmd`。启动器会运行当前工作区中的 API 与 Vite，随后以
-Edge 应用窗口打开 TraceFold；关闭该窗口后，启动器只会结束自己创建的
-Edge、Vite 和 API 进程。
+首次使用前需要完成 API 与前端依赖安装，并确保 `ffmpeg`、`ffprobe`、
+Node.js 和 Microsoft Edge 可用：
+
+```powershell
+cd apps/media-api
+python -m pip install -e ".[dev]"
+cd ../media-web
+npm install
+```
+
+之后可直接双击仓库根目录的 `启动源码测试版.cmd`。启动器会运行当前
+工作区中的 API 与 Vite，随后以 Edge 应用窗口打开 TraceFold；关闭该
+窗口后，启动器只会结束自己创建的 Edge、Vite 和 API 进程树。
 
 源码测试数据、日志和独立 Edge 配置均保存在仓库根目录的
 `.source-test`，不会读取或修改 `data/media` 及离线测试包中的数据。需要
-重置时，可以在确认不再需要测试数据后删除 `.source-test`。
+重置时，可以在确认不再需要测试数据后删除 `.source-test`。启动失败时，
+详细信息保存在 `.source-test/runtime/logs`。
 
 只验证服务能否启动、不打开窗口时，可在仓库根目录运行：
 

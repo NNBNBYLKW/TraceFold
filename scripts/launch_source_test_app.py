@@ -193,10 +193,78 @@ def wait_for_web(
     raise LaunchError("前端服务启动超时，请查看运行日志。")
 
 
-def stop_owned_processes(processes: Sequence[OwnedProcess | None]) -> None:
+def stop_owned_processes(
+    processes: Sequence[OwnedProcess | None],
+) -> list[Exception]:
+    errors: list[Exception] = []
     for process in reversed(processes):
         if process is not None:
+            try:
+                stop_owned_process(process)
+            except Exception as error:
+                errors.append(error)
+    return errors
+
+
+def stop_owned_process_tree(
+    process: OwnedProcess,
+    *,
+    run_command=subprocess.run,
+) -> None:
+    if process.poll() is not None:
+        return
+    command = [
+        "taskkill.exe",
+        "/PID",
+        str(process.pid),
+        "/T",
+        "/F",
+    ]
+    result = run_command(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0:
+        if process.poll() is not None:
+            return
+        try:
             stop_owned_process(process)
+        finally:
+            raise LaunchError(
+                f"无法结束自有 Edge 进程树（PID {process.pid}）。"
+            )
+    process.wait(timeout=10)
+
+
+def cleanup_source_session(
+    api_process: OwnedProcess | None,
+    web_process: OwnedProcess | None,
+    edge_process: OwnedProcess | None,
+    *,
+    stop_tree=stop_owned_process_tree,
+    wait_port_release=wait_for_port_release,
+) -> None:
+    errors: list[Exception] = []
+    if edge_process is not None:
+        try:
+            stop_tree(edge_process)
+        except Exception as error:
+            errors.append(error)
+    errors.extend(stop_owned_processes((api_process, web_process)))
+    for port in (3100, 8100):
+        try:
+            wait_port_release("127.0.0.1", port, 15)
+        except Exception as error:
+            errors.append(error)
+    if errors:
+        details = "; ".join(str(error) for error in errors)
+        raise LaunchError(f"源码测试进程清理失败：{details}")
 
 
 def run_source_session(
@@ -211,6 +279,7 @@ def run_source_session(
     wait_api=wait_for_health,
     wait_web=wait_for_web,
     wait_window=wait_for_owned_window_close,
+    stop_tree=stop_owned_process_tree,
     wait_port_release=wait_for_port_release,
 ) -> int:
     for directory in (
@@ -279,9 +348,13 @@ def run_source_session(
             edge_process = start_process(edge_command(edge, paths))
             return wait_window(edge_process)
         finally:
-            stop_owned_processes((api_process, web_process, edge_process))
-            wait_port_release("127.0.0.1", 3100, 15)
-            wait_port_release("127.0.0.1", 8100, 15)
+            cleanup_source_session(
+                api_process,
+                web_process,
+                edge_process,
+                stop_tree=stop_tree,
+                wait_port_release=wait_port_release,
+            )
 
 
 def launch(paths: SourcePaths, *, verify_only: bool = False) -> int:

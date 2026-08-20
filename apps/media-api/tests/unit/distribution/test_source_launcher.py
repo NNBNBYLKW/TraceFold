@@ -52,6 +52,17 @@ class FakeStarter:
         return self.remaining.pop(0)
 
 
+class TaskkillRunner:
+    def __init__(self, process: FakeProcess) -> None:
+        self.process = process
+        self.command: list[str] | None = None
+
+    def __call__(self, command: list[str], **_kwargs):
+        self.command = command
+        self.process.returncode = 0
+        return subprocess.CompletedProcess(command, 0)
+
+
 def load_source_launcher():
     if not SOURCE_LAUNCHER.is_file():
         pytest.fail("source test launcher has not been implemented")
@@ -194,6 +205,49 @@ def test_cleanup_stops_every_owned_source_process() -> None:
     assert edge.poll() == 0
 
 
+def test_edge_tree_cleanup_targets_the_live_owned_root_pid() -> None:
+    launcher = load_source_launcher()
+    edge = FakeProcess()
+    runner = TaskkillRunner(edge)
+
+    launcher.stop_owned_process_tree(edge, run_command=runner)
+
+    assert runner.command == [
+        "taskkill.exe",
+        "/PID",
+        str(edge.pid),
+        "/T",
+        "/F",
+    ]
+    assert edge.poll() == 0
+
+
+def test_cleanup_failure_does_not_skip_other_processes_or_port_checks() -> None:
+    launcher = load_source_launcher()
+    api = FakeProcess()
+    web = FakeProcess()
+    edge = FakeProcess()
+    checked_ports: list[int] = []
+
+    def fail_edge_tree(_process) -> None:
+        raise OSError("tree cleanup failed")
+
+    with pytest.raises(launcher.LaunchError, match="清理失败"):
+        launcher.cleanup_source_session(
+            api,
+            web,
+            edge,
+            stop_tree=fail_edge_tree,
+            wait_port_release=lambda _host, port, _timeout: (
+                checked_ports.append(port)
+            ),
+        )
+
+    assert api.terminate_calls == 1
+    assert web.terminate_calls == 1
+    assert checked_ports == [3100, 8100]
+
+
 def test_source_session_stops_all_services_after_the_app_window_closes(
     tmp_path: Path,
 ) -> None:
@@ -218,6 +272,7 @@ def test_source_session_stops_all_services_after_the_app_window_closes(
         wait_api=lambda *_args, **_kwargs: None,
         wait_web=lambda *_args, **_kwargs: None,
         wait_window=lambda *_args, **_kwargs: 0,
+        stop_tree=launcher.stop_owned_process,
         wait_port_release=lambda *_args, **_kwargs: None,
     )
 
@@ -254,6 +309,7 @@ def test_verify_only_checks_source_services_without_opening_edge(
         wait_window=lambda *_args, **_kwargs: pytest.fail(
             "verify-only must not wait for an Edge window"
         ),
+        stop_tree=launcher.stop_owned_process,
         wait_port_release=lambda *_args, **_kwargs: None,
     )
 
