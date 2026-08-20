@@ -15,6 +15,23 @@ npm run dev
 
 `VITE_API_BASE_URL` 必须指向媒体 API 的 `/api` 根路径；未设置时使用同源 `/api`。
 
+### Windows 一键源码测试
+
+完成 Python 和前端依赖安装后，可直接双击仓库根目录的
+`启动源码测试版.cmd`。启动器会运行当前工作区中的 API 与 Vite，随后以
+Edge 应用窗口打开 TraceFold；关闭该窗口后，启动器只会结束自己创建的
+Edge、Vite 和 API 进程。
+
+源码测试数据、日志和独立 Edge 配置均保存在仓库根目录的
+`.source-test`，不会读取或修改 `data/media` 及离线测试包中的数据。需要
+重置时，可以在确认不再需要测试数据后删除 `.source-test`。
+
+只验证服务能否启动、不打开窗口时，可在仓库根目录运行：
+
+```powershell
+python scripts/launch_source_test_app.py --verify-only
+```
+
 ## 验证
 
 ```powershell

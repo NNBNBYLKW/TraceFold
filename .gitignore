@@ -79,6 +79,7 @@ desktop.ini
 # Local agent / E2E artifacts
 # =========================
 .superpowers/
+.source-test/
 apps/media-web/.e2e-data/
 apps/media-web/playwright-report/
 apps/media-web/test-results/
