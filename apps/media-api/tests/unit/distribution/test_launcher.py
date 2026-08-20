@@ -45,6 +45,7 @@ class FakeProcess:
         returncode: int | None,
         wait_times_out: bool = False,
     ) -> None:
+        self.pid = 1234
         self.returncode = returncode
         self.wait_times_out = wait_times_out
         self.terminate_calls = 0
@@ -137,9 +138,22 @@ def test_cleanup_is_noop_after_owned_process_exits() -> None:
     assert owned.kill_calls == 0
 
 
-def test_server_and_edge_commands_are_package_scoped(package_paths) -> None:
-    edge = Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe")
+def test_window_wait_completes_after_owned_window_closes_while_edge_stays_alive(
+) -> None:
+    owned = FakeProcess(returncode=None)
+    visibility = iter((True, True, False))
 
+    result = launcher.wait_for_owned_window_close(
+        owned,
+        window_visible=lambda _pid: next(visibility),
+        sleep=lambda _seconds: None,
+    )
+
+    assert result == 0
+    assert owned.poll() is None
+
+
+def test_server_command_is_package_scoped(package_paths) -> None:
     assert server_command(package_paths) == [
         str(package_paths.venv_python),
         "-m",
@@ -151,10 +165,19 @@ def test_server_and_edge_commands_are_package_scoped(package_paths) -> None:
         "--port",
         "8100",
     ]
+
+
+def test_edge_command_keeps_the_owned_app_process_alive_until_window_closes(
+    package_paths,
+) -> None:
+    edge = Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe")
+
     assert edge_command(edge, package_paths) == [
         str(edge),
         "--app=http://127.0.0.1:8100",
         f"--user-data-dir={package_paths.runtime / 'edge-profile'}",
         "--no-first-run",
         "--no-default-browser-check",
+        "--edge-skip-compat-layer-relaunch",
+        "--disable-background-mode",
     ]
