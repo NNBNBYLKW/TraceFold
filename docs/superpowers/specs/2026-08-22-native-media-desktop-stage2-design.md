@@ -1,7 +1,7 @@
 # TraceFold 原生媒体桌面端 Stage 2 设计
 
 - 日期：2026-08-22
-- 状态：聊天设计已确认，待规格审阅
+- 状态：规格已确认，进入实施计划
 - 上位规格：`docs/superpowers/specs/2026-08-21-native-media-desktop-design.md`
 - 前置检查点：`docs/media-desktop-stage1-acceptance.md`
 
