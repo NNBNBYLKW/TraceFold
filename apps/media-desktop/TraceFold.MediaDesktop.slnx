@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TraceFold.Media.Application/TraceFold.Media.Application.csproj" />
+    <Project Path="src/TraceFold.Media.Desktop/TraceFold.Media.Desktop.csproj" />
+    <Project Path="src/TraceFold.Media.Domain/TraceFold.Media.Domain.csproj" />
+    <Project Path="src/TraceFold.Media.Infrastructure/TraceFold.Media.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TraceFold.Media.Architecture.Tests/TraceFold.Media.Architecture.Tests.csproj" />
+  </Folder>
+</Solution>

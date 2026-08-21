@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>TraceFold.Media.Domain</AssemblyName>
+    <RootNamespace>TraceFold.Media.Domain</RootNamespace>
+  </PropertyGroup>
+</Project>

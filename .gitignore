@@ -83,3 +83,6 @@ desktop.ini
 apps/media-web/.e2e-data/
 apps/media-web/playwright-report/
 apps/media-web/test-results/
+apps/media-desktop/**/bin/
+apps/media-desktop/**/obj/
+apps/media-desktop/.packages/
