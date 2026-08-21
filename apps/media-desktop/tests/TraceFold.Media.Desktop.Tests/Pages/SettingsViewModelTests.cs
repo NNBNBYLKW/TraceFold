@@ -79,6 +79,27 @@ public sealed class SettingsViewModelTests
     }
 
     [Fact]
+    public async Task LoadAsync_populates_all_saved_folder_paths()
+    {
+        var saved = new LibraryFolders(
+            "C:\\saved-inbox",
+            "C:\\saved-library",
+            "C:\\saved-work");
+        var store = new InMemorySettingsStore();
+        await store.SaveAsync(saved, CancellationToken.None);
+        var viewModel = new SettingsViewModel(
+            new QueueFolderPicker(),
+            new DirectorySettingsService(new AlwaysWritableProbe(), store),
+            new FakeStartupCoordinator());
+
+        await viewModel.LoadAsync(CancellationToken.None);
+
+        Assert.Equal(saved.InboxDirectory, viewModel.InboxDirectory);
+        Assert.Equal(saved.LibraryDirectory, viewModel.LibraryDirectory);
+        Assert.Equal(saved.WorkDirectory, viewModel.WorkDirectory);
+    }
+
+    [Fact]
     public void Busy_state_disables_folder_and_save_commands()
     {
         var viewModel = CreateViewModel(new QueueFolderPicker());

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Windows.AppLifecycle;
 
@@ -17,7 +16,7 @@ public static class SingleInstanceCoordinator
             name: null);
         if (completed == 0)
         {
-            Debug.WriteLine("DesktopActivationRedirectEventCreationFailed");
+            OutputDebugString("DesktopActivationRedirectEventCreationFailed");
             return 1;
         }
 
@@ -51,7 +50,7 @@ public static class SingleInstanceCoordinator
                 return 0;
             }
 
-            Debug.WriteLine(
+            OutputDebugString(
                 $"DesktopActivationRedirectFailed WaitResult={waitResult} Error={redirectError}");
             return 1;
         }
@@ -75,6 +74,9 @@ public static class SingleInstanceCoordinator
     [DllImport("kernel32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(nint handle);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern void OutputDebugString(string message);
 
     [DllImport("ole32.dll")]
     private static extern uint CoWaitForMultipleObjects(

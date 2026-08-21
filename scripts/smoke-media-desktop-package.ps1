@@ -20,6 +20,7 @@ $tempRoot = [IO.Path]::GetFullPath((Join-Path $tempBase $smokeName))
 $oldDataRoot = $env:TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT
 $primary = $null
 $secondary = $null
+$fatalLaunch = $null
 
 function Get-BrowserProcessIds {
     return @(Get-Process -Name 'msedge', 'chrome' -ErrorAction SilentlyContinue |
@@ -36,6 +37,11 @@ function Get-PackageProcesses {
                 $false
             }
         })
+}
+
+$preExistingProcesses = @(Get-PackageProcesses)
+if ($preExistingProcesses.Count -ne 0) {
+    throw "Refusing to run while package processes already exist: $($preExistingProcesses.Id -join ', ')"
 }
 
 try {
@@ -61,6 +67,9 @@ try {
     $secondary = Start-Process -FilePath $exePath -PassThru -WindowStyle Normal
     if (-not $secondary.WaitForExit(10000)) {
         throw 'Secondary launch did not redirect and exit within 10 seconds.'
+    }
+    if ($secondary.ExitCode -ne 0) {
+        throw "Secondary launch failed with exit code $($secondary.ExitCode)."
     }
 
     $packageProcesses = @(Get-PackageProcesses)
@@ -89,12 +98,31 @@ try {
         throw 'No rolling log was created under the smoke root.'
     }
 
+    $env:TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT = 'relative-invalid-smoke-root'
+    $fatalLaunch = Start-Process -FilePath $exePath -PassThru -WindowStyle Normal
+    if (-not $fatalLaunch.WaitForExit(10000)) {
+        throw 'Invalid configuration left a headless primary process running.'
+    }
+    if ($fatalLaunch.ExitCode -eq 0) {
+        throw 'Invalid configuration did not produce a failing process exit code.'
+    }
+
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
 }
 finally {
-    @(Get-PackageProcesses) | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
+    @($fatalLaunch, $secondary, $primary) |
+        Where-Object { $null -ne $_ } |
+        ForEach-Object {
+            try {
+                $_.Refresh()
+                if (-not $_.HasExited -and
+                    [IO.Path]::GetFullPath($_.Path) -eq $exePath) {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
+            }
+            catch {
+            }
+        }
     if ($null -eq $oldDataRoot) {
         Remove-Item Env:\TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT -ErrorAction SilentlyContinue
     }

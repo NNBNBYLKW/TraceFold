@@ -11,6 +11,9 @@ public sealed partial class SettingsViewModel(
     DirectorySettingsService settingsService,
     IStartupCoordinator startupCoordinator) : ObservableObject
 {
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
+    private bool _hasLoaded;
+
     [ObservableProperty]
     public partial string InboxDirectory { get; set; } = string.Empty;
 
@@ -28,6 +31,41 @@ public sealed partial class SettingsViewModel(
 
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
+
+    public async Task LoadAsync(CancellationToken cancellationToken)
+    {
+        await _loadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_hasLoaded)
+            {
+                return;
+            }
+
+            IsBusy = true;
+            try
+            {
+                LibraryFolders? saved =
+                    await settingsService.LoadAsync(cancellationToken);
+                if (saved is not null)
+                {
+                    InboxDirectory = saved.InboxDirectory;
+                    LibraryDirectory = saved.LibraryDirectory;
+                    WorkDirectory = saved.WorkDirectory;
+                }
+
+                _hasLoaded = true;
+            }
+            finally
+            {
+                IsBusy = false;
+            }
+        }
+        finally
+        {
+            _loadGate.Release();
+        }
+    }
 
     [RelayCommand(CanExecute = nameof(CanInteract))]
     private async Task ChooseInboxAsync(CancellationToken cancellationToken)

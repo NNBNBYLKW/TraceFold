@@ -43,15 +43,15 @@ public sealed partial class App : Microsoft.UI.Xaml.Application
         {
             AppDataPaths paths = new LocalAppDataPathProvider().GetPaths();
             _host = DesktopCompositionRoot.BuildHost(paths);
+            _shutdownCoordinator = new AppShutdownCoordinator(
+                new DesktopHostStopper(_host),
+                _host.Services.GetRequiredService<
+                    ILogger<AppShutdownCoordinator>>());
             await _host.StartAsync();
 
             MainWindow window = _host.Services.GetRequiredService<MainWindow>();
             _windowContext = _host.Services.GetRequiredService<WindowContext>();
             _windowContext.SetMainWindow(window);
-            _shutdownCoordinator = new AppShutdownCoordinator(
-                new DesktopHostStopper(_host),
-                _host.Services.GetRequiredService<
-                    ILogger<AppShutdownCoordinator>>());
             window.Closed += OnMainWindowClosed;
             window.Activate();
 
@@ -61,8 +61,8 @@ public sealed partial class App : Microsoft.UI.Xaml.Application
         catch (Exception exception)
         {
             Log.Fatal(exception, "DesktopLaunchFailed");
-            Log.CloseAndFlush();
-            throw;
+            await ShutdownAsync();
+            Environment.Exit(1);
         }
     }
 
@@ -95,6 +95,11 @@ public sealed partial class App : Microsoft.UI.Xaml.Application
 
     private async void OnMainWindowClosed(object sender, WindowEventArgs args)
     {
+        await ShutdownAsync();
+    }
+
+    private async Task ShutdownAsync()
+    {
         if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
         {
             return;
@@ -106,6 +111,10 @@ public sealed partial class App : Microsoft.UI.Xaml.Application
             if (_shutdownCoordinator is not null)
             {
                 await _shutdownCoordinator.StopAsync(CancellationToken.None);
+            }
+            else
+            {
+                _host?.Dispose();
             }
         }
         finally
@@ -128,7 +137,6 @@ public sealed partial class App : Microsoft.UI.Xaml.Application
         Microsoft.UI.Xaml.UnhandledExceptionEventArgs args)
     {
         Log.Error(args.Exception, "DesktopUnhandledUiException");
-        args.Handled = true;
     }
 
     private static void OnDomainUnhandledException(
