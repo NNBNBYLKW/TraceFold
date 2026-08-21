@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Application.Library;
+using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Infrastructure.Filesystem;
@@ -33,6 +35,16 @@ public static class DependencyInjection
         services.AddSingleton<IDirectoryProbe, LocalDirectoryProbe>();
         services.AddSingleton<IInboxFileCatalog, LocalInboxFileCatalog>();
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
+        services.AddSingleton<EfTaxonomyStore>();
+        services.AddSingleton<ITaxonomyStore>(provider =>
+            provider.GetRequiredService<EfTaxonomyStore>());
+        services.AddSingleton<ITaxonomyLookup>(provider =>
+            provider.GetRequiredService<EfTaxonomyStore>());
+        services.AddSingleton<IMetadataStore, EfMetadataStore>();
+        services.AddSingleton<ILibraryQueryStore, EfLibraryQueryStore>();
+        services.AddSingleton<MetadataEditorService>();
+        services.AddSingleton<TaxonomyService>();
+        services.AddSingleton<LibraryQueryService>();
         services.AddSingleton<IScanPreferencesStore, EfScanPreferencesStore>();
         services.AddSingleton<ScanPreferencesService>();
         services.AddSingleton<IScanPreferencesService>(provider =>

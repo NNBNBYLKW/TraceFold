@@ -20,7 +20,15 @@ public sealed class MediaDesktopDbContext(
 
     internal DbSet<TaxonomyTermRow> TaxonomyTerms => Set<TaxonomyTermRow>();
 
+    internal DbSet<InboxDraftAuthorRow> InboxDraftAuthors => Set<InboxDraftAuthorRow>();
+
+    internal DbSet<InboxDraftTagRow> InboxDraftTags => Set<InboxDraftTagRow>();
+
     internal DbSet<MediaAssetRow> MediaAssets => Set<MediaAssetRow>();
+
+    internal DbSet<MediaAssetAuthorRow> MediaAssetAuthors => Set<MediaAssetAuthorRow>();
+
+    internal DbSet<MediaAssetTagRow> MediaAssetTags => Set<MediaAssetTagRow>();
 
     internal DbSet<IngestOperationRow> IngestOperations => Set<IngestOperationRow>();
 
