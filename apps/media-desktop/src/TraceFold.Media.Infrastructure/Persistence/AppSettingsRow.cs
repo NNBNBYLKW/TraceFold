@@ -10,5 +10,11 @@ internal sealed class AppSettingsRow
 
     public required string WorkDirectory { get; set; }
 
+    public bool AutoScanEnabled { get; set; }
+
+    public DateTimeOffset? LastScanAtUtc { get; set; }
+
+    public string? LastScanSummary { get; set; }
+
     public DateTimeOffset UpdatedAtUtc { get; set; }
 }
