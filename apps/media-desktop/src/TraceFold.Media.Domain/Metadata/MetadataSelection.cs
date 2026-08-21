@@ -39,8 +39,8 @@ public sealed record MetadataSelection
 
         return new MetadataSelection(
             trimmedDisplayName,
-            authorIds.Distinct().ToArray(),
+            Array.AsReadOnly(authorIds.Distinct().ToArray()),
             seriesId,
-            tagIds.Distinct().ToArray());
+            Array.AsReadOnly(tagIds.Distinct().ToArray()));
     }
 }
