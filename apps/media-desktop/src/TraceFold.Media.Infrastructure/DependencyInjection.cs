@@ -5,7 +5,9 @@ using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
+using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Application.Settings;
+using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Infrastructure.Filesystem;
 using TraceFold.Media.Infrastructure.Paths;
@@ -42,9 +44,13 @@ public static class DependencyInjection
             provider.GetRequiredService<EfTaxonomyStore>());
         services.AddSingleton<IMetadataStore, EfMetadataStore>();
         services.AddSingleton<ILibraryQueryStore, EfLibraryQueryStore>();
+        services.AddSingleton<IPreviewPathStore, EfPreviewPathStore>();
+        services.AddSingleton<IFileHasher, Sha256FileHasher>();
+        services.AddSingleton<IControlledMediaStorage, ControlledMediaStorage>();
         services.AddSingleton<MetadataEditorService>();
         services.AddSingleton<TaxonomyService>();
         services.AddSingleton<LibraryQueryService>();
+        services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IScanPreferencesStore, EfScanPreferencesStore>();
         services.AddSingleton<ScanPreferencesService>();
         services.AddSingleton<IScanPreferencesService>(provider =>
