@@ -9,6 +9,7 @@
     <Project Path="tests/TraceFold.Media.Application.Tests/TraceFold.Media.Application.Tests.csproj" />
     <Project Path="tests/TraceFold.Media.Architecture.Tests/TraceFold.Media.Architecture.Tests.csproj" />
     <Project Path="tests/TraceFold.Media.Desktop.Tests/TraceFold.Media.Desktop.Tests.csproj" />
+    <Project Path="tests/TraceFold.Media.Domain.Tests/TraceFold.Media.Domain.Tests.csproj" />
     <Project Path="tests/TraceFold.Media.Infrastructure.Tests/TraceFold.Media.Infrastructure.Tests.csproj" />
   </Folder>
 </Solution>
