@@ -1,0 +1,61 @@
+<Page
+    x:Class="TraceFold.Media.Desktop.Shell.ShellPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid x:Name="ShellRoot" RowDefinitions="Auto,*">
+        <InfoBar
+            x:Name="StartupInfoBar"
+            Margin="12,12,12,0"
+            AutomationProperties.AutomationId="StartupInfoBar"
+            IsClosable="False"
+            IsOpen="{x:Bind ViewModel.IsStartupInfoBarOpen, Mode=OneWay}"
+            Message="{x:Bind ViewModel.StartupMessage, Mode=OneWay}" />
+
+        <NavigationView
+            x:Name="Navigation"
+            Grid.Row="1"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="False"
+            IsTitleBarAutoPaddingEnabled="False"
+            PaneDisplayMode="Left"
+            SelectionChanged="OnSelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem
+                    AutomationProperties.AutomationId="NavInbox"
+                    Content="待入库"
+                    Icon="Folder"
+                    Tag="inbox" />
+                <NavigationViewItem
+                    AutomationProperties.AutomationId="NavLibrary"
+                    Content="正式文件库"
+                    Icon="Library"
+                    Tag="library" />
+                <NavigationViewItem
+                    AutomationProperties.AutomationId="NavTaxonomy"
+                    Content="词表管理"
+                    Icon="Bullets"
+                    Tag="taxonomy" />
+                <NavigationViewItem
+                    AutomationProperties.AutomationId="NavSettings"
+                    Content="设置"
+                    Icon="Setting"
+                    Tag="settings" />
+            </NavigationView.MenuItems>
+
+            <Grid ColumnDefinitions="*,320">
+                <Frame x:Name="ContentFrame" />
+                <Border
+                    Grid.Column="1"
+                    Padding="20"
+                    AutomationProperties.AutomationId="InspectorPane"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1,0,0,0">
+                    <StackPanel Spacing="12">
+                        <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="资料" />
+                        <TextBlock Text="选择媒体后在这里查看资料。" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </NavigationView>
+    </Grid>
+</Page>
