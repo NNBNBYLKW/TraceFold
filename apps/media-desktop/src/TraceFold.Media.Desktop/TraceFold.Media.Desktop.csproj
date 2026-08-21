@@ -28,4 +28,23 @@
     <ProjectReference Include="..\TraceFold.Media.Application\TraceFold.Media.Application.csproj" />
     <ProjectReference Include="..\TraceFold.Media.Infrastructure\TraceFold.Media.Infrastructure.csproj" />
   </ItemGroup>
+  <Target
+    Name="AddWinUiXamlToPublish"
+    AfterTargets="ComputeResolvedFilesToPublishList"
+    DependsOnTargets="AddProcessedXamlFilesToCopyLocal">
+    <ItemGroup>
+      <ResolvedFileToPublish
+        Include="@(_ProcessedXamlFilesToCopyLocalWithTargetPath)"
+        Condition="'%(Extension)' == '.xbf'">
+        <RelativePath>%(_ProcessedXamlFilesToCopyLocalWithTargetPath.TargetPath)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish
+        Include="$(ProjectPriFullPath)"
+        Condition="Exists('$(ProjectPriFullPath)')">
+        <RelativePath>$(ProjectPriFileName)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 </Project>
