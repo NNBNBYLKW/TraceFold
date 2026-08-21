@@ -12,7 +12,8 @@ public sealed class ScanInboxService(
     IInboxActivityNotifier activity,
     TimeProvider timeProvider,
     IApplicationLifetimeToken lifetime,
-    ILogger<ScanInboxService> logger) : IInboxScanner
+    ILogger<ScanInboxService> logger,
+    IScanPreferencesStore? scanPreferencesStore = null) : IInboxScanner
 {
     private readonly object _sync = new();
     private Task<ScanResult>? _activeScan;
@@ -35,7 +36,29 @@ public sealed class ScanInboxService(
         await Task.Yield();
         try
         {
-            return await RunCoreAsync(trigger, lifetime.ApplicationStopping);
+            ScanResult result =
+                await RunCoreAsync(trigger, lifetime.ApplicationStopping);
+            if (scanPreferencesStore is not null)
+            {
+                try
+                {
+                    await scanPreferencesStore.SaveLastScanAsync(
+                        result.CompletedAtUtc,
+                        result.Message,
+                        lifetime.ApplicationStopping);
+                }
+                catch (OperationCanceledException)
+                    when (lifetime.ApplicationStopping.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception error)
+                {
+                    logger.LogError(error, "ScanResultPersistenceFailed");
+                }
+            }
+
+            return result;
         }
         finally
         {

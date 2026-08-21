@@ -71,9 +71,27 @@ public sealed class ScanInboxServiceTests
         Assert.Equal(InboxItemState.ReadyToTag, existing.State);
     }
 
+    [Fact]
+    public async Task Completed_scan_persists_the_exact_result_timestamp_and_summary()
+    {
+        var preferences = new RecordingScanPreferencesStore();
+        ScanInboxService service = CreateService(
+            new InMemoryInboxScanStore(),
+            new SnapshotCatalog(Snapshot("C:/inbox/photo.jpg", 10, Instant)),
+            preferences);
+
+        ScanResult result = await service.ScanAsync(
+            ScanTrigger.Manual,
+            CancellationToken.None);
+
+        Assert.Equal(result.CompletedAtUtc, preferences.LastScanAtUtc);
+        Assert.Equal(result.Message, preferences.LastScanSummary);
+    }
+
     private static ScanInboxService CreateService(
         IInboxScanStore store,
-        IInboxFileCatalog catalog)
+        IInboxFileCatalog catalog,
+        IScanPreferencesStore? preferences = null)
     {
         var settings = new DirectorySettingsService(
             new AlwaysValidDirectoryProbe(),
@@ -88,7 +106,8 @@ public sealed class ScanInboxServiceTests
             new RecordingActivityNotifier(),
             new FixedTimeProvider(Instant),
             new NeverStoppingLifetimeToken(),
-            NullLogger<ScanInboxService>.Instance);
+            NullLogger<ScanInboxService>.Instance,
+            preferences);
     }
 
     private static FileSnapshot Snapshot(
@@ -284,5 +303,30 @@ public sealed class ScanInboxServiceTests
     private sealed class NeverStoppingLifetimeToken : IApplicationLifetimeToken
     {
         public CancellationToken ApplicationStopping => CancellationToken.None;
+    }
+
+    private sealed class RecordingScanPreferencesStore : IScanPreferencesStore
+    {
+        public DateTimeOffset? LastScanAtUtc { get; private set; }
+
+        public string? LastScanSummary { get; private set; }
+
+        public Task<ScanPreferences> LoadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ScanPreferences.Default);
+
+        public Task<ScanPreferenceStoreResult> SaveAutoScanEnabledAsync(
+            bool enabled,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task SaveLastScanAsync(
+            DateTimeOffset completedAtUtc,
+            string summary,
+            CancellationToken cancellationToken)
+        {
+            LastScanAtUtc = completedAtUtc;
+            LastScanSummary = summary;
+            return Task.CompletedTask;
+        }
     }
 }

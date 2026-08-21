@@ -33,6 +33,10 @@ public static class DependencyInjection
         services.AddSingleton<IDirectoryProbe, LocalDirectoryProbe>();
         services.AddSingleton<IInboxFileCatalog, LocalInboxFileCatalog>();
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
+        services.AddSingleton<IScanPreferencesStore, EfScanPreferencesStore>();
+        services.AddSingleton<ScanPreferencesService>();
+        services.AddSingleton<IScanPreferencesService>(provider =>
+            provider.GetRequiredService<ScanPreferencesService>());
         services.AddSingleton<IInboxGroupingRule, Mp4M4aGroupingRule>();
         services.AddSingleton<IInboxGroupingRule, DirectMediaGroupingRule>();
         services.AddSingleton<CandidateGroupingService>();
@@ -43,6 +47,7 @@ public static class DependencyInjection
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IApplicationLifetimeToken, HostApplicationLifetimeToken>();
         services.AddHostedService<CandidateStabilityWorker>();
+        services.AddHostedService<AutomaticInboxScanWorker>();
         services.AddSingleton<IDatabaseInitializer, DatabaseInitializer>();
         return services;
     }
