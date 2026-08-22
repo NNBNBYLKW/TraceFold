@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($PackageDirectory)) {
-    $PackageDirectory = Join-Path $repoRoot 'dist\TraceFold-MediaDesktop-Stage1-win-x64'
+    $PackageDirectory = Join-Path $repoRoot 'dist\TraceFold-MediaDesktop-Stage2-win-x64'
 }
 $packageRoot = [IO.Path]::GetFullPath($PackageDirectory)
 $exePath = [IO.Path]::GetFullPath((Join-Path $packageRoot 'TraceFold.Media.exe'))
@@ -21,6 +21,11 @@ $oldDataRoot = $env:TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT
 $primary = $null
 $secondary = $null
 $fatalLaunch = $null
+$probeProcess = $null
+$probeToken = [Guid]::NewGuid().ToString('D')
+$probeName = "tracefold-media-desktop-stage2-probe-$([Guid]::NewGuid().ToString('N'))"
+$probeRoot = [IO.Path]::GetFullPath((Join-Path $tempBase $probeName))
+$probeMarker = Join-Path $probeRoot 'probe-owner.txt'
 
 function Get-BrowserProcessIds {
     return @(Get-Process -Name 'msedge', 'chrome' -ErrorAction SilentlyContinue |
@@ -91,7 +96,7 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath (Join-Path $tempRoot 'media-desktop.db') -PathType Leaf)) {
-        throw 'Stage-1 database was not created under the smoke root.'
+        throw 'Stage 2 database was not created under the smoke root.'
     }
     $logs = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'logs') -File -Filter 'tracefold-*.log')
     if ($logs.Count -eq 0) {
@@ -99,7 +104,7 @@ try {
     }
 
     $env:TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT = 'relative-invalid-smoke-root'
-    $fatalLaunch = Start-Process -FilePath $exePath -PassThru -WindowStyle Normal
+    $fatalLaunch = Start-Process -FilePath $exePath -PassThru -WindowStyle Hidden
     if (-not $fatalLaunch.WaitForExit(10000)) {
         throw 'Invalid configuration left a headless primary process running.'
     }
@@ -107,10 +112,45 @@ try {
         throw 'Invalid configuration did not produce a failing process exit code.'
     }
 
+    New-Item -ItemType Directory -Path $probeRoot | Out-Null
+    [IO.File]::WriteAllText($probeMarker, $probeToken)
+    $probeArguments = @(
+        '--stage2-package-probe-root',
+        ('"{0}"' -f $probeRoot),
+        '--stage2-package-probe-token',
+        $probeToken)
+    $probeProcess = Start-Process `
+        -FilePath $exePath `
+        -ArgumentList $probeArguments `
+        -PassThru `
+        -WindowStyle Hidden
+    if (-not $probeProcess.WaitForExit(30000)) {
+        throw 'Stage 2 package probe did not exit within 30 seconds.'
+    }
+    if ($probeProcess.ExitCode -ne 0) {
+        throw "Stage 2 package probe failed with exit code $($probeProcess.ExitCode)."
+    }
+
+    $probeResultPath = Join-Path $probeRoot 'stage2-probe-result.json'
+    if (-not (Test-Path -LiteralPath $probeResultPath -PathType Leaf)) {
+        throw 'Stage 2 package probe result is missing.'
+    }
+    $result = Get-Content -LiteralPath $probeResultPath -Raw | ConvertFrom-Json
+    if (-not $result.Succeeded) {
+        throw 'Stage 2 package probe reported failure.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\probe.png')) {
+        throw 'Probe source was not removed after verified ingest.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $probeRoot 'library\probe.png'))) {
+        throw 'Probe formal file is missing.'
+    }
+
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
+    Write-Output 'PASS: Stage 2 packaged scan, metadata, and ordinary ingest flow verified'
 }
 finally {
-    @($fatalLaunch, $secondary, $primary) |
+    @($probeProcess, $fatalLaunch, $secondary, $primary) |
         Where-Object { $null -ne $_ } |
         ForEach-Object {
             try {
@@ -132,6 +172,13 @@ finally {
 
     $tempPrefix = $tempBase.TrimEnd([IO.Path]::DirectorySeparatorChar) +
         [IO.Path]::DirectorySeparatorChar
+    if ($probeRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+        [IO.Path]::GetFileName($probeRoot) -eq $probeName -and
+        $probeName.StartsWith('tracefold-media-desktop-stage2-probe-', [StringComparison]::Ordinal) -and
+        (Test-Path -LiteralPath $probeMarker -PathType Leaf) -and
+        [IO.File]::ReadAllText($probeMarker) -eq $probeToken) {
+        Remove-Item -LiteralPath $probeRoot -Recurse -Force
+    }
     if ($tempRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
         [IO.Path]::GetFileName($tempRoot) -eq $smokeName -and
         (Test-Path -LiteralPath $tempRoot)) {

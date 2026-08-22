@@ -40,7 +40,7 @@ git rev-parse --git-common-dir
 - [ ] Restore from available local caches and prove the Stage 1 baseline before changing code:
 
 ~~~powershell
-dotnet restore apps/media-desktop/TraceFold.MediaDesktop.slnx --disable-build-servers --ignore-failed-sources
+dotnet restore apps/media-desktop/TraceFold.MediaDesktop.slnx --source apps/media-desktop/.packages --disable-build-servers --ignore-failed-sources
 dotnet build apps/media-desktop/TraceFold.MediaDesktop.slnx -c Release --no-restore --disable-build-servers
 dotnet test apps/media-desktop/TraceFold.MediaDesktop.slnx -c Release --no-build --no-restore --disable-build-servers
 ~~~
