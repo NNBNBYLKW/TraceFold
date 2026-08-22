@@ -118,8 +118,7 @@ public sealed class MetadataEditorViewModelTests
             TimeSpan delay,
             CancellationToken cancellationToken)
         {
-            var completion = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+            var completion = new TaskCompletionSource();
             CancellationTokenRegistration registration = cancellationToken.Register(
                 () => completion.TrySetCanceled(cancellationToken));
             _delays.Add(new ScheduledDelay(

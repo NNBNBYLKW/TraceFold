@@ -41,7 +41,53 @@ function Get-PackageProcesses {
             catch {
                 $false
             }
-        })
+    })
+}
+
+function Assert-DirectTempChild {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $ExpectedName
+    )
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $parent = [IO.Path]::TrimEndingDirectorySeparator(
+        [IO.Path]::GetDirectoryName($fullPath))
+    $temp = [IO.Path]::TrimEndingDirectorySeparator($tempBase)
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals($parent, $temp) -or
+        -not [StringComparer]::Ordinal.Equals(
+            [IO.Path]::GetFileName($fullPath),
+            $ExpectedName)) {
+        throw "Unsafe smoke cleanup root: $fullPath"
+    }
+}
+
+function Assert-NoReparseTree {
+    param([Parameter(Mandatory)][string] $Path)
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing a reparse-point cleanup root: $Path"
+    }
+    if (-not $item.PSIsContainer) {
+        return
+    }
+
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($item.FullName)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [IO.File]::GetAttributes($entry)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing a reparse point below a cleanup root: $entry"
+            }
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                $pending.Push($entry)
+            }
+        }
+    }
 }
 
 $preExistingProcesses = @(Get-PackageProcesses)
@@ -88,30 +134,6 @@ try {
         throw "Application opened a browser process: $($newBrowserIds -join ', ')"
     }
 
-    if (-not $primary.CloseMainWindow()) {
-        throw 'Primary native window did not accept CloseMainWindow.'
-    }
-    if (-not $primary.WaitForExit(10000)) {
-        throw 'Primary process did not exit cleanly within 10 seconds.'
-    }
-
-    if (-not (Test-Path -LiteralPath (Join-Path $tempRoot 'media-desktop.db') -PathType Leaf)) {
-        throw 'Stage 2 database was not created under the smoke root.'
-    }
-    $logs = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'logs') -File -Filter 'tracefold-*.log')
-    if ($logs.Count -eq 0) {
-        throw 'No rolling log was created under the smoke root.'
-    }
-
-    $env:TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT = 'relative-invalid-smoke-root'
-    $fatalLaunch = Start-Process -FilePath $exePath -PassThru -WindowStyle Hidden
-    if (-not $fatalLaunch.WaitForExit(10000)) {
-        throw 'Invalid configuration left a headless primary process running.'
-    }
-    if ($fatalLaunch.ExitCode -eq 0) {
-        throw 'Invalid configuration did not produce a failing process exit code.'
-    }
-
     New-Item -ItemType Directory -Path $probeRoot | Out-Null
     [IO.File]::WriteAllText($probeMarker, $probeToken)
     $probeArguments = @(
@@ -146,6 +168,35 @@ try {
         throw 'Probe formal file is missing.'
     }
 
+    $packageProcesses = @(Get-PackageProcesses)
+    if ($packageProcesses.Count -ne 1 -or $primary.Id -notin $packageProcesses.Id) {
+        throw 'The package probe interfered with the running primary instance.'
+    }
+
+    if (-not $primary.CloseMainWindow()) {
+        throw 'Primary native window did not accept CloseMainWindow.'
+    }
+    if (-not $primary.WaitForExit(10000)) {
+        throw 'Primary process did not exit cleanly within 10 seconds.'
+    }
+
+    if (-not (Test-Path -LiteralPath (Join-Path $tempRoot 'media-desktop.db') -PathType Leaf)) {
+        throw 'Stage 2 database was not created under the smoke root.'
+    }
+    $logs = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'logs') -File -Filter 'tracefold-*.log')
+    if ($logs.Count -eq 0) {
+        throw 'No rolling log was created under the smoke root.'
+    }
+
+    $env:TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT = 'relative-invalid-smoke-root'
+    $fatalLaunch = Start-Process -FilePath $exePath -PassThru -WindowStyle Hidden
+    if (-not $fatalLaunch.WaitForExit(10000)) {
+        throw 'Invalid configuration left a headless primary process running.'
+    }
+    if ($fatalLaunch.ExitCode -eq 0) {
+        throw 'Invalid configuration did not produce a failing process exit code.'
+    }
+
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
     Write-Output 'PASS: Stage 2 packaged scan, metadata, and ordinary ingest flow verified'
 }
@@ -170,18 +221,19 @@ finally {
         $env:TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT = $oldDataRoot
     }
 
-    $tempPrefix = $tempBase.TrimEnd([IO.Path]::DirectorySeparatorChar) +
-        [IO.Path]::DirectorySeparatorChar
-    if ($probeRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
-        [IO.Path]::GetFileName($probeRoot) -eq $probeName -and
-        $probeName.StartsWith('tracefold-media-desktop-stage2-probe-', [StringComparison]::Ordinal) -and
-        (Test-Path -LiteralPath $probeMarker -PathType Leaf) -and
-        [IO.File]::ReadAllText($probeMarker) -eq $probeToken) {
+    Assert-DirectTempChild -Path $probeRoot -ExpectedName $probeName
+    if ((Test-Path -LiteralPath $probeRoot) -and
+        $probeName.StartsWith('tracefold-media-desktop-stage2-probe-', [StringComparison]::Ordinal)) {
+        Assert-NoReparseTree -Path $probeRoot
+        if (-not (Test-Path -LiteralPath $probeMarker -PathType Leaf) -or
+            [IO.File]::ReadAllText($probeMarker) -ne $probeToken) {
+            throw 'Probe cleanup ownership marker is missing or changed.'
+        }
         Remove-Item -LiteralPath $probeRoot -Recurse -Force
     }
-    if ($tempRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
-        [IO.Path]::GetFileName($tempRoot) -eq $smokeName -and
-        (Test-Path -LiteralPath $tempRoot)) {
+    Assert-DirectTempChild -Path $tempRoot -ExpectedName $smokeName
+    if (Test-Path -LiteralPath $tempRoot) {
+        Assert-NoReparseTree -Path $tempRoot
         Remove-Item -LiteralPath $tempRoot -Recurse -Force
     }
 }

@@ -22,8 +22,10 @@ public sealed record Stage2PackageProbeOptions(
     public const string RootNamePrefix =
         "tracefold-media-desktop-stage2-probe-";
 
-    private static readonly string[] ReservedDirectories =
-        ["data", "inbox", "library", "work"];
+    public const string ResultFilename = "stage2-probe-result.json";
+
+    private static readonly string[] ReservedEntries =
+        ["data", "inbox", "library", "work", ResultFilename];
 
     public static Stage2PackageProbeOptionResult Parse(
         IReadOnlyList<string> arguments)
@@ -105,7 +107,7 @@ public sealed record Stage2PackageProbeOptions(
                 return Invalid("probe.owner_mismatch");
             }
 
-            if (ReservedDirectories.Any(name =>
+            if (ReservedEntries.Any(name =>
                 File.Exists(Path.Combine(root, name))
                 || Directory.Exists(Path.Combine(root, name))))
             {

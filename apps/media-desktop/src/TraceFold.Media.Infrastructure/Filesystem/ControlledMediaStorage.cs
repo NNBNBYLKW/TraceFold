@@ -175,25 +175,68 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
             return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
         }
 
-        string actualHash;
+        string quarantine = ControlledPathGuard.RequireDirectChild(
+            folders.InboxDirectory,
+            Path.Combine(
+                folders.InboxDirectory,
+                $".tracefold-delete-{Guid.NewGuid():N}.tmp"));
+        RejectReparsePoint(
+            folders.InboxDirectory,
+            quarantine,
+            includeCandidate: false);
         try
         {
-            actualHash = await hasher.ComputeSha256Async(source, cancellationToken);
+            File.Move(source, quarantine, overwrite: false);
         }
         catch (FileNotFoundException)
         {
             return new SourceDeleteResult(SourceDeleteOutcome.SourceMissing);
         }
-
-        if (!StringComparer.OrdinalIgnoreCase.Equals(actualHash, expectedHash)
-            || !File.Exists(source)
-            || new FileInfo(source).Length != expectedSize)
+        catch (DirectoryNotFoundException)
         {
-            return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
+            return new SourceDeleteResult(SourceDeleteOutcome.SourceMissing);
         }
 
-        File.Delete(source);
-        return new SourceDeleteResult(SourceDeleteOutcome.Deleted);
+        try
+        {
+            RejectReparsePoint(
+                folders.InboxDirectory,
+                quarantine,
+                includeCandidate: true);
+            if (new FileInfo(quarantine).Length != expectedSize)
+            {
+                return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
+            }
+
+            string actualHash = await hasher.ComputeSha256Async(
+                quarantine,
+                cancellationToken);
+            if (!StringComparer.OrdinalIgnoreCase.Equals(actualHash, expectedHash)
+                || !File.Exists(quarantine)
+                || new FileInfo(quarantine).Length != expectedSize)
+            {
+                return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
+            }
+
+            File.Delete(quarantine);
+            return new SourceDeleteResult(SourceDeleteOutcome.Deleted);
+        }
+        finally
+        {
+            if (File.Exists(quarantine) && !File.Exists(source))
+            {
+                try
+                {
+                    File.Move(quarantine, source, overwrite: false);
+                }
+                catch (IOException) when (File.Exists(source))
+                {
+                    // A new inbox file won the name while the verified original
+                    // was quarantined. Keep the .tmp recovery copy rather than
+                    // deleting either file.
+                }
+            }
+        }
     }
 
     public async Task<bool> VerifyCommittedAsync(

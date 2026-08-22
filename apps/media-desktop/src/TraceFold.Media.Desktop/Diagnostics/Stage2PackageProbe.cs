@@ -58,6 +58,7 @@ public static class Stage2PackageProbe
         Directory.CreateDirectory(inbox);
         Directory.CreateDirectory(library);
         Directory.CreateDirectory(work);
+        ValidateOwnedProbeTree(options, data, inbox, library, work);
 
         using IHost host = Host.CreateDefaultBuilder([])
             .ConfigureServices(services =>
@@ -131,7 +132,8 @@ public static class Stage2PackageProbe
                 "probe.display_name_missing");
 
             await WriteResultAsync(
-                options.Root,
+                options,
+                [data, inbox, library, work],
                 new Stage2PackageProbeResult(
                     true,
                     "inbox/probe.png",
@@ -149,7 +151,8 @@ public static class Stage2PackageProbe
         catch (ProbeFailureException error)
         {
             await WriteResultAsync(
-                options.Root,
+                options,
+                [data, inbox, library, work],
                 new Stage2PackageProbeResult(
                     false,
                     null,
@@ -163,7 +166,8 @@ public static class Stage2PackageProbe
         catch
         {
             await WriteResultAsync(
-                options.Root,
+                options,
+                [data, inbox, library, work],
                 new Stage2PackageProbeResult(
                     false,
                     null,
@@ -189,15 +193,86 @@ public static class Stage2PackageProbe
     }
 
     private static async Task WriteResultAsync(
-        string root,
+        Stage2PackageProbeOptions options,
+        IReadOnlyList<string> directories,
         Stage2PackageProbeResult result,
         CancellationToken cancellationToken)
     {
-        string resultPath = Path.Combine(root, "stage2-probe-result.json");
-        string json = JsonSerializer.Serialize(
+        ValidateOwnedProbeTree(options, [.. directories]);
+        string resultPath = Path.Combine(
+            options.Root,
+            Stage2PackageProbeOptions.ResultFilename);
+        await using var output = new FileStream(
+            resultPath,
+            new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous
+            });
+        await JsonSerializer.SerializeAsync(
+            output,
             result,
-            new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(resultPath, json, cancellationToken);
+            new JsonSerializerOptions { WriteIndented = true },
+            cancellationToken);
+        await output.FlushAsync(cancellationToken);
+        output.Flush(flushToDisk: true);
+    }
+
+    private static void ValidateOwnedProbeTree(
+        Stage2PackageProbeOptions options,
+        params string[] directories)
+    {
+        ValidateRootOwnership(options);
+
+        foreach (string directory in directories)
+        {
+            string fullPath = Path.GetFullPath(directory);
+            if (!StringComparer.OrdinalIgnoreCase.Equals(
+                    Path.GetDirectoryName(fullPath),
+                    options.Root)
+                || !Directory.Exists(fullPath)
+                || File.GetAttributes(fullPath).HasFlag(FileAttributes.ReparsePoint))
+            {
+                throw new IOException("The package probe directory is not safe.");
+            }
+        }
+
+        string resultPath = Path.Combine(
+            options.Root,
+            Stage2PackageProbeOptions.ResultFilename);
+        if (File.Exists(resultPath) || Directory.Exists(resultPath))
+        {
+            throw new IOException("The package probe result already exists.");
+        }
+    }
+
+    private static void ValidateRootOwnership(Stage2PackageProbeOptions options)
+    {
+        string root = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(options.Root));
+        string temp = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(Path.GetTempPath()));
+        string? parent = Path.GetDirectoryName(root);
+        string ownerPath = Path.Combine(root, "probe-owner.txt");
+        if (parent is null
+            || !StringComparer.OrdinalIgnoreCase.Equals(
+                Path.TrimEndingDirectorySeparator(parent),
+                temp)
+            || !Path.GetFileName(root).StartsWith(
+                Stage2PackageProbeOptions.RootNamePrefix,
+                StringComparison.OrdinalIgnoreCase)
+            || !Directory.Exists(root)
+            || File.GetAttributes(root).HasFlag(FileAttributes.ReparsePoint)
+            || !File.Exists(ownerPath)
+            || File.GetAttributes(ownerPath).HasFlag(FileAttributes.ReparsePoint)
+            || !StringComparer.Ordinal.Equals(
+                File.ReadAllText(ownerPath),
+                options.TokenText))
+        {
+            throw new IOException("The package probe root ownership changed.");
+        }
     }
 
     private static void Require(bool condition, string errorCode)

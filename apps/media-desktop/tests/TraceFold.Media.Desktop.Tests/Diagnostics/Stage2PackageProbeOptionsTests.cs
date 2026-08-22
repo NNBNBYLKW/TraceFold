@@ -73,6 +73,28 @@ public sealed class Stage2PackageProbeOptionsTests
         Assert.Equal("probe.root_not_empty", result.ErrorCode);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Parse_rejects_preexisting_probe_result_entry(bool directory)
+    {
+        using ProbeRoot root = ProbeRoot.Create();
+        string resultPath = Path.Combine(root.Path, "stage2-probe-result.json");
+        if (directory)
+        {
+            Directory.CreateDirectory(resultPath);
+        }
+        else
+        {
+            File.WriteAllText(resultPath, "do-not-overwrite");
+        }
+
+        Stage2PackageProbeOptionResult result = Parse(root.Path, root.TokenText);
+
+        Assert.Equal(Stage2PackageProbeOptionState.Invalid, result.State);
+        Assert.Equal("probe.root_not_empty", result.ErrorCode);
+    }
+
     [Fact]
     public void Parse_rejects_partial_or_extra_probe_arguments()
     {

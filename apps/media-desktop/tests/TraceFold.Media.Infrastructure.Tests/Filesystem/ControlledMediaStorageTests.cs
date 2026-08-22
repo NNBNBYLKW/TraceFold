@@ -8,6 +8,38 @@ namespace TraceFold.Media.Infrastructure.Tests.Filesystem;
 public sealed class ControlledMediaStorageTests
 {
     [Fact]
+    public async Task DeleteSourceIfMatchesAsync_never_deletes_same_size_replacement_created_during_verification()
+    {
+        using var folders = TestMediaFolders.Create();
+        string source = folders.WriteInbox("photo.jpg", [1, 2, 3]);
+        var realHasher = new Sha256FileHasher();
+        string originalHash = await realHasher.ComputeSha256Async(
+            source,
+            TestContext.Current.CancellationToken);
+        byte[] replacement = [9, 9, 9];
+        var storage = new ControlledMediaStorage(
+            new ReplacingHasher(source, replacement, originalHash));
+
+        SourceDeleteResult result = await storage.DeleteSourceIfMatchesAsync(
+            folders.Value,
+            source,
+            expectedSize: 3,
+            expectedSha256: originalHash,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(SourceDeleteOutcome.Deleted, result.Outcome);
+        Assert.True(File.Exists(source));
+        Assert.Equal(
+            replacement,
+            await File.ReadAllBytesAsync(
+                source,
+                TestContext.Current.CancellationToken));
+        Assert.Empty(Directory.EnumerateFiles(
+            folders.Inbox,
+            ".tracefold-delete-*.tmp"));
+    }
+
+    [Fact]
     public async Task DeleteSourceIfMatchesAsync_never_deletes_changed_source()
     {
         using var folders = TestMediaFolders.Create();
@@ -217,5 +249,22 @@ public sealed class ControlledMediaStorageTests
         Assert.False(File.Exists(selectedTemporary));
         Assert.True(Directory.Exists(siblingDirectory));
         Assert.True(File.Exists(siblingTemporary));
+    }
+
+    private sealed class ReplacingHasher(
+        string sourcePath,
+        byte[] replacement,
+        string originalHash) : IFileHasher
+    {
+        public async Task<string> ComputeSha256Async(
+            string fullPath,
+            CancellationToken cancellationToken)
+        {
+            await File.WriteAllBytesAsync(
+                sourcePath,
+                replacement,
+                cancellationToken);
+            return originalHash;
+        }
     }
 }
