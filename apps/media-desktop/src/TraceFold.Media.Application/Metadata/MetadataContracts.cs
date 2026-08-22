@@ -85,3 +85,25 @@ public interface ITaxonomyStore
         Guid id,
         CancellationToken cancellationToken);
 }
+
+public interface ITaxonomyService
+{
+    Task<IReadOnlyList<TaxonomyTermDto>> SearchAsync(
+        TaxonomyKind kind,
+        string? query,
+        CancellationToken cancellationToken);
+
+    Task<TaxonomyTermDto> CreateAsync(
+        TaxonomyKind kind,
+        string name,
+        CancellationToken cancellationToken);
+
+    Task<TaxonomyMutationResult> RenameAsync(
+        Guid id,
+        string name,
+        CancellationToken cancellationToken);
+
+    Task<TaxonomyMutationResult> DeleteAsync(
+        Guid id,
+        CancellationToken cancellationToken);
+}

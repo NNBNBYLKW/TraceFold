@@ -1,0 +1,46 @@
+<UserControl
+    x:Class="TraceFold.Media.Desktop.Controls.TaxonomyPickerControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Spacing="6">
+        <AutoSuggestBox
+            x:Name="SearchBox"
+            ItemsSource="{x:Bind ViewModel.Suggestions, Mode=OneWay}"
+            PlaceholderText="输入名称后按 Enter"
+            QuerySubmitted="OnQuerySubmitted"
+            Text="{x:Bind ViewModel.QueryText, Mode=TwoWay}"
+            TextChanged="OnTextChanged">
+            <AutoSuggestBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding DisplayName}" />
+                </DataTemplate>
+            </AutoSuggestBox.ItemTemplate>
+        </AutoSuggestBox>
+        <ItemsControl ItemsSource="{x:Bind ViewModel.SelectedTerms, Mode=OneWay}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border
+                        Margin="0,2,0,0"
+                        Padding="8,4"
+                        Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                        CornerRadius="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Text="{Binding DisplayName}"
+                                TextTrimming="CharacterEllipsis" />
+                            <Button
+                                Grid.Column="1"
+                                Margin="8,0,0,0"
+                                Click="OnRemoveClicked"
+                                Content="&#xE711;"
+                                FontFamily="Segoe Fluent Icons"
+                                Style="{StaticResource TextBlockButtonStyle}"
+                                Tag="{Binding}" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </StackPanel>
+</UserControl>

@@ -32,6 +32,8 @@ public static class DependencyInjection
         services.AddSingleton<IMetadataEditorService>(provider =>
             provider.GetRequiredService<MetadataEditorService>());
         services.AddSingleton<TaxonomyService>();
+        services.AddSingleton<ITaxonomyService>(provider =>
+            provider.GetRequiredService<TaxonomyService>());
         services.AddSingleton<LibraryQueryService>();
         services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IMediaPreviewResolver>(provider =>

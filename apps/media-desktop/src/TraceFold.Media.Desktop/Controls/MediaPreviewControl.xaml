@@ -1,0 +1,50 @@
+<UserControl
+    x:Class="TraceFold.Media.Desktop.Controls.MediaPreviewControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Border
+        MinHeight="220"
+        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+        BorderThickness="1"
+        CornerRadius="8">
+        <Grid>
+            <Image
+                x:Name="ImagePreview"
+                ImageFailed="OnImageFailed"
+                Stretch="Uniform"
+                Visibility="Collapsed" />
+            <MediaPlayerElement
+                x:Name="VideoPreview"
+                AreTransportControlsEnabled="True"
+                AutoPlay="False"
+                Visibility="Collapsed" />
+            <StackPanel
+                x:Name="FallbackPanel"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                MaxWidth="260"
+                Spacing="10">
+                <FontIcon
+                    x:Name="FallbackIcon"
+                    HorizontalAlignment="Center"
+                    FontSize="36"
+                    Glyph="&#xEB9F;" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="选择媒体以查看预览"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    x:Name="FailureMessage"
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="无法预览此文件，但仍可安全入库。"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap"
+                    Visibility="Collapsed" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

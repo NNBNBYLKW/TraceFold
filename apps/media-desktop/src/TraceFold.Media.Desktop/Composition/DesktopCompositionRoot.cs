@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.UI.Dispatching;
 using Serilog;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Settings;
@@ -29,8 +30,16 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<IStartupCoordinator, StartupCoordinator>();
                 services.AddSingleton<WindowContext>();
                 services.AddSingleton<IFolderPicker, WindowsFolderPicker>();
+                services.AddSingleton<IDebounceScheduler, ProductionDebounceScheduler>();
+                services.AddSingleton<IUiDispatcher>(_ => new DispatcherQueueAdapter(
+                    DispatcherQueue.GetForCurrentThread()
+                    ?? throw new InvalidOperationException(
+                        "The desktop UI dispatcher is unavailable.")));
                 services.AddSingleton<ShellViewModel>();
                 services.AddSingleton<SettingsViewModel>();
+                services.AddSingleton<MetadataEditorViewModel>();
+                services.AddSingleton<InboxInspectorViewModel>();
+                services.AddSingleton<InboxViewModel>();
                 services.AddSingleton<InboxPage>();
                 services.AddSingleton<LibraryPage>();
                 services.AddSingleton<TaxonomyPage>();

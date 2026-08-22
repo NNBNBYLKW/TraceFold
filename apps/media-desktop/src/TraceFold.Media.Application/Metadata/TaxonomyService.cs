@@ -2,7 +2,7 @@ using TraceFold.Media.Domain.Metadata;
 
 namespace TraceFold.Media.Application.Metadata;
 
-public sealed class TaxonomyService(ITaxonomyStore store)
+public sealed class TaxonomyService(ITaxonomyStore store) : ITaxonomyService
 {
     public Task<IReadOnlyList<TaxonomyTermDto>> SearchAsync(
         TaxonomyKind kind,

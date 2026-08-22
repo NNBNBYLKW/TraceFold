@@ -42,20 +42,7 @@
                     Tag="settings" />
             </NavigationView.MenuItems>
 
-            <Grid ColumnDefinitions="*,320">
-                <Frame x:Name="ContentFrame" />
-                <Border
-                    Grid.Column="1"
-                    Padding="20"
-                    AutomationProperties.AutomationId="InspectorPane"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1,0,0,0">
-                    <StackPanel Spacing="12">
-                        <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="资料" />
-                        <TextBlock Text="选择媒体后在这里查看资料。" TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-            </Grid>
+            <Frame x:Name="ContentFrame" />
         </NavigationView>
     </Grid>
 </Page>
