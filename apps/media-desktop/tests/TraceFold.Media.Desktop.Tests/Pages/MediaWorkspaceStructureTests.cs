@@ -44,6 +44,33 @@ public sealed class MediaWorkspaceStructureTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Library_page_contains_id_based_workspace_without_delete_or_rename()
+    {
+        string xaml = await File.ReadAllTextAsync(
+            DesktopSource("Pages", "LibraryPage.xaml"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LibrarySearchBox\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LibraryGrid\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LibraryInspectorPane\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"RevealAssetButton\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("DeleteAsset", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("PhysicalFilename", xaml, StringComparison.Ordinal);
+    }
+
     private static string DesktopSource(
         string folder,
         string filename,

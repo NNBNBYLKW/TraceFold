@@ -26,3 +26,14 @@ public interface ILibraryQueryStore
         Guid assetId,
         CancellationToken cancellationToken);
 }
+
+public interface ILibraryQueryService
+{
+    Task<IReadOnlyList<LibraryAssetDto>> SearchAsync(
+        string? query,
+        CancellationToken cancellationToken);
+
+    Task<LibraryAssetDetailsDto?> GetDetailsAsync(
+        Guid assetId,
+        CancellationToken cancellationToken);
+}

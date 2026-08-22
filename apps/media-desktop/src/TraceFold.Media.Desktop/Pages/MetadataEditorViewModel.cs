@@ -39,6 +39,8 @@ public sealed partial class MetadataEditorViewModel(
 
     public ObservableCollection<TaxonomyTermDto> Tags { get; } = [];
 
+    public event Action<MetadataOwner>? Saved;
+
     public async Task LoadAsync(
         MetadataOwner owner,
         CancellationToken cancellationToken)
@@ -203,6 +205,7 @@ public sealed partial class MetadataEditorViewModel(
                 }
 
                 ErrorMessage = string.Empty;
+                Saved?.Invoke(owner);
                 return;
             }
 

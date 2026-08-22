@@ -35,6 +35,8 @@ public static class DependencyInjection
         services.AddSingleton<ITaxonomyService>(provider =>
             provider.GetRequiredService<TaxonomyService>());
         services.AddSingleton<LibraryQueryService>();
+        services.AddSingleton<ILibraryQueryService>(provider =>
+            provider.GetRequiredService<LibraryQueryService>());
         services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IMediaPreviewResolver>(provider =>
             provider.GetRequiredService<MediaPreviewResolver>());

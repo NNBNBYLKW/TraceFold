@@ -37,9 +37,13 @@ public static class DesktopCompositionRoot
                         "The desktop UI dispatcher is unavailable.")));
                 services.AddSingleton<ShellViewModel>();
                 services.AddSingleton<SettingsViewModel>();
-                services.AddSingleton<MetadataEditorViewModel>();
+                services.AddTransient<MetadataEditorViewModel>();
                 services.AddSingleton<InboxInspectorViewModel>();
                 services.AddSingleton<InboxViewModel>();
+                services.AddSingleton<LibraryInspectorViewModel>();
+                services.AddSingleton<LibraryViewModel>();
+                services.AddSingleton<IProcessStarter, WindowsProcessStarter>();
+                services.AddSingleton<IAssetRevealService, WindowsAssetRevealService>();
                 services.AddSingleton<InboxPage>();
                 services.AddSingleton<LibraryPage>();
                 services.AddSingleton<TaxonomyPage>();

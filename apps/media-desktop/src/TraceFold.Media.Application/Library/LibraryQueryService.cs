@@ -1,6 +1,6 @@
 namespace TraceFold.Media.Application.Library;
 
-public sealed class LibraryQueryService(ILibraryQueryStore store)
+public sealed class LibraryQueryService(ILibraryQueryStore store) : ILibraryQueryService
 {
     public Task<IReadOnlyList<LibraryAssetDto>> SearchAsync(
         string? query,
