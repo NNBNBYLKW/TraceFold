@@ -26,3 +26,10 @@ public interface IPreviewPathStore
         MetadataOwner owner,
         CancellationToken cancellationToken);
 }
+
+public interface IMediaPreviewResolver
+{
+    Task<PreviewDescriptor> ResolveAsync(
+        MetadataOwner owner,
+        CancellationToken cancellationToken);
+}

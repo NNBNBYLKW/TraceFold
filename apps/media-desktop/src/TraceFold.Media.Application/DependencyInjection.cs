@@ -23,13 +23,22 @@ public static class DependencyInjection
         services.AddSingleton<IInboxScanner>(provider =>
             provider.GetRequiredService<ScanInboxService>());
         services.AddSingleton<ScanPreferencesService>();
+        services.AddSingleton<InboxQueryService>();
+        services.AddSingleton<IInboxQueryService>(provider =>
+            provider.GetRequiredService<InboxQueryService>());
         services.AddSingleton<IScanPreferencesService>(provider =>
             provider.GetRequiredService<ScanPreferencesService>());
         services.AddSingleton<MetadataEditorService>();
+        services.AddSingleton<IMetadataEditorService>(provider =>
+            provider.GetRequiredService<MetadataEditorService>());
         services.AddSingleton<TaxonomyService>();
         services.AddSingleton<LibraryQueryService>();
         services.AddSingleton<MediaPreviewResolver>();
+        services.AddSingleton<IMediaPreviewResolver>(provider =>
+            provider.GetRequiredService<MediaPreviewResolver>());
         services.AddSingleton<OrdinaryIngestService>();
+        services.AddSingleton<IOrdinaryIngestService>(provider =>
+            provider.GetRequiredService<OrdinaryIngestService>());
         services.AddSingleton<IngestRecoveryService>();
         services.AddSingleton<IIngestRecoveryService>(provider =>
             provider.GetRequiredService<IngestRecoveryService>());

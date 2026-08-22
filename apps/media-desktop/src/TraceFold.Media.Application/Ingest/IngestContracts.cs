@@ -145,6 +145,13 @@ public interface IIngestStore
         CancellationToken cancellationToken);
 }
 
+public interface IOrdinaryIngestService
+{
+    Task<IngestResult> IngestAsync(
+        Guid inboxItemId,
+        CancellationToken cancellationToken);
+}
+
 public interface IIngestRecoveryService
 {
     Task ReconcileAsync(CancellationToken cancellationToken);

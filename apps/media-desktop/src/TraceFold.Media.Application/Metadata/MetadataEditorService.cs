@@ -4,7 +4,7 @@ namespace TraceFold.Media.Application.Metadata;
 
 public sealed class MetadataEditorService(
     IMetadataStore store,
-    ITaxonomyLookup? taxonomyLookup = null)
+    ITaxonomyLookup? taxonomyLookup = null) : IMetadataEditorService
 {
     public Task<MetadataDocument?> LoadAsync(
         MetadataOwner owner,

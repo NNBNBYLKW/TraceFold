@@ -40,6 +40,7 @@ public static class DependencyInjection
         services.AddSingleton<IDirectoryProbe, LocalDirectoryProbe>();
         services.AddSingleton<IInboxFileCatalog, LocalInboxFileCatalog>();
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
+        services.AddSingleton<IInboxQueryStore, EfInboxQueryStore>();
         services.AddSingleton<IIngestStore, EfIngestStore>();
         services.AddSingleton<EfTaxonomyStore>();
         services.AddSingleton<ITaxonomyStore>(provider =>

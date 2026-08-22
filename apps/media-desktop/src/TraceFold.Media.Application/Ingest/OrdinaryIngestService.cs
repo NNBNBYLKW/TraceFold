@@ -14,7 +14,7 @@ public sealed class OrdinaryIngestService(
     IFileHasher hasher,
     IControlledMediaStorage storage,
     IMediaOperationCoordinator coordinator,
-    ILogger<OrdinaryIngestService> logger)
+    ILogger<OrdinaryIngestService> logger) : IOrdinaryIngestService
 {
     private readonly SemaphoreSlim _commitGate = new(1, 1);
 

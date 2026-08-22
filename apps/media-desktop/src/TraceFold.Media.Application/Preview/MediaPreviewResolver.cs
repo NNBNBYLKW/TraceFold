@@ -2,7 +2,7 @@ using TraceFold.Media.Application.Metadata;
 
 namespace TraceFold.Media.Application.Preview;
 
-public sealed class MediaPreviewResolver(IPreviewPathStore store)
+public sealed class MediaPreviewResolver(IPreviewPathStore store) : IMediaPreviewResolver
 {
     public async Task<PreviewDescriptor> ResolveAsync(
         MetadataOwner owner,

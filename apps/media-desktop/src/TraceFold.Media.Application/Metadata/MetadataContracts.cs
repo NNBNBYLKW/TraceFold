@@ -45,6 +45,18 @@ public interface IMetadataStore
         CancellationToken cancellationToken);
 }
 
+public interface IMetadataEditorService
+{
+    Task<MetadataDocument?> LoadAsync(
+        MetadataOwner owner,
+        CancellationToken cancellationToken);
+
+    Task<MetadataSaveResult> SaveAsync(
+        MetadataOwner owner,
+        MetadataUpdate update,
+        CancellationToken cancellationToken);
+}
+
 public interface ITaxonomyLookup
 {
     Task<TaxonomyValidationResult> ValidateAsync(
