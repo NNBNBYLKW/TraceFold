@@ -4,5 +4,6 @@ public enum ScanTrigger
 {
     Manual,
     Automatic,
-    StabilityCheck
+    StabilityCheck,
+    PreIngest
 }

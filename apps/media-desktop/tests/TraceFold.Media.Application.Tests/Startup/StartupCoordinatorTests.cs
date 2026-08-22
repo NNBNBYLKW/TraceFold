@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 using Xunit;
@@ -79,6 +80,26 @@ public sealed class StartupCoordinatorTests
         Assert.Contains(
             logger.Events,
             item => item.Contains("DesktopStartupFailed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_recovers_ingest_before_opening_runtime_gate()
+    {
+        var calls = new List<string>();
+        LibraryFolders folders = CreateSiblingFolders();
+        var coordinator = new StartupCoordinator(
+            new FakeDatabaseInitializer(() => calls.Add("database")),
+            new DirectorySettingsService(
+                new AlwaysWritableProbe(),
+                new FakeSettingsStore(folders)),
+            new RecordingLogger<StartupCoordinator>(),
+            new RecordingRecovery(() => calls.Add("recovery")),
+            new RecordingRuntimeGate(() => calls.Add("gate")));
+
+        await coordinator.InitializeAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["database", "recovery", "gate"], calls);
+        Assert.Equal(StartupState.Ready, coordinator.Current.State);
     }
 
     public static TheoryData<LibraryFolders> ValidFolders =>
@@ -175,5 +196,27 @@ public sealed class StartupCoordinatorTests
         {
             Events.Add(formatter(state, exception));
         }
+    }
+
+    private sealed class RecordingRecovery(Action callback) : IIngestRecoveryService
+    {
+        public Task ReconcileAsync(CancellationToken cancellationToken)
+        {
+            callback();
+            return Task.CompletedTask;
+        }
+
+        public Task<RecoveryResult> RetryAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new RecoveryResult(true, "ok"));
+    }
+
+    private sealed class RecordingRuntimeGate(Action callback) : IMediaRuntimeGate
+    {
+        public Task WaitUntilReadyAsync(CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public void Open() => callback();
     }
 }

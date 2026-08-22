@@ -25,6 +25,16 @@ internal sealed record PersistedInboxSnapshot(
     bool PrimaryIsPresent,
     int SourceCount);
 
+internal sealed record PersistedIngestSnapshot(
+    Guid? AssetId,
+    string OperationStage,
+    string InboxState,
+    string? ActivePathKey,
+    string? DisplayName,
+    Guid? SeriesId,
+    int AuthorCount,
+    int TagCount);
+
 internal sealed class TestMediaDatabase : IAsyncDisposable
 {
     private readonly TestDirectory _directory;
@@ -187,6 +197,52 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         command.CommandText = "SELECT COUNT(*) FROM inbox_items";
         object? value = await command.ExecuteScalarAsync();
         return Convert.ToInt32(value);
+    }
+
+    public async Task<int> CountIngestOperationsAsync()
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM ingest_operations";
+        object? value = await command.ExecuteScalarAsync();
+        return Convert.ToInt32(value);
+    }
+
+    public async Task<PersistedIngestSnapshot> ReadSingleIngestAsync()
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT a.id, o.stage, i.state, s.active_path_key,
+                   a.display_name, a.series_id,
+                   (SELECT COUNT(*) FROM media_asset_authors aa
+                    WHERE aa.media_asset_id = a.id),
+                   (SELECT COUNT(*) FROM media_asset_tags at
+                    WHERE at.media_asset_id = a.id)
+            FROM ingest_operations o
+            JOIN inbox_items i ON i.id = o.inbox_item_id
+            JOIN source_files s ON s.inbox_item_id = i.id AND s.is_primary = 1
+            LEFT JOIN media_assets a ON a.sha256 = o.source_sha256
+            """;
+        await using DbDataReader reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            throw new InvalidOperationException("Expected one ingest operation.");
+        }
+
+        return new PersistedIngestSnapshot(
+            reader.IsDBNull(0) ? null : Guid.Parse(reader.GetString(0)),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : Guid.Parse(reader.GetString(5)),
+            reader.GetInt32(6),
+            reader.GetInt32(7));
     }
 
     public ValueTask DisposeAsync()

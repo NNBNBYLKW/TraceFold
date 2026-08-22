@@ -1,7 +1,9 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using TraceFold.Media.Application;
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
@@ -26,6 +28,7 @@ public static class DependencyInjection
         var pathProvider = new LocalAppDataPathProvider(dataRootOverride);
         AppDataPaths paths = pathProvider.GetPaths();
 
+        services.AddMediaApplication();
         services.AddSingleton<IAppDataPathProvider>(pathProvider);
         services.AddDbContextFactory<MediaDesktopDbContext>(options =>
             options.UseSqlite(new SqliteConnectionStringBuilder
@@ -37,6 +40,7 @@ public static class DependencyInjection
         services.AddSingleton<IDirectoryProbe, LocalDirectoryProbe>();
         services.AddSingleton<IInboxFileCatalog, LocalInboxFileCatalog>();
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
+        services.AddSingleton<IIngestStore, EfIngestStore>();
         services.AddSingleton<EfTaxonomyStore>();
         services.AddSingleton<ITaxonomyStore>(provider =>
             provider.GetRequiredService<EfTaxonomyStore>());
@@ -47,21 +51,7 @@ public static class DependencyInjection
         services.AddSingleton<IPreviewPathStore, EfPreviewPathStore>();
         services.AddSingleton<IFileHasher, Sha256FileHasher>();
         services.AddSingleton<IControlledMediaStorage, ControlledMediaStorage>();
-        services.AddSingleton<MetadataEditorService>();
-        services.AddSingleton<TaxonomyService>();
-        services.AddSingleton<LibraryQueryService>();
-        services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IScanPreferencesStore, EfScanPreferencesStore>();
-        services.AddSingleton<ScanPreferencesService>();
-        services.AddSingleton<IScanPreferencesService>(provider =>
-            provider.GetRequiredService<ScanPreferencesService>());
-        services.AddSingleton<IInboxGroupingRule, Mp4M4aGroupingRule>();
-        services.AddSingleton<IInboxGroupingRule, DirectMediaGroupingRule>();
-        services.AddSingleton<CandidateGroupingService>();
-        services.AddSingleton<IInboxActivityNotifier, InboxActivityNotifier>();
-        services.AddSingleton<ScanInboxService>();
-        services.AddSingleton<IInboxScanner>(provider =>
-            provider.GetRequiredService<ScanInboxService>());
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IApplicationLifetimeToken, HostApplicationLifetimeToken>();
         services.AddHostedService<CandidateStabilityWorker>();

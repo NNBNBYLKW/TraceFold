@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Application.Startup;
 
 namespace TraceFold.Media.Infrastructure.Workers;
 
@@ -9,7 +10,8 @@ public sealed class CandidateStabilityWorker(
     IInboxScanStore store,
     IInboxActivityNotifier activity,
     TimeProvider timeProvider,
-    ILogger<CandidateStabilityWorker> logger) : BackgroundService
+    ILogger<CandidateStabilityWorker> logger,
+    IMediaRuntimeGate? runtimeGate = null) : BackgroundService
 {
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
@@ -25,6 +27,11 @@ public sealed class CandidateStabilityWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (runtimeGate is not null)
+        {
+            await runtimeGate.WaitUntilReadyAsync(stoppingToken);
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try

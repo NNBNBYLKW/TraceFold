@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Settings;
 
 namespace TraceFold.Media.Application.Startup;
@@ -7,7 +8,9 @@ namespace TraceFold.Media.Application.Startup;
 public sealed class StartupCoordinator(
     IDatabaseInitializer databaseInitializer,
     DirectorySettingsService settingsService,
-    ILogger<StartupCoordinator> logger) : IStartupCoordinator
+    ILogger<StartupCoordinator> logger,
+    IIngestRecoveryService? recoveryService = null,
+    IMediaRuntimeGate? runtimeGate = null) : IStartupCoordinator
 {
     public StartupStatus Current { get; private set; } = new(
         StartupState.Initializing,
@@ -42,6 +45,13 @@ public sealed class StartupCoordinator(
                     validation.Errors));
                 return;
             }
+
+            if (recoveryService is not null)
+            {
+                await recoveryService.ReconcileAsync(cancellationToken);
+            }
+
+            runtimeGate?.Open();
 
             Publish(new StartupStatus(
                 StartupState.Ready,

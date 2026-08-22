@@ -1,6 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Settings;
+using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Infrastructure;
 using TraceFold.Media.Infrastructure.Tests.Support;
 using Xunit;
@@ -20,6 +23,8 @@ public sealed class DatabaseInitializationTests
 
         await using (ServiceProvider first = BuildServices(temp.Path))
         {
+            Assert.NotNull(first.GetRequiredService<OrdinaryIngestService>());
+            Assert.NotNull(first.GetRequiredService<IStartupCoordinator>());
             await first.GetRequiredService<IDatabaseInitializer>()
                 .InitializeAsync(CancellationToken.None);
             await first.GetRequiredService<IDirectorySettingsStore>()
@@ -40,6 +45,24 @@ public sealed class DatabaseInitializationTests
     private static ServiceProvider BuildServices(string root) =>
         new ServiceCollection()
             .AddLogging()
+            .AddSingleton<IHostApplicationLifetime, TestHostApplicationLifetime>()
             .AddMediaInfrastructure(root)
-            .BuildServiceProvider(validateScopes: true);
+            .BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateOnBuild = true,
+                ValidateScopes = true
+            });
+
+    private sealed class TestHostApplicationLifetime : IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication()
+        {
+        }
+    }
 }
