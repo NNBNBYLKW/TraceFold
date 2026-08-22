@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Desktop.Lifecycle;
+using TraceFold.Media.Desktop.Services;
 using Xunit;
 
 namespace TraceFold.Media.Desktop.Tests.Lifecycle;
@@ -11,6 +13,8 @@ public sealed class AppShutdownCoordinatorTests
     {
         var stopper = new RecordingHostStopper();
         var coordinator = new AppShutdownCoordinator(
+            new RecordingEditorRegistry(),
+            new RecordingMediaOperationCoordinator(),
             stopper,
             new RecordingLogger<AppShutdownCoordinator>(),
             TimeSpan.FromSeconds(1));
@@ -30,6 +34,8 @@ public sealed class AppShutdownCoordinatorTests
             cancellationToken =>
                 Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
         var coordinator = new AppShutdownCoordinator(
+            new RecordingEditorRegistry(),
+            new RecordingMediaOperationCoordinator(),
             stopper,
             logger,
             TimeSpan.FromMilliseconds(20));
@@ -42,6 +48,80 @@ public sealed class AppShutdownCoordinatorTests
             item => item.Contains(
                 "DesktopShutdownTimedOut",
                 StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StopAsync_flushes_metadata_before_draining_and_stopping_host()
+    {
+        var sequence = new List<string>();
+        var coordinator = new AppShutdownCoordinator(
+            new RecordingEditorRegistry(sequence),
+            new RecordingMediaOperationCoordinator(sequence),
+            new RecordingHostStopper(_ =>
+            {
+                sequence.Add("stop");
+                return Task.CompletedTask;
+            }),
+            new RecordingLogger<AppShutdownCoordinator>());
+
+        await coordinator.StopAsync(CancellationToken.None);
+
+        Assert.Equal(["flush", "drain", "stop"], sequence);
+    }
+
+    [Fact]
+    public async Task StopAsync_continues_after_metadata_flush_failure()
+    {
+        var sequence = new List<string>();
+        var logger = new RecordingLogger<AppShutdownCoordinator>();
+        var coordinator = new AppShutdownCoordinator(
+            new RecordingEditorRegistry(sequence, throwOnFlush: true),
+            new RecordingMediaOperationCoordinator(sequence),
+            new RecordingHostStopper(_ =>
+            {
+                sequence.Add("stop");
+                return Task.CompletedTask;
+            }),
+            logger);
+
+        await coordinator.StopAsync(CancellationToken.None);
+
+        Assert.Equal(["flush", "drain", "stop"], sequence);
+        Assert.Contains(
+            logger.Events,
+            item => item.Contains(
+                "MetadataFlushDuringShutdownFailed",
+                StringComparison.Ordinal));
+    }
+
+    private sealed class RecordingEditorRegistry(
+        List<string>? sequence = null,
+        bool throwOnFlush = false) : IMetadataEditorRegistry
+    {
+        public void Register(IMetadataEditorFlushable editor) => _ = editor;
+
+        public Task FlushAllAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sequence?.Add("flush");
+            return throwOnFlush
+                ? Task.FromException(new InvalidOperationException("flush failed"))
+                : Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingMediaOperationCoordinator(
+        List<string>? sequence = null) : IMediaOperationCoordinator
+    {
+        public IMediaOperationLease Begin(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task StopAcceptingAndDrainAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sequence?.Add("drain");
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingHostStopper(

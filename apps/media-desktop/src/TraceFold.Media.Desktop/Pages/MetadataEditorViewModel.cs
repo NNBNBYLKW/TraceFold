@@ -8,7 +8,9 @@ namespace TraceFold.Media.Desktop.Pages;
 
 public sealed partial class MetadataEditorViewModel(
     IMetadataEditorService service,
-    IDebounceScheduler scheduler) : ObservableObject
+    IDebounceScheduler scheduler,
+    IMetadataEditorRegistry? registry = null)
+    : ObservableObject, IMetadataEditorFlushable
 {
     private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(500);
     private readonly SemaphoreSlim _loadGate = new(1, 1);
@@ -19,6 +21,7 @@ public sealed partial class MetadataEditorViewModel(
     private long _revision;
     private bool _dirty;
     private bool _suppressChanges;
+    private bool _registered;
 
     [ObservableProperty]
     public partial MetadataOwner? Owner { get; private set; }
@@ -46,6 +49,12 @@ public sealed partial class MetadataEditorViewModel(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(owner);
+        if (!_registered && registry is not null)
+        {
+            registry.Register(this);
+            _registered = true;
+        }
+
         await _loadGate.WaitAsync(cancellationToken);
         try
         {

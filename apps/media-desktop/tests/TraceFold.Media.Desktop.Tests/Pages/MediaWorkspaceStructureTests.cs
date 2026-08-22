@@ -71,6 +71,42 @@ public sealed class MediaWorkspaceStructureTests
         Assert.DoesNotContain("PhysicalFilename", xaml, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Taxonomy_and_settings_pages_expose_stable_stage_two_controls()
+    {
+        string taxonomy = await File.ReadAllTextAsync(
+            DesktopSource("Pages", "TaxonomyPage.xaml"),
+            TestContext.Current.CancellationToken);
+        string settings = await File.ReadAllTextAsync(
+            DesktopSource("Pages", "SettingsPage.xaml"),
+            TestContext.Current.CancellationToken);
+
+        foreach (string id in new[]
+        {
+            "TaxonomyKindSelector",
+            "TaxonomySearchBox",
+            "TaxonomyList",
+            "TaxonomyCreateButton",
+            "TaxonomyRenameButton",
+            "TaxonomyDeleteButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                taxonomy,
+                StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"AutoScanToggle\"",
+            settings,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LastScanStatus\"",
+            settings,
+            StringComparison.Ordinal);
+    }
+
     private static string DesktopSource(
         string folder,
         string filename,

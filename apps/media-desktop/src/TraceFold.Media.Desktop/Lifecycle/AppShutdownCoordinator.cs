@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application.Ingest;
+using TraceFold.Media.Desktop.Services;
 
 namespace TraceFold.Media.Desktop.Lifecycle;
 
@@ -26,16 +28,22 @@ public sealed class DesktopHostStopper(IHost host) : IDesktopHostStopper
 public sealed class AppShutdownCoordinator
 {
     private readonly object _sync = new();
+    private readonly IMetadataEditorRegistry _editorRegistry;
+    private readonly IMediaOperationCoordinator _mediaOperations;
     private readonly IDesktopHostStopper _hostStopper;
     private readonly ILogger<AppShutdownCoordinator> _logger;
     private readonly TimeSpan _timeout;
     private Task? _stopTask;
 
     public AppShutdownCoordinator(
+        IMetadataEditorRegistry editorRegistry,
+        IMediaOperationCoordinator mediaOperations,
         IDesktopHostStopper hostStopper,
         ILogger<AppShutdownCoordinator> logger,
         TimeSpan? timeout = null)
     {
+        _editorRegistry = editorRegistry;
+        _mediaOperations = mediaOperations;
         _hostStopper = hostStopper;
         _logger = logger;
         _timeout = timeout ?? TimeSpan.FromSeconds(5);
@@ -57,17 +65,45 @@ public sealed class AppShutdownCoordinator
             timeout.Token);
         try
         {
-            await _hostStopper.StopAsync(linked.Token);
-        }
-        catch (OperationCanceledException) when (
-            timeout.IsCancellationRequested
-            && !callerToken.IsCancellationRequested)
-        {
-            _logger.LogWarning("DesktopShutdownTimedOut");
+            await _editorRegistry.FlushAllAsync(linked.Token);
         }
         catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "MetadataFlushDuringShutdownFailed");
+        }
+
+        try
+        {
+            await _mediaOperations.StopAcceptingAndDrainAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            _logger.LogWarning("MediaOperationDrainTimedOut");
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "MediaOperationDrainFailed");
+        }
+
+        try
+        {
+            await _hostStopper.StopAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            _logger.LogWarning("DesktopShutdownTimedOut");
         }
         catch (Exception exception)
         {

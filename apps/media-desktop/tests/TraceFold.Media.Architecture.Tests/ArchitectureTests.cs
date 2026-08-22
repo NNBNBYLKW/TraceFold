@@ -38,9 +38,52 @@ public sealed class ArchitectureTests
         Assert.DoesNotContain("TraceFold.Media.Desktop", references);
     }
 
+    [Fact]
+    public async Task Desktop_is_the_only_project_referencing_WinUI()
+    {
+        string sourceRoot = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src"));
+        string[] projectFiles = Directory.GetFiles(
+            sourceRoot,
+            "*.csproj",
+            SearchOption.AllDirectories);
+        Assert.Equal(4, projectFiles.Length);
+
+        foreach (string projectFile in projectFiles)
+        {
+            string project = await File.ReadAllTextAsync(
+                projectFile,
+                TestContext.Current.CancellationToken);
+            bool referencesWinUi = project.Contains(
+                    "<UseWinUI>true</UseWinUI>",
+                    StringComparison.Ordinal)
+                || project.Contains(
+                    "PackageReference Include=\"Microsoft.WindowsAppSDK\"",
+                    StringComparison.Ordinal);
+            if (Path.GetFileNameWithoutExtension(projectFile)
+                == "TraceFold.Media.Desktop")
+            {
+                Assert.True(referencesWinUi);
+            }
+            else
+            {
+                Assert.False(
+                    referencesWinUi,
+                    $"{projectFile} must not reference WinUI or Windows App SDK.");
+            }
+        }
+    }
+
     private static string[] ProjectReferences(Assembly assembly) => assembly
         .GetReferencedAssemblies()
         .Select(item => item.Name ?? string.Empty)
         .Where(name => name.StartsWith("TraceFold.Media.", StringComparison.Ordinal))
         .ToArray();
+
 }

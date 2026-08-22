@@ -2,9 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.UI.Dispatching;
 using Serilog;
+using TraceFold.Media.Application;
 using TraceFold.Media.Application.Common;
-using TraceFold.Media.Application.Settings;
-using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Desktop.Services;
 using TraceFold.Media.Desktop.Shell;
@@ -25,12 +24,12 @@ public static class DesktopCompositionRoot
             .ConfigureServices(services =>
             {
                 services.AddSingleton(paths);
+                services.AddMediaApplication();
                 services.AddMediaInfrastructure(paths.RootDirectory);
-                services.AddSingleton<DirectorySettingsService>();
-                services.AddSingleton<IStartupCoordinator, StartupCoordinator>();
                 services.AddSingleton<WindowContext>();
                 services.AddSingleton<IFolderPicker, WindowsFolderPicker>();
                 services.AddSingleton<IDebounceScheduler, ProductionDebounceScheduler>();
+                services.AddSingleton<IMetadataEditorRegistry, MetadataEditorRegistry>();
                 services.AddSingleton<IUiDispatcher>(_ => new DispatcherQueueAdapter(
                     DispatcherQueue.GetForCurrentThread()
                     ?? throw new InvalidOperationException(
@@ -42,6 +41,7 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<InboxViewModel>();
                 services.AddSingleton<LibraryInspectorViewModel>();
                 services.AddSingleton<LibraryViewModel>();
+                services.AddSingleton<TaxonomyViewModel>();
                 services.AddSingleton<IProcessStarter, WindowsProcessStarter>();
                 services.AddSingleton<IAssetRevealService, WindowsAssetRevealService>();
                 services.AddSingleton<InboxPage>();

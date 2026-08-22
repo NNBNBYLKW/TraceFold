@@ -61,6 +61,36 @@
                     Content="选择…" />
             </Grid>
 
+            <Border
+                Padding="18"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Spacing="6">
+                        <TextBlock FontWeight="SemiBold" Text="待入库监测" />
+                        <TextBlock
+                            AutomationProperties.AutomationId="LastScanStatus"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind ViewModel.LastScanAtText, Mode=OneWay}" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind ViewModel.LastScanSummary, Mode=OneWay}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ToggleSwitch
+                        x:Name="AutoScanToggle"
+                        Grid.Column="1"
+                        AutomationProperties.AutomationId="AutoScanToggle"
+                        Header="自动扫描"
+                        IsOn="{x:Bind ViewModel.AutoScanEnabled, Mode=OneWay}"
+                        OffContent="已关闭"
+                        OnContent="每 5 秒检查一次"
+                        Toggled="OnAutoScanToggled" />
+                </Grid>
+            </Border>
+
             <ItemsControl
                 AutomationProperties.AutomationId="SettingsValidationErrors"
                 ItemsSource="{x:Bind ViewModel.Errors, Mode=OneWay}">

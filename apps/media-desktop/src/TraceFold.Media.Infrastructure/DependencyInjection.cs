@@ -1,7 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using TraceFold.Media.Application;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
@@ -28,7 +27,6 @@ public static class DependencyInjection
         var pathProvider = new LocalAppDataPathProvider(dataRootOverride);
         AppDataPaths paths = pathProvider.GetPaths();
 
-        services.AddMediaApplication();
         services.AddSingleton<IAppDataPathProvider>(pathProvider);
         services.AddDbContextFactory<MediaDesktopDbContext>(options =>
             options.UseSqlite(new SqliteConnectionStringBuilder

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using TraceFold.Media.Application;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Settings;
@@ -46,6 +47,7 @@ public sealed class DatabaseInitializationTests
         new ServiceCollection()
             .AddLogging()
             .AddSingleton<IHostApplicationLifetime, TestHostApplicationLifetime>()
+            .AddMediaApplication()
             .AddMediaInfrastructure(root)
             .BuildServiceProvider(new ServiceProviderOptions
             {

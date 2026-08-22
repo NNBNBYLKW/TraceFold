@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using Serilog;
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Desktop.Composition;
 using TraceFold.Media.Desktop.Lifecycle;
@@ -44,6 +45,8 @@ public sealed partial class App : Microsoft.UI.Xaml.Application
             AppDataPaths paths = new LocalAppDataPathProvider().GetPaths();
             _host = DesktopCompositionRoot.BuildHost(paths);
             _shutdownCoordinator = new AppShutdownCoordinator(
+                _host.Services.GetRequiredService<IMetadataEditorRegistry>(),
+                _host.Services.GetRequiredService<IMediaOperationCoordinator>(),
                 new DesktopHostStopper(_host),
                 _host.Services.GetRequiredService<
                     ILogger<AppShutdownCoordinator>>());

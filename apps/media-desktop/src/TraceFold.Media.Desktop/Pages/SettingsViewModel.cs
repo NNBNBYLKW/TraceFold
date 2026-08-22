@@ -9,7 +9,8 @@ namespace TraceFold.Media.Desktop.Pages;
 public sealed partial class SettingsViewModel(
     IFolderPicker folderPicker,
     DirectorySettingsService settingsService,
-    IStartupCoordinator startupCoordinator) : ObservableObject
+    IStartupCoordinator startupCoordinator,
+    IScanPreferencesService scanPreferencesService) : ObservableObject
 {
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private bool _hasLoaded;
@@ -32,6 +33,15 @@ public sealed partial class SettingsViewModel(
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
 
+    [ObservableProperty]
+    public partial bool AutoScanEnabled { get; private set; }
+
+    [ObservableProperty]
+    public partial string LastScanAtText { get; private set; } = "尚未扫描";
+
+    [ObservableProperty]
+    public partial string LastScanSummary { get; private set; } = "尚无扫描结果。";
+
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
         await _loadGate.WaitAsync(cancellationToken);
@@ -53,6 +63,10 @@ public sealed partial class SettingsViewModel(
                     LibraryDirectory = saved.LibraryDirectory;
                     WorkDirectory = saved.WorkDirectory;
                 }
+
+                ScanPreferences preferences =
+                    await scanPreferencesService.LoadAsync(cancellationToken);
+                ApplyScanPreferences(preferences);
 
                 _hasLoaded = true;
             }
@@ -123,6 +137,37 @@ public sealed partial class SettingsViewModel(
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanInteract))]
+    public async Task SaveAutoScanAsync(
+        bool enabled,
+        CancellationToken cancellationToken)
+    {
+        IsBusy = true;
+        try
+        {
+            LibraryFolders? saved = await settingsService.LoadAsync(cancellationToken);
+            if (saved is null)
+            {
+                AutoScanEnabled = !enabled;
+                StatusMessage = "请先保存三个工作目录。";
+                return;
+            }
+
+            ScanPreferenceResult result =
+                await scanPreferencesService.SetAutoScanEnabledAsync(
+                    enabled,
+                    cancellationToken);
+            ApplyScanPreferences(result.Preferences);
+            StatusMessage = result.Succeeded
+                ? enabled ? "已开启自动扫描。" : "已关闭自动扫描。"
+                : "自动扫描设置保存失败。";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     private bool CanInteract() => !IsBusy;
 
     private async Task ChooseFolderAsync(
@@ -152,5 +197,17 @@ public sealed partial class SettingsViewModel(
         ChooseLibraryCommand.NotifyCanExecuteChanged();
         ChooseWorkCommand.NotifyCanExecuteChanged();
         SaveCommand.NotifyCanExecuteChanged();
+        SaveAutoScanCommand.NotifyCanExecuteChanged();
+    }
+
+    private void ApplyScanPreferences(ScanPreferences preferences)
+    {
+        AutoScanEnabled = preferences.AutoScanEnabled;
+        LastScanAtText = preferences.LastScanAtUtc is DateTimeOffset completedAt
+            ? $"上次扫描：{completedAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
+            : "尚未扫描";
+        LastScanSummary = string.IsNullOrWhiteSpace(preferences.LastScanSummary)
+            ? "尚无扫描结果。"
+            : preferences.LastScanSummary;
     }
 }

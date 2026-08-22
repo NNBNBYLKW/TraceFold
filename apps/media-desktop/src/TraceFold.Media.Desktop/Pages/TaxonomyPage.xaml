@@ -1,11 +1,79 @@
 <Page
     x:Class="TraceFold.Media.Desktop.Pages.TaxonomyPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid Padding="32">
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-            <FontIcon HorizontalAlignment="Center" FontSize="32" Glyph="&#xE8EC;" />
-            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="尚无词表项。" />
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:metadata="using:TraceFold.Media.Application.Metadata">
+    <Grid Padding="24" RowDefinitions="Auto,Auto,Auto,*">
+        <StackPanel Spacing="4">
+            <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="分类词表" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="集中管理作者、系列和内容标签。已被资料引用的词条不会被删除。"
+                TextWrapping="Wrap" />
         </StackPanel>
+
+        <ComboBox
+            Grid.Row="1"
+            Width="220"
+            Margin="0,18,0,0"
+            HorizontalAlignment="Left"
+            AutomationProperties.AutomationId="TaxonomyKindSelector"
+            DisplayMemberPath="DisplayName"
+            ItemsSource="{x:Bind ViewModel.KindOptions, Mode=OneWay}"
+            SelectedValue="{x:Bind ViewModel.SelectedKind, Mode=TwoWay}"
+            SelectedValuePath="Kind" />
+
+        <Grid Grid.Row="2" Margin="0,12" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+            <AutoSuggestBox
+                AutomationProperties.AutomationId="TaxonomySearchBox"
+                PlaceholderText="搜索词条"
+                QueryIcon="Find"
+                Text="{x:Bind ViewModel.SearchText, Mode=TwoWay}" />
+            <Button
+                Grid.Column="1"
+                AutomationProperties.AutomationId="TaxonomyCreateButton"
+                Click="OnCreateClicked"
+                Content="新建" />
+            <Button
+                Grid.Column="2"
+                AutomationProperties.AutomationId="TaxonomyRenameButton"
+                Click="OnRenameClicked"
+                Content="重命名" />
+            <Button
+                Grid.Column="3"
+                AutomationProperties.AutomationId="TaxonomyDeleteButton"
+                Click="OnDeleteClicked"
+                Content="删除" />
+        </Grid>
+
+        <Grid Grid.Row="3" RowDefinitions="*,Auto">
+            <ListView
+                AutomationProperties.AutomationId="TaxonomyList"
+                ItemsSource="{x:Bind ViewModel.Terms, Mode=OneWay}"
+                SelectedItem="{x:Bind ViewModel.SelectedTerm, Mode=TwoWay}"
+                SelectionMode="Single">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="metadata:TaxonomyTermDto">
+                        <Grid Padding="10,8" ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{x:Bind DisplayName}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind ReferenceCount}" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text=" 项引用" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <TextBlock
+                Grid.Row="1"
+                Margin="0,10,0,0"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+                TextWrapping="Wrap" />
+        </Grid>
     </Grid>
 </Page>

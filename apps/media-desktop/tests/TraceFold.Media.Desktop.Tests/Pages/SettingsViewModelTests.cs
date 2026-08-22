@@ -39,7 +39,8 @@ public sealed class SettingsViewModelTests
         var viewModel = new SettingsViewModel(
             new QueueFolderPicker(),
             new DirectorySettingsService(new AlwaysWritableProbe(), store),
-            startup)
+            startup,
+            new FakeScanPreferencesService(ScanPreferences.Default))
         {
             InboxDirectory = Path.Combine(root, "shared"),
             LibraryDirectory = Path.Combine(root, "shared"),
@@ -63,7 +64,8 @@ public sealed class SettingsViewModelTests
         var viewModel = new SettingsViewModel(
             new QueueFolderPicker(),
             new DirectorySettingsService(new AlwaysWritableProbe(), store),
-            startup)
+            startup,
+            new FakeScanPreferencesService(ScanPreferences.Default))
         {
             InboxDirectory = Path.Combine(root, "inbox"),
             LibraryDirectory = Path.Combine(root, "library"),
@@ -90,13 +92,73 @@ public sealed class SettingsViewModelTests
         var viewModel = new SettingsViewModel(
             new QueueFolderPicker(),
             new DirectorySettingsService(new AlwaysWritableProbe(), store),
-            new FakeStartupCoordinator());
+            new FakeStartupCoordinator(),
+            new FakeScanPreferencesService(ScanPreferences.Default));
 
         await viewModel.LoadAsync(CancellationToken.None);
 
         Assert.Equal(saved.InboxDirectory, viewModel.InboxDirectory);
         Assert.Equal(saved.LibraryDirectory, viewModel.LibraryDirectory);
         Assert.Equal(saved.WorkDirectory, viewModel.WorkDirectory);
+    }
+
+    [Fact]
+    public async Task LoadAsync_shows_auto_scan_off_and_last_result()
+    {
+        DateTimeOffset instant = new(2026, 8, 22, 8, 30, 0, TimeSpan.Zero);
+        var preferences = new FakeScanPreferencesService(
+            new ScanPreferences(
+                false,
+                instant,
+                "扫描完成：发现 2 个文件，新增 1 项。"));
+        SettingsViewModel viewModel = CreateViewModel(
+            new QueueFolderPicker(),
+            preferences);
+
+        await viewModel.LoadAsync(CancellationToken.None);
+
+        Assert.False(viewModel.AutoScanEnabled);
+        Assert.Contains("扫描完成", viewModel.LastScanSummary);
+        Assert.NotEqual("尚未扫描", viewModel.LastScanAtText);
+    }
+
+    [Fact]
+    public async Task Auto_scan_change_is_reverted_until_directories_are_saved()
+    {
+        var preferences = new FakeScanPreferencesService(ScanPreferences.Default);
+        SettingsViewModel viewModel = CreateViewModel(
+            new QueueFolderPicker(),
+            preferences);
+
+        await viewModel.SaveAutoScanAsync(true, CancellationToken.None);
+
+        Assert.False(viewModel.AutoScanEnabled);
+        Assert.Equal(0, preferences.SaveCallCount);
+        Assert.Equal("请先保存三个工作目录。", viewModel.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Auto_scan_change_is_persisted_after_directories_are_saved()
+    {
+        string root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var store = new InMemorySettingsStore();
+        await store.SaveAsync(
+            new LibraryFolders(
+                Path.Combine(root, "inbox"),
+                Path.Combine(root, "library"),
+                Path.Combine(root, "work")),
+            CancellationToken.None);
+        var preferences = new FakeScanPreferencesService(ScanPreferences.Default);
+        var viewModel = new SettingsViewModel(
+            new QueueFolderPicker(),
+            new DirectorySettingsService(new AlwaysWritableProbe(), store),
+            new FakeStartupCoordinator(),
+            preferences);
+
+        await viewModel.SaveAutoScanAsync(true, CancellationToken.None);
+
+        Assert.True(viewModel.AutoScanEnabled);
+        Assert.Equal(1, preferences.SaveCallCount);
     }
 
     [Fact]
@@ -112,11 +174,41 @@ public sealed class SettingsViewModelTests
         Assert.False(viewModel.SaveCommand.CanExecute(null));
     }
 
-    private static SettingsViewModel CreateViewModel(IFolderPicker picker) =>
+    private static SettingsViewModel CreateViewModel(
+        IFolderPicker picker,
+        IScanPreferencesService? preferences = null) =>
         new(
             picker,
             new DirectorySettingsService(
                 new AlwaysWritableProbe(),
                 new InMemorySettingsStore()),
-            new FakeStartupCoordinator());
+            new FakeStartupCoordinator(),
+            preferences ?? new FakeScanPreferencesService(ScanPreferences.Default));
+
+    private sealed class FakeScanPreferencesService(ScanPreferences preferences)
+        : IScanPreferencesService
+    {
+        private ScanPreferences _preferences = preferences;
+
+        public int SaveCallCount { get; private set; }
+
+        public Task<ScanPreferences> LoadAsync(CancellationToken cancellationToken)
+        {
+            _ = cancellationToken;
+            return Task.FromResult(_preferences);
+        }
+
+        public Task<ScanPreferenceResult> SetAutoScanEnabledAsync(
+            bool enabled,
+            CancellationToken cancellationToken)
+        {
+            _ = cancellationToken;
+            SaveCallCount++;
+            _preferences = _preferences with { AutoScanEnabled = enabled };
+            return Task.FromResult(new ScanPreferenceResult(
+                true,
+                _preferences,
+                null));
+        }
+    }
 }
