@@ -47,28 +47,26 @@ public sealed partial class SettingsViewModel(
         await _loadGate.WaitAsync(cancellationToken);
         try
         {
-            if (_hasLoaded)
-            {
-                return;
-            }
-
             IsBusy = true;
             try
             {
-                LibraryFolders? saved =
-                    await settingsService.LoadAsync(cancellationToken);
-                if (saved is not null)
+                if (!_hasLoaded)
                 {
-                    InboxDirectory = saved.InboxDirectory;
-                    LibraryDirectory = saved.LibraryDirectory;
-                    WorkDirectory = saved.WorkDirectory;
+                    LibraryFolders? saved =
+                        await settingsService.LoadAsync(cancellationToken);
+                    if (saved is not null)
+                    {
+                        InboxDirectory = saved.InboxDirectory;
+                        LibraryDirectory = saved.LibraryDirectory;
+                        WorkDirectory = saved.WorkDirectory;
+                    }
+
+                    _hasLoaded = true;
                 }
 
                 ScanPreferences preferences =
                     await scanPreferencesService.LoadAsync(cancellationToken);
                 ApplyScanPreferences(preferences);
-
-                _hasLoaded = true;
             }
             finally
             {
@@ -148,7 +146,7 @@ public sealed partial class SettingsViewModel(
             LibraryFolders? saved = await settingsService.LoadAsync(cancellationToken);
             if (saved is null)
             {
-                AutoScanEnabled = !enabled;
+                SynchronizeAutoScanEnabled(!enabled);
                 StatusMessage = "请先保存三个工作目录。";
                 return;
             }
@@ -202,12 +200,23 @@ public sealed partial class SettingsViewModel(
 
     private void ApplyScanPreferences(ScanPreferences preferences)
     {
-        AutoScanEnabled = preferences.AutoScanEnabled;
+        SynchronizeAutoScanEnabled(preferences.AutoScanEnabled);
         LastScanAtText = preferences.LastScanAtUtc is DateTimeOffset completedAt
             ? $"上次扫描：{completedAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
             : "尚未扫描";
         LastScanSummary = string.IsNullOrWhiteSpace(preferences.LastScanSummary)
             ? "尚无扫描结果。"
             : preferences.LastScanSummary;
+    }
+
+    private void SynchronizeAutoScanEnabled(bool enabled)
+    {
+        if (AutoScanEnabled == enabled)
+        {
+            OnPropertyChanged(nameof(AutoScanEnabled));
+            return;
+        }
+
+        AutoScanEnabled = enabled;
     }
 }

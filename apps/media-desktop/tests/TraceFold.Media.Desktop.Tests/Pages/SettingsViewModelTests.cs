@@ -123,18 +123,41 @@ public sealed class SettingsViewModelTests
     }
 
     [Fact]
+    public async Task LoadAsync_refreshes_scan_result_on_each_page_activation()
+    {
+        var preferences = new FakeScanPreferencesService(ScanPreferences.Default);
+        SettingsViewModel viewModel = CreateViewModel(
+            new QueueFolderPicker(),
+            preferences);
+        await viewModel.LoadAsync(CancellationToken.None);
+        preferences.Current = new ScanPreferences(
+            true,
+            new DateTimeOffset(2026, 8, 22, 9, 30, 0, TimeSpan.Zero),
+            "扫描完成：新增 3 项。");
+
+        await viewModel.LoadAsync(CancellationToken.None);
+
+        Assert.True(viewModel.AutoScanEnabled);
+        Assert.Contains("新增 3 项", viewModel.LastScanSummary);
+    }
+
+    [Fact]
     public async Task Auto_scan_change_is_reverted_until_directories_are_saved()
     {
         var preferences = new FakeScanPreferencesService(ScanPreferences.Default);
         SettingsViewModel viewModel = CreateViewModel(
             new QueueFolderPicker(),
             preferences);
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) =>
+            changedProperties.Add(args.PropertyName);
 
         await viewModel.SaveAutoScanAsync(true, CancellationToken.None);
 
         Assert.False(viewModel.AutoScanEnabled);
         Assert.Equal(0, preferences.SaveCallCount);
         Assert.Equal("请先保存三个工作目录。", viewModel.StatusMessage);
+        Assert.Contains(nameof(SettingsViewModel.AutoScanEnabled), changedProperties);
     }
 
     [Fact]
@@ -191,6 +214,12 @@ public sealed class SettingsViewModelTests
         private ScanPreferences _preferences = preferences;
 
         public int SaveCallCount { get; private set; }
+
+        public ScanPreferences Current
+        {
+            get => _preferences;
+            set => _preferences = value;
+        }
 
         public Task<ScanPreferences> LoadAsync(CancellationToken cancellationToken)
         {

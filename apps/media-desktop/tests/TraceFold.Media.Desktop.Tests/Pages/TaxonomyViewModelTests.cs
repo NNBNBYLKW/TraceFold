@@ -41,6 +41,8 @@ public sealed class TaxonomyViewModelTests
         await viewModel.SelectAsync(referenced, CancellationToken.None);
 
         Assert.False(viewModel.DeleteCommand.CanExecute(null));
+        Assert.False(viewModel.CanDelete);
+        Assert.True(viewModel.CanRename);
         Assert.Equal("该词条已被 2 项资料引用，不能删除。", viewModel.StatusMessage);
     }
 
@@ -79,6 +81,22 @@ public sealed class TaxonomyViewModelTests
         Assert.Equal("词条已删除。", viewModel.StatusMessage);
     }
 
+    [Fact]
+    public async Task Delete_failure_message_survives_term_reload()
+    {
+        TaxonomyTermDto unused = Term();
+        var service = new FakeTaxonomyService(unused)
+        {
+            DeleteResult = new TaxonomyMutationResult(false, "taxonomy.in_use")
+        };
+        var viewModel = new TaxonomyViewModel(service);
+        await viewModel.SelectAsync(unused, CancellationToken.None);
+
+        await viewModel.DeleteAsync(CancellationToken.None);
+
+        Assert.Equal("该词条已被资料引用，不能删除。", viewModel.StatusMessage);
+    }
+
     private static TaxonomyTermDto Term(
         string displayName = "Original",
         int referenceCount = 0) =>
@@ -95,6 +113,9 @@ public sealed class TaxonomyViewModelTests
         private readonly List<TaxonomyTermDto> _terms = [.. terms];
 
         public TaxonomyMutationResult RenameResult { get; set; } =
+            new(true, null);
+
+        public TaxonomyMutationResult DeleteResult { get; set; } =
             new(true, null);
 
         public Task<IReadOnlyList<TaxonomyTermDto>> SearchAsync(
@@ -154,8 +175,12 @@ public sealed class TaxonomyViewModelTests
             CancellationToken cancellationToken)
         {
             _ = cancellationToken;
-            _terms.RemoveAll(term => term.Id == id);
-            return Task.FromResult(new TaxonomyMutationResult(true, null));
+            if (DeleteResult.Succeeded)
+            {
+                _terms.RemoveAll(term => term.Id == id);
+            }
+
+            return Task.FromResult(DeleteResult);
         }
     }
 }

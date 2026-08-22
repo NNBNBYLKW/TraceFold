@@ -94,6 +94,36 @@ public sealed class AppShutdownCoordinatorTests
                 StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task StopAsync_still_invokes_host_stop_after_drain_timeout()
+    {
+        var sequence = new List<string>();
+        var logger = new RecordingLogger<AppShutdownCoordinator>();
+        var stopper = new RecordingHostStopper(_ =>
+        {
+            sequence.Add("stop");
+            return Task.CompletedTask;
+        });
+        var coordinator = new AppShutdownCoordinator(
+            new RecordingEditorRegistry(sequence),
+            new RecordingMediaOperationCoordinator(
+                sequence,
+                token => Task.Delay(Timeout.InfiniteTimeSpan, token)),
+            stopper,
+            logger,
+            TimeSpan.FromMilliseconds(20));
+
+        await coordinator.StopAsync(CancellationToken.None);
+
+        Assert.Equal(["flush", "drain", "stop"], sequence);
+        Assert.Equal(1, stopper.CallCount);
+        Assert.Contains(
+            logger.Events,
+            item => item.Contains(
+                "MediaOperationDrainTimedOut",
+                StringComparison.Ordinal));
+    }
+
     private sealed class RecordingEditorRegistry(
         List<string>? sequence = null,
         bool throwOnFlush = false) : IMetadataEditorRegistry
@@ -111,7 +141,8 @@ public sealed class AppShutdownCoordinatorTests
     }
 
     private sealed class RecordingMediaOperationCoordinator(
-        List<string>? sequence = null) : IMediaOperationCoordinator
+        List<string>? sequence = null,
+        Func<CancellationToken, Task>? drain = null) : IMediaOperationCoordinator
     {
         public IMediaOperationLease Begin(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -120,7 +151,7 @@ public sealed class AppShutdownCoordinatorTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             sequence?.Add("drain");
-            return Task.CompletedTask;
+            return drain?.Invoke(cancellationToken) ?? Task.CompletedTask;
         }
     }
 

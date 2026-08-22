@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
 
@@ -13,11 +14,15 @@ public sealed record TaxonomyKindOption(
 public sealed partial class TaxonomyViewModel : ObservableObject
 {
     private readonly ITaxonomyService _taxonomy;
+    private readonly ILogger<TaxonomyViewModel>? _logger;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
 
-    public TaxonomyViewModel(ITaxonomyService taxonomy)
+    public TaxonomyViewModel(
+        ITaxonomyService taxonomy,
+        ILogger<TaxonomyViewModel>? logger = null)
     {
         _taxonomy = taxonomy;
+        _logger = logger;
         CreateCommand = new AsyncRelayCommand<string?>(CreateAsync);
         RenameCommand = new AsyncRelayCommand<string?>(
             RenameAsync,
@@ -56,6 +61,12 @@ public sealed partial class TaxonomyViewModel : ObservableObject
 
     [ObservableProperty]
     public partial bool IsBusy { get; private set; }
+
+    [ObservableProperty]
+    public partial bool CanRename { get; private set; }
+
+    [ObservableProperty]
+    public partial bool CanDelete { get; private set; }
 
     public Task LoadAsync(CancellationToken cancellationToken) =>
         ReloadAsync(null, cancellationToken);
@@ -156,13 +167,14 @@ public sealed partial class TaxonomyViewModel : ObservableObject
             cancellationToken);
         if (!result.Succeeded)
         {
-            StatusMessage = result.ErrorCode switch
+            string message = result.ErrorCode switch
             {
                 "taxonomy.in_use" => "该词条已被资料引用，不能删除。",
                 "taxonomy.not_found" => "词条已不存在。",
                 _ => "删除失败，请重试。"
             };
             await ReloadAsync(null, cancellationToken);
+            StatusMessage = message;
             return;
         }
 
@@ -186,6 +198,8 @@ public sealed partial class TaxonomyViewModel : ObservableObject
     {
         RenameCommand.NotifyCanExecuteChanged();
         DeleteCommand.NotifyCanExecuteChanged();
+        CanRename = value is not null;
+        CanDelete = value is { ReferenceCount: 0 };
         SetSelectionStatus(value);
     }
 
@@ -226,9 +240,13 @@ public sealed partial class TaxonomyViewModel : ObservableObject
         }
         catch (Exception error)
         {
-            StatusMessage = $"加载词条失败：{error.Message}";
+            _logger?.LogError(error, "TaxonomyReloadFailed");
+            StatusMessage = "加载词条失败，请重试。";
         }
     }
+
+    public void ReportOperationFailure() =>
+        StatusMessage = "词条操作失败，请重试。";
 
     private void SetSelectionStatus(TaxonomyTermDto? term)
     {

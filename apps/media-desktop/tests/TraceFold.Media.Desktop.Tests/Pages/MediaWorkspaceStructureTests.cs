@@ -80,6 +80,9 @@ public sealed class MediaWorkspaceStructureTests
         string settings = await File.ReadAllTextAsync(
             DesktopSource("Pages", "SettingsPage.xaml"),
             TestContext.Current.CancellationToken);
+        string taxonomyCode = await File.ReadAllTextAsync(
+            DesktopSource("Pages", "TaxonomyPage.xaml.cs"),
+            TestContext.Current.CancellationToken);
 
         foreach (string id in new[]
         {
@@ -98,12 +101,27 @@ public sealed class MediaWorkspaceStructureTests
         }
 
         Assert.Contains(
+            "IsEnabled=\"{x:Bind ViewModel.CanRename, Mode=OneWay}\"",
+            taxonomy,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsEnabled=\"{x:Bind ViewModel.CanDelete, Mode=OneWay}\"",
+            taxonomy,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
             "AutomationProperties.AutomationId=\"AutoScanToggle\"",
             settings,
             StringComparison.Ordinal);
         Assert.Contains(
             "AutomationProperties.AutomationId=\"LastScanStatus\"",
             settings,
+            StringComparison.Ordinal);
+        Assert.Contains("RunGuardedAsync", taxonomyCode, StringComparison.Ordinal);
+        Assert.Contains("Unloaded += OnUnloaded", taxonomyCode, StringComparison.Ordinal);
+        Assert.Contains(
+            "TaxonomyPageOperationFailed",
+            taxonomyCode,
             StringComparison.Ordinal);
     }
 

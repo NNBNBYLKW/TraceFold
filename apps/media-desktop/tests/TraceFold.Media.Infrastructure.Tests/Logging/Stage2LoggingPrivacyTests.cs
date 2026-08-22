@@ -1,11 +1,16 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application;
+using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Domain.Inbox;
-using TraceFold.Media.Domain.Ingest;
 using TraceFold.Media.Domain.Metadata;
+using TraceFold.Media.Infrastructure;
 using Xunit;
 
 namespace TraceFold.Media.Infrastructure.Tests.Logging;
@@ -15,61 +20,106 @@ public sealed class Stage2LoggingPrivacyTests
     [Fact]
     public async Task Failed_ingest_logs_operation_and_code_without_metadata_values()
     {
+        const string secretDisplay = "SECRET-DISPLAY-NAME";
+        const string secretAuthor = "SECRET-AUTHOR-NAME";
+        const string secretSeries = "SECRET-SERIES-NAME";
+        const string secretTag = "SECRET-TAG-NAME";
         string root = Path.Combine(
             Path.GetTempPath(),
             $"tracefold-log-privacy-{Guid.NewGuid():N}");
         string inbox = Directory.CreateDirectory(Path.Combine(root, "inbox")).FullName;
         string library = Directory.CreateDirectory(Path.Combine(root, "library")).FullName;
         string work = Directory.CreateDirectory(Path.Combine(root, "work")).FullName;
-        string source = Path.Combine(inbox, "private-photo.jpg");
-        const string secretDisplay = "SECRET-DISPLAY-NAME";
-        const string secretAuthor = "SECRET-AUTHOR-NAME";
-        const string secretSeries = "SECRET-SERIES-NAME";
-        const string secretTag = "SECRET-TAG-NAME";
-        await File.WriteAllBytesAsync(
-            source,
-            [1, 2, 3],
-            TestContext.Current.CancellationToken);
+        string data = Path.Combine(root, "data");
+        var clock = new AdjustableTimeProvider(
+            new DateTimeOffset(2026, 8, 22, 8, 0, 0, TimeSpan.Zero));
+        var logs = new CapturingLoggerProvider();
 
         try
         {
-            var info = new FileInfo(source);
-            Guid itemId = Guid.NewGuid();
-            Guid operationId = Guid.NewGuid();
-            var candidate = new IngestCandidate(
-                itemId,
-                InboxItemState.ReadyToTag,
-                MediaKind.Image,
-                info.Name,
-                null,
-                [
-                    new IngestSourceRecord(
-                        source,
-                        info.Length,
-                        new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
-                        IsPresent: true,
-                        IsPrimary: true)
-                ],
-                MetadataSelection.Create(secretDisplay, [], null, []),
-                MetadataVersion: 0);
-            var logger = new CapturingLogger<OrdinaryIngestService>();
-            var service = new OrdinaryIngestService(
-                new CompletedScanner(),
-                new FailingIngestStore(candidate, operationId),
-                new FixedSettingsStore(new LibraryFolders(inbox, library, work)),
-                new FixedHasher(),
-                new StageFailingStorage(),
-                new MediaOperationCoordinator(),
-                logger);
+            var services = new ServiceCollection();
+            services.AddLogging(builder => builder.AddProvider(logs));
+            services.AddSingleton<IHostApplicationLifetime, TestHostLifetime>();
+            services.AddMediaApplication();
+            services.AddMediaInfrastructure(data);
+            services.AddSingleton<TimeProvider>(clock);
+            services.AddSingleton<IControlledMediaStorage, StageFailingStorage>();
+            await using ServiceProvider provider = services.BuildServiceProvider(
+                new ServiceProviderOptions
+                {
+                    ValidateOnBuild = true,
+                    ValidateScopes = true
+                });
 
-            IngestResult result = await service.IngestAsync(
-                itemId,
+            await provider.GetRequiredService<IDatabaseInitializer>()
+                .InitializeAsync(TestContext.Current.CancellationToken);
+            DirectorySettingsResult saved = await provider
+                .GetRequiredService<DirectorySettingsService>()
+                .SaveAsync(
+                    new LibraryFolders(inbox, library, work),
+                    TestContext.Current.CancellationToken);
+            Assert.True(saved.Succeeded);
+
+            ITaxonomyService taxonomy =
+                provider.GetRequiredService<ITaxonomyService>();
+            TaxonomyTermDto author = await taxonomy.CreateAsync(
+                TaxonomyKind.Author,
+                secretAuthor,
+                TestContext.Current.CancellationToken);
+            TaxonomyTermDto series = await taxonomy.CreateAsync(
+                TaxonomyKind.Series,
+                secretSeries,
+                TestContext.Current.CancellationToken);
+            TaxonomyTermDto tag = await taxonomy.CreateAsync(
+                TaxonomyKind.Tag,
+                secretTag,
                 TestContext.Current.CancellationToken);
 
-            string captured = string.Join(Environment.NewLine, logger.Messages);
+            string source = Path.Combine(inbox, "private-photo.png");
+            await File.WriteAllBytesAsync(
+                source,
+                [137, 80, 78, 71, 13, 10, 26, 10],
+                TestContext.Current.CancellationToken);
+            IInboxScanner scanner = provider.GetRequiredService<IInboxScanner>();
+            await scanner.ScanAsync(
+                ScanTrigger.Manual,
+                TestContext.Current.CancellationToken);
+            clock.Advance(TimeSpan.FromSeconds(2));
+            await scanner.ScanAsync(
+                ScanTrigger.StabilityCheck,
+                TestContext.Current.CancellationToken);
+
+            InboxCardDto card = Assert.Single(await provider
+                .GetRequiredService<IInboxQueryService>()
+                .SearchAsync(
+                    new InboxQuery(null, null),
+                    TestContext.Current.CancellationToken));
+            MetadataSaveResult metadata = await provider
+                .GetRequiredService<IMetadataEditorService>()
+                .SaveAsync(
+                    new MetadataOwner(MetadataOwnerKind.InboxItem, card.Id),
+                    new MetadataUpdate(
+                        secretDisplay,
+                        [author.Id],
+                        series.Id,
+                        [tag.Id],
+                        0),
+                    TestContext.Current.CancellationToken);
+            Assert.True(metadata.Succeeded);
+
+            IngestResult result = await provider
+                .GetRequiredService<IOrdinaryIngestService>()
+                .IngestAsync(card.Id, TestContext.Current.CancellationToken);
+
+            string captured = string.Join(Environment.NewLine, logs.Messages);
             Assert.Equal(IngestOutcome.Failed, result.Outcome);
-            Assert.Contains(operationId.ToString(), captured, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(result.OperationId);
+            Assert.Contains(
+                result.OperationId.Value.ToString(),
+                captured,
+                StringComparison.OrdinalIgnoreCase);
             Assert.Contains("ingest.stage_failed", captured, StringComparison.Ordinal);
+            Assert.Contains("controlled stage failure", captured, StringComparison.Ordinal);
             Assert.DoesNotContain(secretDisplay, captured, StringComparison.Ordinal);
             Assert.DoesNotContain(secretAuthor, captured, StringComparison.Ordinal);
             Assert.DoesNotContain(secretSeries, captured, StringComparison.Ordinal);
@@ -77,89 +127,11 @@ public sealed class Stage2LoggingPrivacyTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
-    }
-
-    private sealed class FailingIngestStore(
-        IngestCandidate candidate,
-        Guid operationId) : IIngestStore
-    {
-        public Task<IngestCandidate?> LoadCandidateAsync(
-            Guid inboxItemId,
-            CancellationToken cancellationToken) =>
-            Task.FromResult<IngestCandidate?>(candidate);
-
-        public Task<IngestOperationRecord?> FindActiveAsync(
-            Guid inboxItemId,
-            CancellationToken cancellationToken) =>
-            Task.FromResult<IngestOperationRecord?>(null);
-
-        public Task<ConflictCheck> CheckConflictsAsync(
-            string targetFilename,
-            string sourceSha256,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new ConflictCheck(null));
-
-        public Task BlockConflictAsync(
-            Guid inboxItemId,
-            ConflictKind kind,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<IngestOperationRecord> CreateAsync(
-            IngestPreparation preparation,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new IngestOperationRecord(
-                operationId,
-                preparation.InboxItemId,
-                IngestOperationStage.Created,
-                preparation.SourcePath,
-                preparation.SourceSize,
-                preparation.SourceLastWriteTimeUtc,
-                preparation.SourceSha256,
-                preparation.TargetFilename,
-                null,
-                null,
-                null));
-
-        public Task FailAsync(
-            Guid id,
-            string errorCode,
-            bool isRetryable,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task MarkStagedAsync(
-            Guid id,
-            StagedFile staged,
-            CancellationToken cancellationToken) => throw Unused();
-
-        public Task AbandonForRetryAsync(
-            Guid id,
-            CancellationToken cancellationToken) => throw Unused();
-
-        public Task MarkFileCommittedAsync(
-            Guid id,
-            CommittedFile committed,
-            CancellationToken cancellationToken) => throw Unused();
-
-        public Task<Guid> CommitAssetAsync(
-            Guid id,
-            CommittedFile committed,
-            CancellationToken cancellationToken) => throw Unused();
-
-        public Task MarkCleanupPendingAsync(
-            Guid id,
-            string errorCode,
-            CancellationToken cancellationToken) => throw Unused();
-
-        public Task CompleteAsync(
-            Guid id,
-            CancellationToken cancellationToken) => throw Unused();
-
-        public Task<IReadOnlyList<IngestOperationRecord>> LoadIncompleteAsync(
-            CancellationToken cancellationToken) => throw Unused();
-
-        private static NotSupportedException Unused() => new();
     }
 
     private sealed class StageFailingStorage : IControlledMediaStorage
@@ -179,7 +151,7 @@ public sealed class Stage2LoggingPrivacyTests
                 new IOException("controlled stage failure"));
 
         public Task<CommittedFile> CommitAsync(
-            Guid id,
+            Guid operationId,
             LibraryFolders folders,
             StagedFile staged,
             string targetFilename,
@@ -198,61 +170,68 @@ public sealed class Stage2LoggingPrivacyTests
             CancellationToken cancellationToken) => throw Unused();
 
         public Task CleanupTemporaryFilesAsync(
-            Guid id,
+            Guid operationId,
             LibraryFolders folders,
             CancellationToken cancellationToken) => throw Unused();
 
         private static NotSupportedException Unused() => new();
     }
 
-    private sealed class CompletedScanner : IInboxScanner
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow)
+        : TimeProvider
     {
-        public Task<ScanResult> ScanAsync(
-            ScanTrigger trigger,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new ScanResult(
-                ScanOutcome.Completed,
-                1,
-                0,
-                1,
-                DateTimeOffset.UtcNow,
-                "ok"));
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan value) => _utcNow += value;
     }
 
-    private sealed class FixedSettingsStore(LibraryFolders folders)
-        : IDirectorySettingsStore
-    {
-        public Task<LibraryFolders?> LoadAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<LibraryFolders?>(folders);
-
-        public Task SaveAsync(
-            LibraryFolders value,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-    }
-
-    private sealed class FixedHasher : IFileHasher
-    {
-        public Task<string> ComputeSha256Async(
-            string path,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new string('A', 64));
-    }
-
-    private sealed class CapturingLogger<T> : ILogger<T>
+    private sealed class CapturingLoggerProvider : ILoggerProvider
     {
         public List<string> Messages { get; } = [];
 
-        public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull => null;
+        public ILogger CreateLogger(string categoryName) => new Logger(Messages);
 
-        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Dispose()
+        {
+        }
 
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
+        private sealed class Logger(List<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                string rendered = formatter(state, exception);
+                if (exception is not null)
+                {
+                    rendered += Environment.NewLine + exception;
+                }
+
+                messages.Add(rendered);
+            }
+        }
+    }
+
+    private sealed class TestHostLifetime : IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication()
+        {
+        }
     }
 }
