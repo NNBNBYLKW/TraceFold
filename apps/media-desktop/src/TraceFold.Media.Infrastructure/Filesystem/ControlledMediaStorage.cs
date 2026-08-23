@@ -1,5 +1,6 @@
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
+using TraceFold.Media.Application.Ingest;
 
 namespace TraceFold.Media.Infrastructure.Filesystem;
 
@@ -26,15 +27,41 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         string expectedSha256,
         CancellationToken cancellationToken)
     {
+        var source = new FileInfo(sourcePath);
+        var input = new PreparedIngestInput(
+            IngestCleanupKind.InboxSource,
+            sourcePath,
+            source.Exists ? source.Length : 0,
+            source.Exists ? source.LastWriteTimeUtc : DateTimeOffset.MinValue,
+            expectedSha256,
+            []);
+        return await StageAsync(
+            operationId,
+            folders,
+            input,
+            cancellationToken);
+    }
+
+    public async Task<StagedFile> StageAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        PreparedIngestInput input,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(folders);
-        string expectedHash = RequireSha256(expectedSha256);
-        string source = ControlledPathGuard.RequireDirectChild(
-            folders.InboxDirectory,
-            sourcePath);
+        ArgumentNullException.ThrowIfNull(input);
+        string expectedHash = RequireSha256(input.Sha256);
+        string source = ResolvePreparedInput(folders, input);
         ControlledReparseGuard.RejectPath(
-            folders.InboxDirectory,
+            InputRoot(folders, input.Kind),
             source,
             includeCandidate: true);
+        var sourceInfo = new FileInfo(source);
+        if (!sourceInfo.Exists || sourceInfo.Length != input.Size)
+        {
+            throw new StorageIntegrityException(
+                "The prepared input no longer matches its expected size.");
+        }
 
         string operationDirectory = ResolveOperationDirectory(folders, operationId);
         ControlledReparseGuard.RejectPath(
@@ -59,6 +86,12 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         {
             await CopyAndFlushAsync(source, payload, cancellationToken);
             long size = new FileInfo(payload).Length;
+            if (size != input.Size)
+            {
+                throw new StorageIntegrityException(
+                    "The staged payload does not match the expected size.");
+            }
+
             string actualHash = await hasher.ComputeSha256Async(payload, cancellationToken);
             if (!StringComparer.OrdinalIgnoreCase.Equals(actualHash, expectedHash))
             {
@@ -257,6 +290,29 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         }
     }
 
+    public Task<SourceDeleteResult> DeleteCleanupFileIfMatchesAsync(
+        LibraryFolders folders,
+        IngestCleanupFile cleanupFile,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(cleanupFile);
+        return cleanupFile.Kind switch
+        {
+            IngestCleanupKind.InboxSource => DeleteSourceIfMatchesAsync(
+                folders,
+                cleanupFile.FullPath,
+                cleanupFile.Size,
+                cleanupFile.Sha256,
+                cancellationToken),
+            IngestCleanupKind.ProcessingOutput =>
+                DeleteProcessingOutputIfMatchesAsync(
+                    folders,
+                    cleanupFile,
+                    cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(nameof(cleanupFile))
+        };
+    }
+
     public async Task<bool> VerifyCommittedAsync(
         LibraryFolders folders,
         CommittedFile committed,
@@ -329,6 +385,180 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         return ControlledPathGuard.RequireDirectChild(
             folders.LibraryDirectory,
             Path.Combine(folders.LibraryDirectory, filename));
+    }
+
+    private async Task<SourceDeleteResult> DeleteProcessingOutputIfMatchesAsync(
+        LibraryFolders folders,
+        IngestCleanupFile cleanupFile,
+        CancellationToken cancellationToken)
+    {
+        string expectedHash = RequireSha256(cleanupFile.Sha256);
+        string processingRoot = ProcessingRoot(folders);
+        string source = RequireProcessingOutput(
+            folders,
+            processingRoot,
+            cleanupFile.FullPath);
+        if (!File.Exists(source))
+        {
+            return new SourceDeleteResult(SourceDeleteOutcome.SourceMissing);
+        }
+
+        ControlledReparseGuard.RejectPath(
+            folders.WorkDirectory,
+            source,
+            includeCandidate: true);
+        if (new FileInfo(source).Length != cleanupFile.Size)
+        {
+            return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
+        }
+
+        string jobDirectory = Path.GetDirectoryName(source)!;
+        string quarantine = ControlledPathGuard.RequireDescendant(
+            processingRoot,
+            Path.Combine(
+                jobDirectory,
+                $".tracefold-delete-{Guid.NewGuid():N}.tmp"));
+        ControlledReparseGuard.RejectPath(
+            folders.WorkDirectory,
+            quarantine,
+            includeCandidate: false);
+        try
+        {
+            File.Move(source, quarantine, overwrite: false);
+        }
+        catch (FileNotFoundException)
+        {
+            return new SourceDeleteResult(SourceDeleteOutcome.SourceMissing);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new SourceDeleteResult(SourceDeleteOutcome.SourceMissing);
+        }
+
+        try
+        {
+            ControlledReparseGuard.RejectPath(
+                folders.WorkDirectory,
+                quarantine,
+                includeCandidate: true);
+            if (new FileInfo(quarantine).Length != cleanupFile.Size)
+            {
+                return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
+            }
+
+            string actualHash = await hasher.ComputeSha256Async(
+                quarantine,
+                cancellationToken);
+            if (!StringComparer.OrdinalIgnoreCase.Equals(actualHash, expectedHash)
+                || !File.Exists(quarantine)
+                || new FileInfo(quarantine).Length != cleanupFile.Size)
+            {
+                return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
+            }
+
+            File.Delete(quarantine);
+            TryDeleteEmptyJobDirectory(
+                folders,
+                processingRoot,
+                jobDirectory);
+            return new SourceDeleteResult(SourceDeleteOutcome.Deleted);
+        }
+        finally
+        {
+            if (File.Exists(quarantine) && !File.Exists(source))
+            {
+                try
+                {
+                    File.Move(quarantine, source, overwrite: false);
+                }
+                catch (IOException) when (File.Exists(source))
+                {
+                    // Preserve both the verified recovery copy and a new winner.
+                }
+            }
+        }
+    }
+
+    private static string ResolvePreparedInput(
+        LibraryFolders folders,
+        PreparedIngestInput input) => input.Kind switch
+    {
+        IngestCleanupKind.InboxSource => ControlledPathGuard.RequireDirectChild(
+            folders.InboxDirectory,
+            input.FullPath),
+        IngestCleanupKind.ProcessingOutput => RequireProcessingOutput(
+            folders,
+            ProcessingRoot(folders),
+            input.FullPath),
+        _ => throw new ArgumentOutOfRangeException(nameof(input))
+    };
+
+    private static string InputRoot(
+        LibraryFolders folders,
+        IngestCleanupKind kind) => kind switch
+    {
+        IngestCleanupKind.InboxSource => folders.InboxDirectory,
+        IngestCleanupKind.ProcessingOutput => ProcessingRoot(folders),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+
+    private static string RequireProcessingOutput(
+        LibraryFolders folders,
+        string processingRoot,
+        string candidate)
+    {
+        string output = ControlledPathGuard.RequireDescendant(
+            processingRoot,
+            candidate);
+        string? jobDirectory = Path.GetDirectoryName(output);
+        if (jobDirectory is null
+            || !StringComparer.OrdinalIgnoreCase.Equals(
+                Path.GetDirectoryName(jobDirectory),
+                processingRoot)
+            || !Guid.TryParseExact(
+                Path.GetFileName(jobDirectory),
+                "N",
+                out _))
+        {
+            throw new ControlledPathException(
+                "A processing output must belong to one controlled job directory.");
+        }
+
+        ControlledReparseGuard.RejectPath(
+            folders.WorkDirectory,
+            output,
+            includeCandidate: File.Exists(output));
+        return output;
+    }
+
+    private static string ProcessingRoot(LibraryFolders folders) =>
+        ControlledPathGuard.RequireDescendant(
+            folders.WorkDirectory,
+            Path.Combine(
+                folders.WorkDirectory,
+                ".tracefold",
+                "processing"));
+
+    private static void TryDeleteEmptyJobDirectory(
+        LibraryFolders folders,
+        string processingRoot,
+        string jobDirectory)
+    {
+        if (!Directory.Exists(jobDirectory)
+            || !StringComparer.OrdinalIgnoreCase.Equals(
+                Path.GetDirectoryName(jobDirectory),
+                processingRoot)
+            || !Guid.TryParseExact(Path.GetFileName(jobDirectory), "N", out _)
+            || Directory.EnumerateFileSystemEntries(jobDirectory).Any())
+        {
+            return;
+        }
+
+        ControlledReparseGuard.RejectPath(
+            folders.WorkDirectory,
+            jobDirectory,
+            includeCandidate: true);
+        Directory.Delete(jobDirectory, recursive: false);
     }
 
     private static string ResolveOperationDirectory(

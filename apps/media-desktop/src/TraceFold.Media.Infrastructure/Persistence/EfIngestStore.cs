@@ -185,15 +185,36 @@ public sealed class EfIngestStore(
         item.ErrorCode = null;
         item.IsRetryable = false;
         item.UpdatedAtUtc = now;
-        SourceFileRow? primary = await context.SourceFiles.SingleOrDefaultAsync(
-            source => source.InboxItemId == preparation.InboxItemId && source.IsPrimary,
-            cancellationToken);
-        if (primary is not null)
+        SourceFileRow[] sources = await context.SourceFiles
+            .Where(source => source.InboxItemId == preparation.InboxItemId)
+            .ToArrayAsync(cancellationToken);
+        foreach (IngestCleanupFile cleanupFile in preparation.Input.CleanupFiles
+                     .Where(file => file.Kind == IngestCleanupKind.InboxSource))
         {
-            primary.Sha256 = preparation.SourceSha256;
+            SourceFileRow? source = sources.SingleOrDefault(row =>
+                StringComparer.OrdinalIgnoreCase.Equals(
+                    Path.GetFullPath(row.NormalizedPath),
+                    Path.GetFullPath(cleanupFile.FullPath)));
+            if (source is not null)
+            {
+                source.Sha256 = cleanupFile.Sha256;
+            }
         }
 
         context.IngestOperations.Add(row);
+        context.IngestCleanupEntries.AddRange(
+            preparation.Input.CleanupFiles.Select(
+                (file, ordinal) => new IngestCleanupEntryRow
+                {
+                    Id = Guid.NewGuid(),
+                    OperationId = row.Id,
+                    Operation = row,
+                    Ordinal = ordinal,
+                    CleanupKind = file.Kind.ToString().ToLowerInvariant(),
+                    ControlledPath = file.FullPath,
+                    Size = file.Size,
+                    Sha256 = file.Sha256.ToUpperInvariant()
+                }));
         try
         {
             await context.SaveChangesAsync(cancellationToken);
@@ -400,7 +421,58 @@ public sealed class EfIngestStore(
             source.ActivePathKey = null;
         }
 
+        ProcessedOutputRow[] processedOutputs = await context.ProcessedOutputs
+            .Where(output => output.ActiveInboxItemId == operation.InboxItemId)
+            .ToArrayAsync(cancellationToken);
+        foreach (ProcessedOutputRow output in processedOutputs)
+        {
+            output.IsValid = false;
+            output.ActiveInboxItemId = null;
+        }
+
         await context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task MarkCleanupEntryCompletedAsync(
+        Guid operationId,
+        Guid entryId,
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestCleanupEntryRow? entry = await context.IngestCleanupEntries
+            .SingleOrDefaultAsync(
+                row => row.Id == entryId && row.OperationId == operationId,
+                cancellationToken);
+        if (entry is null || entry.CompletedAtUtc.HasValue)
+        {
+            return;
+        }
+
+        entry.CompletedAtUtc = DateTimeOffset.UtcNow;
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<IngestCleanupEntryRecord>> LoadCleanupEntriesAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestCleanupEntryRow[] entries = await context.IngestCleanupEntries
+            .AsNoTracking()
+            .Where(row => row.OperationId == operationId)
+            .OrderBy(row => row.Ordinal)
+            .ToArrayAsync(cancellationToken);
+        return entries.Select(row => new IngestCleanupEntryRecord(
+            row.Id,
+            row.OperationId,
+            new IngestCleanupFile(
+                Enum.Parse<IngestCleanupKind>(row.CleanupKind, ignoreCase: true),
+                row.ControlledPath,
+                row.Size,
+                row.Sha256),
+            row.CompletedAtUtc.HasValue)).ToArray();
     }
 
     public async Task FailAsync(

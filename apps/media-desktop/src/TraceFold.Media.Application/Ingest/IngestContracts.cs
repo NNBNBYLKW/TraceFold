@@ -1,4 +1,5 @@
 using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Ingest;
@@ -56,6 +57,40 @@ public sealed record IngestCandidate(
     MetadataSelection Metadata,
     long MetadataVersion);
 
+public enum IngestCleanupKind
+{
+    InboxSource,
+    ProcessingOutput
+}
+
+public sealed record IngestCleanupFile(
+    IngestCleanupKind Kind,
+    string FullPath,
+    long Size,
+    string Sha256);
+
+public sealed record PreparedIngestInput(
+    IngestCleanupKind Kind,
+    string FullPath,
+    long Size,
+    DateTimeOffset LastWriteTimeUtc,
+    string Sha256,
+    IReadOnlyList<IngestCleanupFile> CleanupFiles);
+
+public sealed record IngestCleanupEntryRecord(
+    Guid Id,
+    Guid OperationId,
+    IngestCleanupFile File,
+    bool Completed);
+
+public sealed record CleanupResult(bool Completed, string? ErrorCode);
+
+public sealed class IngestInputException(string errorCode)
+    : InvalidOperationException(errorCode)
+{
+    public string ErrorCode { get; } = errorCode;
+}
+
 public sealed record IngestPreparation(
     Guid InboxItemId,
     MediaKind MediaKind,
@@ -68,7 +103,67 @@ public sealed record IngestPreparation(
     IReadOnlyList<Guid> AuthorIds,
     Guid? SeriesId,
     IReadOnlyList<Guid> TagIds,
-    long MetadataVersion);
+    long MetadataVersion,
+    PreparedIngestInput Input)
+{
+    public IngestPreparation(
+        Guid inboxItemId,
+        MediaKind mediaKind,
+        string sourcePath,
+        long sourceSize,
+        DateTimeOffset sourceLastWriteTimeUtc,
+        string sourceSha256,
+        string targetFilename,
+        string? displayName,
+        IReadOnlyList<Guid> authorIds,
+        Guid? seriesId,
+        IReadOnlyList<Guid> tagIds,
+        long metadataVersion)
+        : this(
+            inboxItemId,
+            mediaKind,
+            sourcePath,
+            sourceSize,
+            sourceLastWriteTimeUtc,
+            sourceSha256,
+            targetFilename,
+            displayName,
+            authorIds,
+            seriesId,
+            tagIds,
+            metadataVersion,
+            new PreparedIngestInput(
+                IngestCleanupKind.InboxSource,
+                sourcePath,
+                sourceSize,
+                sourceLastWriteTimeUtc,
+                sourceSha256,
+                [new IngestCleanupFile(
+                    IngestCleanupKind.InboxSource,
+                    sourcePath,
+                    sourceSize,
+                    sourceSha256)]))
+    {
+    }
+
+    public static IngestPreparation From(
+        IngestCandidate candidate,
+        PreparedIngestInput input) =>
+        new(
+            candidate.InboxItemId,
+            candidate.MediaKind,
+            input.FullPath,
+            input.Size,
+            input.LastWriteTimeUtc,
+            input.Sha256,
+            candidate.ActualFilename,
+            candidate.Metadata.DisplayName,
+            candidate.Metadata.AuthorIds,
+            candidate.Metadata.SeriesId,
+            candidate.Metadata.TagIds,
+            candidate.MetadataVersion,
+            input);
+}
 
 public sealed record IngestOperationRecord(
     Guid Id,
@@ -143,12 +238,41 @@ public interface IIngestStore
 
     Task<IReadOnlyList<IngestOperationRecord>> LoadIncompleteAsync(
         CancellationToken cancellationToken);
+
+    Task MarkCleanupEntryCompletedAsync(
+        Guid operationId,
+        Guid entryId,
+        CancellationToken cancellationToken) => Task.CompletedTask;
+
+    Task<IReadOnlyList<IngestCleanupEntryRecord>> LoadCleanupEntriesAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<IngestCleanupEntryRecord>>([]);
 }
 
-public interface IOrdinaryIngestService
+public interface IIngestService
 {
     Task<IngestResult> IngestAsync(
         Guid inboxItemId,
+        CancellationToken cancellationToken);
+}
+
+public interface IOrdinaryIngestService : IIngestService
+{
+}
+
+public interface IIngestInputResolver
+{
+    Task<PreparedIngestInput> ResolveAsync(
+        IngestCandidate candidate,
+        CancellationToken cancellationToken);
+}
+
+public interface IIngestCleanupService
+{
+    Task<CleanupResult> CleanupAsync(
+        IngestOperationRecord operation,
+        LibraryFolders folders,
         CancellationToken cancellationToken);
 }
 

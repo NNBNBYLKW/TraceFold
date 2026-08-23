@@ -1,4 +1,5 @@
 using TraceFold.Media.Application.Storage;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Infrastructure.Filesystem;
 using TraceFold.Media.Infrastructure.Tests.Support;
 using Xunit;
@@ -249,6 +250,79 @@ public sealed class ControlledMediaStorageTests
         Assert.False(File.Exists(selectedTemporary));
         Assert.True(Directory.Exists(siblingDirectory));
         Assert.True(File.Exists(siblingTemporary));
+    }
+
+    [Fact]
+    public async Task Processed_output_can_stage_then_cleanup_its_empty_job_directory()
+    {
+        using var folders = TestMediaFolders.Create();
+        Guid jobId = Guid.NewGuid();
+        string jobDirectory = Directory.CreateDirectory(Path.Combine(
+            folders.Work,
+            ".tracefold",
+            "processing",
+            jobId.ToString("N"))).FullName;
+        string output = Path.Combine(jobDirectory, "clip.mp4");
+        await File.WriteAllBytesAsync(
+            output,
+            [1, 2, 3, 4],
+            TestContext.Current.CancellationToken);
+        var hasher = new Sha256FileHasher();
+        string hash = await hasher.ComputeSha256Async(
+            output,
+            TestContext.Current.CancellationToken);
+        var input = new PreparedIngestInput(
+            IngestCleanupKind.ProcessingOutput,
+            output,
+            4,
+            new FileInfo(output).LastWriteTimeUtc,
+            hash,
+            [new IngestCleanupFile(
+                IngestCleanupKind.ProcessingOutput,
+                output,
+                4,
+                hash)]);
+        var storage = new ControlledMediaStorage(hasher);
+
+        StagedFile staged = await storage.StageAsync(
+            Guid.NewGuid(),
+            folders.Value,
+            input,
+            TestContext.Current.CancellationToken);
+        SourceDeleteResult deleted = await storage.DeleteCleanupFileIfMatchesAsync(
+            folders.Value,
+            input.CleanupFiles[0],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(SourceDeleteOutcome.Deleted, deleted.Outcome);
+        Assert.True(File.Exists(staged.FullPath));
+        Assert.False(File.Exists(output));
+        Assert.False(Directory.Exists(jobDirectory));
+    }
+
+    [Fact]
+    public async Task Processing_output_outside_a_guid_job_directory_is_rejected()
+    {
+        using var folders = TestMediaFolders.Create();
+        string outside = Path.Combine(folders.Work, "outside.mp4");
+        await File.WriteAllBytesAsync(
+            outside,
+            [1, 2, 3],
+            TestContext.Current.CancellationToken);
+        var input = new PreparedIngestInput(
+            IngestCleanupKind.ProcessingOutput,
+            outside,
+            3,
+            new FileInfo(outside).LastWriteTimeUtc,
+            new string('A', 64),
+            []);
+        var storage = new ControlledMediaStorage(new Sha256FileHasher());
+
+        await Assert.ThrowsAsync<ControlledPathException>(() => storage.StageAsync(
+            Guid.NewGuid(),
+            folders.Value,
+            input,
+            TestContext.Current.CancellationToken));
     }
 
     private sealed class ReplacingHasher(

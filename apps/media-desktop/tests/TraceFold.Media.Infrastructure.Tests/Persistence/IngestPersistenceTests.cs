@@ -187,6 +187,57 @@ public sealed class IngestPersistenceTests
         Assert.Equal(ConflictKind.RegisteredContent, result.Kind);
     }
 
+    [Fact]
+    public async Task Create_persists_ordered_cleanup_manifest_and_entry_completion()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        Guid itemId = await CreateReadyInboxWithMetadataAsync(database);
+        var store = new EfIngestStore(database.CreateContextFactory());
+        IngestCandidate candidate = (await store.LoadCandidateAsync(
+            itemId,
+            TestContext.Current.CancellationToken))!;
+        string hash = new('A', 64);
+        var input = new PreparedIngestInput(
+            IngestCleanupKind.ProcessingOutput,
+            "C:/work/output.mp4",
+            3,
+            Instant,
+            hash,
+            [
+                new IngestCleanupFile(
+                    IngestCleanupKind.InboxSource, "C:/inbox/a.mp4", 3, hash),
+                new IngestCleanupFile(
+                    IngestCleanupKind.InboxSource, "C:/inbox/a.m4a", 2, new string('B', 64)),
+                new IngestCleanupFile(
+                    IngestCleanupKind.ProcessingOutput, "C:/work/output.mp4", 3, hash)
+            ]);
+        IngestOperationRecord operation = await store.CreateAsync(
+            IngestPreparation.From(candidate, input),
+            TestContext.Current.CancellationToken);
+
+        IReadOnlyList<IngestCleanupEntryRecord> entries =
+            await store.LoadCleanupEntriesAsync(
+                operation.Id,
+                TestContext.Current.CancellationToken);
+        await store.MarkCleanupEntryCompletedAsync(
+            operation.Id,
+            entries[1].Id,
+            TestContext.Current.CancellationToken);
+        IReadOnlyList<IngestCleanupEntryRecord> reloaded =
+            await store.LoadCleanupEntriesAsync(
+                operation.Id,
+                TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [IngestCleanupKind.InboxSource, IngestCleanupKind.InboxSource,
+             IngestCleanupKind.ProcessingOutput],
+            reloaded.Select(entry => entry.File.Kind));
+        Assert.False(reloaded[0].Completed);
+        Assert.True(reloaded[1].Completed);
+        Assert.False(reloaded[2].Completed);
+    }
+
     private static async Task<Guid> CreateReadyInboxWithMetadataAsync(
         TestMediaDatabase database)
     {

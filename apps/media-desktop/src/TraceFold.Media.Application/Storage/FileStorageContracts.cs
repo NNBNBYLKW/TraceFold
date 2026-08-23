@@ -1,4 +1,5 @@
 using TraceFold.Media.Application.Settings;
+using TraceFold.Media.Application.Ingest;
 
 namespace TraceFold.Media.Application.Storage;
 
@@ -61,6 +62,18 @@ public interface IControlledMediaStorage
         string expectedSha256,
         CancellationToken cancellationToken);
 
+    Task<StagedFile> StageAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        PreparedIngestInput input,
+        CancellationToken cancellationToken) =>
+        StageAsync(
+            operationId,
+            folders,
+            input.FullPath,
+            input.Sha256,
+            cancellationToken);
+
     Task<CommittedFile> CommitAsync(
         Guid operationId,
         LibraryFolders folders,
@@ -74,6 +87,17 @@ public interface IControlledMediaStorage
         long expectedSize,
         string expectedSha256,
         CancellationToken cancellationToken);
+
+    Task<SourceDeleteResult> DeleteCleanupFileIfMatchesAsync(
+        LibraryFolders folders,
+        IngestCleanupFile cleanupFile,
+        CancellationToken cancellationToken) =>
+        DeleteSourceIfMatchesAsync(
+            folders,
+            cleanupFile.FullPath,
+            cleanupFile.Size,
+            cleanupFile.Sha256,
+            cancellationToken);
 
     Task<bool> VerifyCommittedAsync(
         LibraryFolders folders,

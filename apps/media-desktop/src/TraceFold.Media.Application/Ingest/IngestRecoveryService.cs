@@ -10,8 +10,12 @@ public sealed class IngestRecoveryService(
     IDirectorySettingsStore settingsStore,
     IControlledMediaStorage storage,
     IFileHasher hasher,
-    ILogger<IngestRecoveryService> logger) : IIngestRecoveryService
+    ILogger<IngestRecoveryService> logger,
+    IIngestCleanupService? cleanup = null) : IIngestRecoveryService
 {
+    private readonly IIngestCleanupService cleanupService =
+        cleanup ?? new IngestCleanupService(store, storage);
+
     public async Task ReconcileAsync(CancellationToken cancellationToken)
     {
         LibraryFolders? folders = await settingsStore.LoadAsync(cancellationToken);
@@ -107,12 +111,16 @@ public sealed class IngestRecoveryService(
                     return;
                 }
 
-                await store.CommitAssetAsync(
+                Guid assetId = await store.CommitAssetAsync(
                     operation.Id,
                     fileCommitted,
                     cancellationToken);
-                await ReconcileCleanupAsync(
-                    operation,
+                await cleanupService.CleanupAsync(
+                    operation with
+                    {
+                        Stage = IngestOperationStage.DatabaseCommitted,
+                        AssetId = assetId
+                    },
                     folders,
                     cancellationToken);
                 return;
@@ -134,7 +142,7 @@ public sealed class IngestRecoveryService(
                     return;
                 }
 
-                await ReconcileCleanupAsync(
+                await cleanupService.CleanupAsync(
                     operation,
                     folders,
                     cancellationToken);
@@ -143,33 +151,6 @@ public sealed class IngestRecoveryService(
             default:
                 return;
         }
-    }
-
-    private async Task ReconcileCleanupAsync(
-        IngestOperationRecord operation,
-        LibraryFolders folders,
-        CancellationToken cancellationToken)
-    {
-        SourceDeleteResult deleted = await storage.DeleteSourceIfMatchesAsync(
-            folders,
-            operation.SourcePath,
-            operation.SourceSize,
-            operation.SourceSha256,
-            cancellationToken);
-        if (deleted.Outcome == SourceDeleteOutcome.SourceChanged)
-        {
-            await store.MarkCleanupPendingAsync(
-                operation.Id,
-                "recovery.source_changed",
-                cancellationToken);
-            return;
-        }
-
-        await storage.CleanupTemporaryFilesAsync(
-            operation.Id,
-            folders,
-            cancellationToken);
-        await store.CompleteAsync(operation.Id, cancellationToken);
     }
 
     private async Task<bool> SourceMatchesAsync(
