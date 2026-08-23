@@ -1,0 +1,16 @@
+{
+  "distribution": "FFmpeg 64-bit static Windows build from www.gyan.dev",
+  "version": "2025-06-23-git-e6298e0759-full_build-www.gyan.dev",
+  "license": "GPL v3",
+  "sourceCommit": "https://github.com/FFmpeg/FFmpeg/commit/e6298e0759",
+  "files": {
+    "ffmpeg.exe": {
+      "size": 153995264,
+      "sha256": "D5A3CDFF713F3DE9C3EC6CD0DD1BCD046BB0EB97712BD32D340E39D1F88DEF05"
+    },
+    "ffprobe.exe": {
+      "size": 153799680,
+      "sha256": "E6C17A4AE25E03275ADB00F664448D5D37ADDB88AE82372BAF1DC8BBDC7C3BB2"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+FFmpeg / Gyan.dev distribution notice
+====================================
+
+TraceFold.Media bundles the unmodified FFmpeg 64-bit static Windows build
+distributed by www.gyan.dev:
+
+Version: 2025-06-23-git-e6298e0759-full_build-www.gyan.dev
+License: GNU General Public License version 3 (GPL v3)
+Upstream project: https://ffmpeg.org/
+Source commit: https://github.com/FFmpeg/FFmpeg/commit/e6298e0759
+Distribution site: https://www.gyan.dev/ffmpeg/builds/
+
+The package includes the unmodified distribution LICENSE and README.txt files
+alongside ffmpeg.exe and ffprobe.exe under tools/ffmpeg.

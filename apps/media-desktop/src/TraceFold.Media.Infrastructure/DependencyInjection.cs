@@ -24,7 +24,8 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddMediaInfrastructure(
         this IServiceCollection services,
-        string? dataRootOverride = null)
+        string? dataRootOverride = null,
+        string? mediaToolRootOverride = null)
     {
         var pathProvider = new LocalAppDataPathProvider(dataRootOverride);
         AppDataPaths paths = pathProvider.GetPaths();
@@ -56,7 +57,8 @@ public static class DependencyInjection
         services.AddSingleton<IProcessingWorkspace, ControlledProcessingWorkspace>();
         services.AddSingleton<IProcessingFileVerifier, ProcessingFileVerifier>();
         services.AddSingleton(new MediaToolOptions(
-            Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg")));
+            mediaToolRootOverride
+            ?? Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg")));
         services.AddSingleton<BundledMediaToolLocator>();
         services.AddSingleton<IMediaTool, FfmpegMediaTool>();
         services.AddSingleton<IScanPreferencesStore, EfScanPreferencesStore>();

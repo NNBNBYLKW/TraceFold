@@ -7,49 +7,55 @@ using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
+using TraceFold.Media.Application.Preview;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Metadata;
+using TraceFold.Media.Domain.Processing;
 using TraceFold.Media.Infrastructure;
+using TraceFold.Media.Infrastructure.MediaTools;
 
 namespace TraceFold.Media.Desktop.Diagnostics;
 
-public sealed record Stage2PackageProbeResult(
+public sealed record Stage3PackageProbeResult(
     bool Succeeded,
-    string? SourceRelativePath,
-    string? LibraryRelativePath,
+    Guid? JobId,
     string? ActualFilename,
-    string? DisplayName,
+    bool HasVideo,
+    bool HasAudio,
+    string? ToolPath,
     string? ErrorCode);
 
-public static class Stage2PackageProbe
+public static class Stage3PackageProbe
 {
-    private const string ProbeFilename = "probe.png";
-    private const string ProbeDisplayName = "Stage 2 Probe";
-    private static readonly byte[] OnePixelPng = Convert.FromBase64String(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6lGQAAAAASUVORK5CYII=");
+    private const string ProbeFilename = "paired.mp4";
+    private const string ProbeAudioFilename = "paired.m4a";
+    private const string ProbeDisplayName = "Stage 3 Probe";
+    private static readonly TimeSpan ProcessingTimeout = TimeSpan.FromSeconds(30);
 
     public static async Task<int> RunAsync(
-        Stage2PackageProbeOptions supplied,
+        Stage3PackageProbeOptions supplied,
+        string? mediaToolRootOverride = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(supplied);
-        Stage2PackageProbeOptionResult validation =
-            Stage2PackageProbeOptions.Parse(
+        Stage3PackageProbeOptionResult validation =
+            Stage3PackageProbeOptions.Parse(
             [
-                Stage2PackageProbeOptions.RootArgument,
+                Stage3PackageProbeOptions.RootArgument,
                 supplied.Root,
-                Stage2PackageProbeOptions.TokenArgument,
+                Stage3PackageProbeOptions.TokenArgument,
                 supplied.TokenText
             ]);
-        if (validation.State != Stage2PackageProbeOptionState.Ready
+        if (validation.State != Stage3PackageProbeOptionState.Ready
             || validation.Options is null)
         {
             return 2;
         }
 
-        Stage2PackageProbeOptions options = validation.Options;
+        Stage3PackageProbeOptions options = validation.Options;
         string data = Path.Combine(options.Root, "data");
         string inbox = Path.Combine(options.Root, "inbox");
         string library = Path.Combine(options.Root, "library");
@@ -60,14 +66,24 @@ public static class Stage2PackageProbe
         Directory.CreateDirectory(work);
         ValidateOwnedProbeTree(options, data, inbox, library, work);
 
+        string fixtures = Path.Combine(
+            options.Root,
+            Stage3PackageProbeOptions.FixturesDirectoryName);
+        string videoSource = Path.Combine(inbox, ProbeFilename);
+        string audioSource = Path.Combine(inbox, ProbeAudioFilename);
+        File.Copy(Path.Combine(fixtures, ProbeFilename), videoSource);
+        File.Copy(Path.Combine(fixtures, ProbeAudioFilename), audioSource);
+
         using IHost host = Host.CreateDefaultBuilder([])
             .ConfigureServices(services =>
             {
                 services.AddMediaApplication();
-                services.AddMediaInfrastructure(data);
+                services.AddMediaInfrastructure(data, mediaToolRootOverride);
             })
             .Build();
 
+        Guid? jobId = null;
+        string? toolPath = null;
         try
         {
             await host.StartAsync(cancellationToken);
@@ -82,8 +98,12 @@ public static class Stage2PackageProbe
             await host.Services.GetRequiredService<IStartupCoordinator>()
                 .InitializeAsync(cancellationToken);
 
-            string source = Path.Combine(inbox, ProbeFilename);
-            await File.WriteAllBytesAsync(source, OnePixelPng, cancellationToken);
+            MediaToolLocation? location = host.Services
+                .GetRequiredService<BundledMediaToolLocator>()
+                .TryResolve();
+            Require(location is not null, "processing.tool_missing");
+            toolPath = location!.FfmpegPath;
+
             IInboxScanner scanner = host.Services.GetRequiredService<IInboxScanner>();
             await scanner.ScanAsync(ScanTrigger.Manual, cancellationToken);
             await Task.Delay(TimeSpan.FromMilliseconds(2100), cancellationToken);
@@ -99,25 +119,55 @@ public static class Stage2PackageProbe
                     ProbeFilename,
                     StringComparison.OrdinalIgnoreCase));
             Require(
-                card.State == InboxItemState.ReadyToTag,
-                "probe.source_not_ready");
+                card.State == InboxItemState.RequiresProcessing,
+                "probe.source_not_processable");
 
+            ProcessingCommandResult queued = await host.Services
+                .GetRequiredService<IProcessingCommandService>()
+                .StartAsync(card.Id, cancellationToken);
+            Require(
+                queued.Outcome == ProcessingCommandOutcome.Queued
+                && queued.JobId.HasValue,
+                queued.Message);
+            jobId = queued.JobId;
+            Guid expectedJobId = queued.JobId.GetValueOrDefault();
+
+            InboxDetailsDto processed = await WaitForProcessingAsync(
+                inboxQuery,
+                card.Id,
+                expectedJobId,
+                cancellationToken);
+            Require(
+                processed.Card.State == InboxItemState.ReadyToTag,
+                "probe.processed_item_not_ready");
+
+            MetadataOwner owner = new(MetadataOwnerKind.InboxItem, card.Id);
             MetadataSaveResult metadata = await host.Services
                 .GetRequiredService<IMetadataEditorService>()
                 .SaveAsync(
-                    new MetadataOwner(MetadataOwnerKind.InboxItem, card.Id),
+                    owner,
                     new MetadataUpdate(ProbeDisplayName, [], null, [], 0),
                     cancellationToken);
             Require(metadata.Succeeded, "probe.metadata_failed");
 
+            PreviewDescriptor preview = await host.Services
+                .GetRequiredService<IMediaPreviewResolver>()
+                .ResolveAsync(owner, cancellationToken);
+            Require(preview.Exists, "probe.processed_preview_missing");
+            MediaProbeResult outputProbe = await host.Services
+                .GetRequiredService<IMediaTool>()
+                .ProbeAsync(preview.TrustedFullPath, cancellationToken);
+            Require(
+                outputProbe.HasVideo && outputProbe.HasAudio,
+                "probe.output_streams_invalid");
+
             IngestResult ingest = await host.Services
                 .GetRequiredService<IIngestService>()
                 .IngestAsync(card.Id, cancellationToken);
-            Require(
-                ingest.Outcome == IngestOutcome.Completed,
-                ingest.Message);
+            Require(ingest.Outcome == IngestOutcome.Completed, ingest.Message);
             string formal = Path.Combine(library, ProbeFilename);
-            Require(!File.Exists(source), "probe.source_retained");
+            Require(!File.Exists(videoSource), "probe.video_source_retained");
+            Require(!File.Exists(audioSource), "probe.audio_source_retained");
             Require(File.Exists(formal), "probe.formal_missing");
 
             IReadOnlyList<LibraryAssetDto> assets = await host.Services
@@ -130,16 +180,20 @@ public static class Stage2PackageProbe
             Require(
                 asset.DisplayName == ProbeDisplayName,
                 "probe.display_name_missing");
+            Require(
+                ProcessingWorkspaceIsEmpty(work),
+                "probe.processing_workspace_retained");
 
             await WriteResultAsync(
                 options,
                 [data, inbox, library, work],
-                new Stage2PackageProbeResult(
+                new Stage3PackageProbeResult(
                     true,
-                    "inbox/probe.png",
-                    "library/probe.png",
+                    jobId,
                     asset.ActualFilename,
-                    asset.DisplayName,
+                    outputProbe.HasVideo,
+                    outputProbe.HasAudio,
+                    toolPath,
                     null),
                 cancellationToken);
             return 0;
@@ -153,12 +207,13 @@ public static class Stage2PackageProbe
             await WriteResultAsync(
                 options,
                 [data, inbox, library, work],
-                new Stage2PackageProbeResult(
+                new Stage3PackageProbeResult(
                     false,
+                    jobId,
                     null,
-                    null,
-                    null,
-                    null,
+                    false,
+                    false,
+                    toolPath,
                     error.ErrorCode),
                 CancellationToken.None);
             return 1;
@@ -168,12 +223,13 @@ public static class Stage2PackageProbe
             await WriteResultAsync(
                 options,
                 [data, inbox, library, work],
-                new Stage2PackageProbeResult(
+                new Stage3PackageProbeResult(
                     false,
+                    jobId,
                     null,
-                    null,
-                    null,
-                    null,
+                    false,
+                    false,
+                    toolPath,
                     "probe.unexpected_failure"),
                 CancellationToken.None);
             return 1;
@@ -181,7 +237,7 @@ public static class Stage2PackageProbe
         finally
         {
             using var stopTimeout = new CancellationTokenSource(
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(15));
             try
             {
                 await host.StopAsync(stopTimeout.Token);
@@ -192,16 +248,51 @@ public static class Stage2PackageProbe
         }
     }
 
+    private static async Task<InboxDetailsDto> WaitForProcessingAsync(
+        IInboxQueryService query,
+        Guid inboxItemId,
+        Guid expectedJobId,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + ProcessingTimeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            InboxDetailsDto? details = await query.GetDetailsAsync(
+                inboxItemId,
+                cancellationToken);
+            ProcessingSummaryDto? processing = details?.Processing;
+            if (processing?.JobId == expectedJobId)
+            {
+                if (processing.Status == ProcessingJobStatus.Succeeded)
+                {
+                    return details!;
+                }
+
+                if (processing.Status is ProcessingJobStatus.Failed
+                    or ProcessingJobStatus.Interrupted
+                    or ProcessingJobStatus.Cancelled)
+                {
+                    throw new ProbeFailureException(
+                        processing.ErrorCode ?? "probe.processing_failed");
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+
+        throw new ProbeFailureException("probe.processing_timeout");
+    }
+
     private static async Task WriteResultAsync(
-        Stage2PackageProbeOptions options,
+        Stage3PackageProbeOptions options,
         IReadOnlyList<string> directories,
-        Stage2PackageProbeResult result,
+        Stage3PackageProbeResult result,
         CancellationToken cancellationToken)
     {
         ValidateOwnedProbeTree(options, [.. directories]);
         string resultPath = Path.Combine(
             options.Root,
-            Stage2PackageProbeOptions.ResultFilename);
+            Stage3PackageProbeOptions.ResultFilename);
         await using var output = new FileStream(
             resultPath,
             new FileStreamOptions
@@ -221,7 +312,7 @@ public static class Stage2PackageProbe
     }
 
     private static void ValidateOwnedProbeTree(
-        Stage2PackageProbeOptions options,
+        Stage3PackageProbeOptions options,
         params string[] directories)
     {
         ValidateRootOwnership(options);
@@ -239,29 +330,60 @@ public static class Stage2PackageProbe
             }
         }
 
+        string fixtures = Path.Combine(
+            options.Root,
+            Stage3PackageProbeOptions.FixturesDirectoryName);
+        if (!Stage3PackageProbeOptions.ValidateFixtures(fixtures))
+        {
+            throw new IOException("The package probe fixtures changed.");
+        }
+
+        string[] allowedEntries =
+        [
+            Stage3PackageProbeOptions.OwnerFilename,
+            Stage3PackageProbeOptions.FixturesDirectoryName,
+            .. directories.Select(Path.GetFileName)
+                .Where(name => name is not null)
+                .Cast<string>()
+        ];
+        string[] actualEntries = Directory.GetFileSystemEntries(options.Root)
+            .Select(Path.GetFileName)
+            .Where(name => name is not null)
+            .Cast<string>()
+            .ToArray();
+        if (actualEntries.Length != allowedEntries.Length
+            || actualEntries.Except(
+                allowedEntries,
+                StringComparer.OrdinalIgnoreCase).Any())
+        {
+            throw new IOException("The package probe root contains an extra entry.");
+        }
+
         string resultPath = Path.Combine(
             options.Root,
-            Stage2PackageProbeOptions.ResultFilename);
+            Stage3PackageProbeOptions.ResultFilename);
         if (File.Exists(resultPath) || Directory.Exists(resultPath))
         {
             throw new IOException("The package probe result already exists.");
         }
     }
 
-    private static void ValidateRootOwnership(Stage2PackageProbeOptions options)
+    private static void ValidateRootOwnership(Stage3PackageProbeOptions options)
     {
         string root = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(options.Root));
         string temp = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(Path.GetTempPath()));
         string? parent = Path.GetDirectoryName(root);
-        string ownerPath = Path.Combine(root, "probe-owner.txt");
+        string ownerPath = Path.Combine(
+            root,
+            Stage3PackageProbeOptions.OwnerFilename);
         if (parent is null
             || !StringComparer.OrdinalIgnoreCase.Equals(
                 Path.TrimEndingDirectorySeparator(parent),
                 temp)
             || !Path.GetFileName(root).StartsWith(
-                Stage2PackageProbeOptions.RootNamePrefix,
+                Stage3PackageProbeOptions.RootNamePrefix,
                 StringComparison.OrdinalIgnoreCase)
             || !Directory.Exists(root)
             || File.GetAttributes(root).HasFlag(FileAttributes.ReparsePoint)
@@ -281,6 +403,16 @@ public static class Stage2PackageProbe
         {
             throw new ProbeFailureException(errorCode);
         }
+    }
+
+    private static bool ProcessingWorkspaceIsEmpty(string workDirectory)
+    {
+        string processing = Path.Combine(
+            workDirectory,
+            ".tracefold",
+            "processing");
+        return !Directory.Exists(processing)
+            || !Directory.EnumerateFileSystemEntries(processing).Any();
     }
 
     private sealed class ProbeFailureException(string errorCode) : Exception

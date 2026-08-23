@@ -1,21 +1,44 @@
 [CmdletBinding()]
-param()
+param(
+    [Parameter(Mandatory)][string] $FfmpegSourceRoot,
+    [string] $NugetPackageSource
+)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $distRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'dist'))
-$packageName = 'TraceFold-MediaDesktop-Stage2-win-x64'
+$packageName = 'TraceFold-MediaDesktop-Stage3-win-x64'
 $archiveName = "$packageName.zip"
 $packageDir = [IO.Path]::GetFullPath((Join-Path $distRoot $packageName))
 $zipPath = [IO.Path]::GetFullPath((Join-Path $distRoot $archiveName))
-$stagingName = ".tracefold-stage2-publish-$([Guid]::NewGuid().ToString('N'))"
+$stagingName = ".tracefold-stage3-publish-$([Guid]::NewGuid().ToString('N'))"
 $stagingRoot = [IO.Path]::GetFullPath((Join-Path $distRoot $stagingName))
 $stagingPackage = [IO.Path]::GetFullPath((Join-Path $stagingRoot $packageName))
 $stagingZip = [IO.Path]::GetFullPath((Join-Path $stagingRoot $archiveName))
-$backupName = ".tracefold-stage2-backup-$([Guid]::NewGuid().ToString('N'))"
+$backupName = ".tracefold-stage3-backup-$([Guid]::NewGuid().ToString('N'))"
 $backupRoot = [IO.Path]::GetFullPath((Join-Path $distRoot $backupName))
 $backupPackage = [IO.Path]::GetFullPath((Join-Path $backupRoot $packageName))
 $backupZip = [IO.Path]::GetFullPath((Join-Path $backupRoot $archiveName))
+
+function Get-TrimmedFullPath {
+    param([Parameter(Mandatory)][string] $Path)
+    $separators = [char[]]@(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    return [IO.Path]::GetFullPath($Path).TrimEnd($separators)
+}
+
+function Test-FullyQualifiedPath {
+    param([Parameter(Mandatory)][string] $Path)
+    if (-not [IO.Path]::IsPathRooted($Path)) {
+        return $false
+    }
+    $root = [IO.Path]::GetPathRoot($Path)
+    return -not [string]::IsNullOrWhiteSpace($root) -and
+        $root.Length -gt 1 -and
+        ($root.EndsWith([string][IO.Path]::DirectorySeparatorChar) -or
+         $root.EndsWith([string][IO.Path]::AltDirectorySeparatorChar))
+}
 
 function Assert-DirectChild {
     param(
@@ -24,10 +47,8 @@ function Assert-DirectChild {
         [Parameter(Mandatory)][string] $ExpectedName
     )
     $fullPath = [IO.Path]::GetFullPath($Path)
-    $fullParent = [IO.Path]::TrimEndingDirectorySeparator(
-        [IO.Path]::GetFullPath($Parent))
-    $actualParent = [IO.Path]::TrimEndingDirectorySeparator(
-        [IO.Path]::GetDirectoryName($fullPath))
+    $fullParent = Get-TrimmedFullPath -Path $Parent
+    $actualParent = Get-TrimmedFullPath -Path ([IO.Path]::GetDirectoryName($fullPath))
     if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualParent, $fullParent) -or
         -not [StringComparer]::Ordinal.Equals(
             [IO.Path]::GetFileName($fullPath),
@@ -93,6 +114,35 @@ function Invoke-DotNet {
     }
 }
 
+function Assert-SourceFile {
+    param([Parameter(Mandatory)][string] $Path)
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item -or $item.PSIsContainer) {
+        throw "Required FFmpeg distribution file is missing: $Path"
+    }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "FFmpeg distribution file cannot be a reparse point: $Path"
+    }
+    return $item
+}
+
+function Assert-MatchingFile {
+    param(
+        [Parameter(Mandatory)][string] $ActualPath,
+        [Parameter(Mandatory)][string] $ExpectedPath
+    )
+    $actual = Get-Item -LiteralPath $ActualPath -Force
+    $expected = Get-Item -LiteralPath $ExpectedPath -Force
+    if ($actual.Length -ne $expected.Length) {
+        throw "Published third-party file size changed: $ActualPath"
+    }
+    $actualHash = (Get-FileHash -LiteralPath $ActualPath -Algorithm SHA256).Hash
+    $expectedHash = (Get-FileHash -LiteralPath $ExpectedPath -Algorithm SHA256).Hash
+    if (-not [StringComparer]::Ordinal.Equals($actualHash, $expectedHash)) {
+        throw "Published third-party file hash changed: $ActualPath"
+    }
+}
+
 Assert-DirectChild -Path $packageDir -Parent $distRoot -ExpectedName $packageName
 Assert-DirectChild -Path $zipPath -Parent $distRoot -ExpectedName $archiveName
 Assert-DirectChild -Path $stagingRoot -Parent $distRoot -ExpectedName $stagingName
@@ -100,7 +150,15 @@ Assert-DirectChild -Path $backupRoot -Parent $distRoot -ExpectedName $backupName
 
 $solution = Join-Path $repoRoot 'apps\media-desktop\TraceFold.MediaDesktop.slnx'
 $project = Join-Path $repoRoot 'apps\media-desktop\src\TraceFold.Media.Desktop\TraceFold.Media.Desktop.csproj'
-$localPackageSource = Join-Path $repoRoot 'apps\media-desktop\.packages'
+if ([string]::IsNullOrWhiteSpace($NugetPackageSource)) {
+    $NugetPackageSource = Join-Path $repoRoot 'apps\media-desktop\.packages'
+}
+if (-not (Test-FullyQualifiedPath -Path $NugetPackageSource)) {
+    throw 'NugetPackageSource must be a fully qualified path when supplied.'
+}
+$localPackageSource = [IO.Path]::GetFullPath($NugetPackageSource)
+$toolManifestPath = Join-Path $repoRoot 'apps\media-desktop\tools\ffmpeg\win-x64\manifest.json'
+$toolNoticePath = Join-Path $repoRoot 'apps\media-desktop\tools\ffmpeg\win-x64\THIRD-PARTY-NOTICES.txt'
 if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
     throw "Solution is missing: $solution"
 }
@@ -111,6 +169,52 @@ if (-not (Test-Path -LiteralPath $localPackageSource -PathType Container)) {
     throw "Local package source is missing: $localPackageSource"
 }
 Assert-NoReparseTree -Path $localPackageSource
+if (-not (Test-FullyQualifiedPath -Path $FfmpegSourceRoot)) {
+    throw 'FfmpegSourceRoot must be a fully qualified path.'
+}
+$ffmpegRoot = [IO.Path]::GetFullPath($FfmpegSourceRoot)
+$ffmpegRootItem = Get-Item -LiteralPath $ffmpegRoot -Force -ErrorAction SilentlyContinue
+if ($null -eq $ffmpegRootItem -or -not $ffmpegRootItem.PSIsContainer) {
+    throw "FFmpeg distribution root is missing: $ffmpegRoot"
+}
+if (($ffmpegRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "FFmpeg distribution root cannot be a reparse point: $ffmpegRoot"
+}
+if (-not (Test-Path -LiteralPath $toolManifestPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $toolNoticePath -PathType Leaf)) {
+    throw 'Pinned FFmpeg manifest or third-party notice is missing.'
+}
+$ffmpegPath = Join-Path $ffmpegRoot 'bin\ffmpeg.exe'
+$ffprobePath = Join-Path $ffmpegRoot 'bin\ffprobe.exe'
+$licensePath = Join-Path $ffmpegRoot 'LICENSE'
+$readmePath = Join-Path $ffmpegRoot 'README.txt'
+$ffmpegItem = Assert-SourceFile -Path $ffmpegPath
+$ffprobeItem = Assert-SourceFile -Path $ffprobePath
+$null = Assert-SourceFile -Path $licensePath
+$null = Assert-SourceFile -Path $readmePath
+$manifest = Get-Content -LiteralPath $toolManifestPath -Raw | ConvertFrom-Json
+$pinnedTools = @(
+    [pscustomobject]@{
+        Name = 'ffmpeg.exe'
+        Item = $ffmpegItem
+        Manifest = $manifest.files.'ffmpeg.exe'
+    },
+    [pscustomobject]@{
+        Name = 'ffprobe.exe'
+        Item = $ffprobeItem
+        Manifest = $manifest.files.'ffprobe.exe'
+    })
+foreach ($tool in $pinnedTools) {
+    if ($tool.Item.Length -ne [long]$tool.Manifest.size) {
+        throw "Pinned size mismatch for $($tool.Name)."
+    }
+    $hash = (Get-FileHash -LiteralPath $tool.Item.FullName -Algorithm SHA256).Hash
+    if (-not [StringComparer]::Ordinal.Equals(
+            $hash,
+            [string]$tool.Manifest.sha256)) {
+        throw "Pinned SHA-256 mismatch for $($tool.Name)."
+    }
+}
 
 New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
 $distItem = Get-Item -LiteralPath $distRoot -Force
@@ -140,11 +244,41 @@ try {
         '-p:PublishProfile=win-x64',
         '-p:DebugType=none',
         '-p:DebugSymbols=false',
+        "-p:TraceFoldFfmpegSourceRoot=$ffmpegRoot",
         '--no-restore',
         '--disable-build-servers',
         '-o', $stagingPackage)
 
     Assert-NoReparseTree -Path $stagingPackage
+    $publishedToolRoot = Join-Path $stagingPackage 'tools\ffmpeg'
+    if (-not (Test-Path -LiteralPath $publishedToolRoot -PathType Container)) {
+        throw "Published FFmpeg directory is missing: $publishedToolRoot"
+    }
+    Copy-Item -LiteralPath $toolNoticePath -Destination $publishedToolRoot
+    Assert-NoReparseTree -Path $publishedToolRoot
+    foreach ($tool in $pinnedTools) {
+        $published = Join-Path $publishedToolRoot $tool.Name
+        $publishedItem = Get-Item -LiteralPath $published -Force -ErrorAction SilentlyContinue
+        if ($null -eq $publishedItem -or
+            $publishedItem.Length -ne [long]$tool.Manifest.size) {
+            throw "Published pinned tool size mismatch: $published"
+        }
+        $hash = (Get-FileHash -LiteralPath $published -Algorithm SHA256).Hash
+        if (-not [StringComparer]::Ordinal.Equals(
+                $hash,
+                [string]$tool.Manifest.sha256)) {
+            throw "Published pinned tool SHA-256 mismatch: $published"
+        }
+    }
+    Assert-MatchingFile `
+        -ActualPath (Join-Path $publishedToolRoot 'LICENSE') `
+        -ExpectedPath $licensePath
+    Assert-MatchingFile `
+        -ActualPath (Join-Path $publishedToolRoot 'README.txt') `
+        -ExpectedPath $readmePath
+    Assert-MatchingFile `
+        -ActualPath (Join-Path $publishedToolRoot 'THIRD-PARTY-NOTICES.txt') `
+        -ExpectedPath $toolNoticePath
     $exePath = Join-Path $stagingPackage 'TraceFold.Media.exe'
     if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
         throw "Published executable is missing: $exePath"
@@ -157,13 +291,36 @@ try {
         'uvicorn.exe',
         'node.exe',
         'msedge.exe',
-        'chrome.exe',
-        'ffmpeg.exe',
-        'ffprobe.exe')
+        'chrome.exe')
     $forbiddenFiles = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -File |
         Where-Object { $forbidden -contains $_.Name.ToLowerInvariant() })
     if ($forbiddenFiles.Count -ne 0) {
         throw "Published package contains forbidden executables: $($forbiddenFiles.Name -join ', ')"
+    }
+    $mediaExecutables = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -File |
+        Where-Object { $_.Name -in @('ffmpeg.exe', 'ffprobe.exe') })
+    if ($mediaExecutables.Count -ne 2) {
+        throw "Published package must contain exactly two media tool executables."
+    }
+    foreach ($mediaExecutable in $mediaExecutables) {
+        $expectedPath = Join-Path $publishedToolRoot $mediaExecutable.Name
+        $expectedPath = [IO.Path]::GetFullPath($expectedPath)
+        if (-not [StringComparer]::OrdinalIgnoreCase.Equals(
+                [IO.Path]::GetFullPath($mediaExecutable.FullName),
+                $expectedPath)) {
+            throw "Media tool executable is outside tools\ffmpeg: $($mediaExecutable.FullName)"
+        }
+    }
+    $forbiddenDirectories = @('data', 'logs', 'work', 'node_modules', '.git')
+    $unexpectedDirectories = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -Directory |
+        Where-Object { $forbiddenDirectories -contains $_.Name.ToLowerInvariant() })
+    if ($unexpectedDirectories.Count -ne 0) {
+        throw "Published package contains runtime/source directories: $($unexpectedDirectories.FullName -join ', ')"
+    }
+    $databaseFiles = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -File |
+        Where-Object { $_.Extension -in @('.db', '.sqlite', '.sqlite3') })
+    if ($databaseFiles.Count -ne 0) {
+        throw "Published package contains database files: $($databaseFiles.Name -join ', ')"
     }
 
     Compress-Archive `

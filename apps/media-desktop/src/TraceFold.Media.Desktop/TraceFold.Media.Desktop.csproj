@@ -28,6 +28,22 @@
     <ProjectReference Include="..\TraceFold.Media.Application\TraceFold.Media.Application.csproj" />
     <ProjectReference Include="..\TraceFold.Media.Infrastructure\TraceFold.Media.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup Condition="'$(TraceFoldFfmpegSourceRoot)' != ''">
+    <Content Include="$(TraceFoldFfmpegSourceRoot)\bin\ffmpeg.exe"
+             Link="tools\ffmpeg\ffmpeg.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TraceFoldFfmpegSourceRoot)\bin\ffprobe.exe"
+             Link="tools\ffmpeg\ffprobe.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TraceFoldFfmpegSourceRoot)\LICENSE"
+             Link="tools\ffmpeg\LICENSE"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(TraceFoldFfmpegSourceRoot)\README.txt"
+             Link="tools\ffmpeg\README.txt"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <Target
     Name="AddWinUiXamlToPublish"
     AfterTargets="ComputeResolvedFilesToPublishList"
