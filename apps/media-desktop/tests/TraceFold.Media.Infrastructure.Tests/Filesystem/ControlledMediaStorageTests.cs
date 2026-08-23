@@ -6,7 +6,7 @@ using Xunit;
 
 namespace TraceFold.Media.Infrastructure.Tests.Filesystem;
 
-public sealed class ControlledMediaStorageTests
+public sealed partial class ControlledMediaStorageTests
 {
     [Fact]
     public async Task DeleteSourceIfMatchesAsync_never_deletes_same_size_replacement_created_during_verification()
@@ -239,6 +239,24 @@ public sealed class ControlledMediaStorageTests
             siblingTemporary,
             [4],
             TestContext.Current.CancellationToken);
+        string selectedCommitDirectory = Directory.CreateDirectory(Path.Combine(
+            folders.Library,
+            ".tracefold",
+            "commit",
+            selected.ToString("N"))).FullName;
+        string siblingCommitDirectory = Directory.CreateDirectory(Path.Combine(
+            folders.Library,
+            ".tracefold",
+            "commit",
+            sibling.ToString("N"))).FullName;
+        await File.WriteAllBytesAsync(
+            Path.Combine(selectedCommitDirectory, "payload"),
+            [5],
+            TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(
+            Path.Combine(siblingCommitDirectory, "payload"),
+            [6],
+            TestContext.Current.CancellationToken);
         var storage = new ControlledMediaStorage(new Sha256FileHasher());
 
         await storage.CleanupTemporaryFilesAsync(
@@ -250,6 +268,8 @@ public sealed class ControlledMediaStorageTests
         Assert.False(File.Exists(selectedTemporary));
         Assert.True(Directory.Exists(siblingDirectory));
         Assert.True(File.Exists(siblingTemporary));
+        Assert.False(Directory.Exists(selectedCommitDirectory));
+        Assert.True(Directory.Exists(siblingCommitDirectory));
     }
 
     [Fact]
@@ -341,4 +361,5 @@ public sealed class ControlledMediaStorageTests
             return originalHash;
         }
     }
+
 }

@@ -63,6 +63,13 @@ public interface IFileHasher
 
 public interface IControlledMediaStorage
 {
+    Task<LibraryFileSnapshot?> InspectTargetAsync(
+        LibraryFolders folders,
+        string targetFilename,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support conflict inspection.");
+
     Task<bool> TargetExistsAsync(
         LibraryFolders folders,
         string targetFilename,
@@ -93,6 +100,48 @@ public interface IControlledMediaStorage
         StagedFile staged,
         string targetFilename,
         CancellationToken cancellationToken);
+
+    Task<CommittedFile> CommitUniqueAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        StagedFile staged,
+        string requestedFilename,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support unique conflict commits.");
+
+    Task<ReplacementBackup> BackupTargetAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        LibraryFileSnapshot expected,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement backups.");
+
+    Task<CommittedFile> CommitReplacementAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        StagedFile staged,
+        LibraryFileSnapshot expectedTarget,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement commits.");
+
+    Task RestoreBackupAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        LibraryFileSnapshot target,
+        ReplacementBackup backup,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement restore.");
+
+    Task<SourceDeleteResult> DeleteBackupIfMatchesAsync(
+        LibraryFolders folders,
+        ReplacementBackup backup,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement backup cleanup.");
 
     Task<SourceDeleteResult> DeleteSourceIfMatchesAsync(
         LibraryFolders folders,

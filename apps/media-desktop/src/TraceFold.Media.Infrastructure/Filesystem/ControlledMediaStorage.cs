@@ -4,7 +4,7 @@ using TraceFold.Media.Application.Ingest;
 
 namespace TraceFold.Media.Infrastructure.Filesystem;
 
-public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMediaStorage
+public sealed partial class ControlledMediaStorage(IFileHasher hasher) : IControlledMediaStorage
 {
     public Task<bool> TargetExistsAsync(
         LibraryFolders folders,
@@ -13,10 +13,11 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
     {
         cancellationToken.ThrowIfCancellationRequested();
         string target = ResolveTarget(folders, targetFilename);
+        bool entryExists = PathEntryExists(target);
         ControlledReparseGuard.RejectPath(
             folders.LibraryDirectory,
             target,
-            includeCandidate: false);
+            includeCandidate: entryExists);
         return Task.FromResult(File.Exists(target));
     }
 
@@ -373,7 +374,35 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
             File.Delete(temporary);
         }
 
+        string commitDirectory = ResolveCommitDirectory(folders, operationId);
+        if (Directory.Exists(commitDirectory))
+        {
+            ControlledReparseGuard.RejectTree(
+                folders.LibraryDirectory,
+                commitDirectory);
+            Directory.Delete(commitDirectory, recursive: true);
+        }
+
+        CleanupEmptyCommitParents(folders, operationId);
+
         return Task.CompletedTask;
+    }
+
+    private static bool PathEntryExists(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
     }
 
     private static string ResolveTarget(
@@ -634,14 +663,27 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         string expectedSha256,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(path) || new FileInfo(path).Length != expectedSize)
+        string expectedHash = RequireSha256(expectedSha256);
+        if (!File.Exists(path))
         {
             throw new StorageIntegrityException(
                 "The file size does not match the persisted storage record.");
         }
 
+        var before = new FileInfo(path);
+        if (before.Length != expectedSize)
+        {
+            throw new StorageIntegrityException(
+                "The file size does not match the persisted storage record.");
+        }
+
+        DateTime lastWriteTimeUtc = before.LastWriteTimeUtc;
         string hash = await hasher.ComputeSha256Async(path, cancellationToken);
-        if (!StringComparer.OrdinalIgnoreCase.Equals(hash, expectedSha256))
+        var after = new FileInfo(path);
+        if (!after.Exists
+            || after.Length != expectedSize
+            || after.LastWriteTimeUtc != lastWriteTimeUtc
+            || !StringComparer.OrdinalIgnoreCase.Equals(hash, expectedHash))
         {
             throw new StorageIntegrityException(
                 "The file hash does not match the persisted storage record.");
