@@ -34,4 +34,6 @@ internal sealed class InboxItemRow
     public ICollection<InboxDraftTagRow> DraftTags { get; } = [];
 
     public ICollection<IngestOperationRow> IngestOperations { get; } = [];
+
+    public ICollection<ProcessingJobRow> ProcessingJobs { get; } = [];
 }

@@ -158,6 +158,55 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.ToTable("inbox_items", (string)null);
                 });
 
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.IngestCleanupEntryRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("CleanupKind")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("cleanup_kind");
+
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("completed_at_utc");
+
+                    b.Property<string>("ControlledPath")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("controlled_path");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("operation_id");
+
+                    b.Property<int>("Ordinal")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("ordinal");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sha256");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("size");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OperationId", "Ordinal")
+                        .IsUnique();
+
+                    b.ToTable("ingest_cleanup_entries", (string)null);
+                });
+
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.IngestOperationRow", b =>
                 {
                     b.Property<Guid>("Id")
@@ -390,6 +439,262 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.ToTable("metadata_drafts", (string)null);
                 });
 
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessedOutputRow", b =>
+                {
+                    b.Property<Guid>("JobId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("job_id");
+
+                    b.Property<Guid?>("ActiveInboxItemId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("active_inbox_item_id");
+
+                    b.Property<long>("DurationTicks")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("duration_ticks");
+
+                    b.Property<bool>("HasAudio")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("has_audio");
+
+                    b.Property<bool>("HasVideo")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("has_video");
+
+                    b.Property<Guid>("InboxItemId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("inbox_item_id");
+
+                    b.Property<bool>("IsValid")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("is_valid");
+
+                    b.Property<DateTimeOffset>("LastWriteTimeUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_write_time_utc");
+
+                    b.Property<string>("RelativePath")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("relative_path");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sha256");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("size");
+
+                    b.HasKey("JobId");
+
+                    b.HasIndex("ActiveInboxItemId")
+                        .IsUnique();
+
+                    b.ToTable("processed_outputs", (string)null);
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessingJobRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ActiveInboxItemId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("active_inbox_item_id");
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempt");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("CurrentStepKey")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("current_step_key");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("error_code");
+
+                    b.Property<DateTimeOffset?>("FinishedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("finished_at_utc");
+
+                    b.Property<Guid>("InboxItemId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("inbox_item_id");
+
+                    b.Property<bool>("IsRetryable")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("is_retryable");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("plan_id");
+
+                    b.Property<int>("ProgressPercent")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("progress_percent");
+
+                    b.Property<DateTimeOffset>("QueuedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("queued_at_utc");
+
+                    b.Property<DateTimeOffset?>("StartedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("started_at_utc");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActiveInboxItemId")
+                        .IsUnique();
+
+                    b.HasIndex("InboxItemId");
+
+                    b.HasIndex("PlanId")
+                        .IsUnique();
+
+                    b.ToTable("processing_jobs", (string)null);
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessingPlanInputRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Filename")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("filename");
+
+                    b.Property<string>("FullPath")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("full_path");
+
+                    b.Property<DateTimeOffset>("LastWriteTimeUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_write_time_utc");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("plan_id");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("role");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sha256");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("size");
+
+                    b.Property<Guid>("SourceFileId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_file_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PlanId", "Role")
+                        .IsUnique();
+
+                    b.ToTable("processing_plan_inputs", (string)null);
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessingPlanRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Capability")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("capability");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid>("InboxItemId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("inbox_item_id");
+
+                    b.Property<string>("OutputFilename")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("output_filename");
+
+                    b.Property<string>("ProcessorDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("processor_display_name");
+
+                    b.Property<string>("ProcessorKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("processor_key");
+
+                    b.Property<string>("ProcessorVersion")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("processor_version");
+
+                    b.Property<string>("StepKeysJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("step_keys_json");
+
+                    b.Property<string>("WorkDirectoryRelativePath")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("work_directory_relative_path");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("processing_plans", (string)null);
+                });
+
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.SourceFileRow", b =>
                 {
                     b.Property<Guid>("Id")
@@ -542,6 +847,17 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.Navigation("Tag");
                 });
 
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.IngestCleanupEntryRow", b =>
+                {
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.IngestOperationRow", "Operation")
+                        .WithMany("CleanupEntries")
+                        .HasForeignKey("OperationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Operation");
+                });
+
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.IngestOperationRow", b =>
                 {
                     b.HasOne("TraceFold.Media.Infrastructure.Persistence.InboxItemRow", "InboxItem")
@@ -619,6 +935,47 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.Navigation("Series");
                 });
 
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessedOutputRow", b =>
+                {
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.ProcessingJobRow", "Job")
+                        .WithOne("Output")
+                        .HasForeignKey("TraceFold.Media.Infrastructure.Persistence.ProcessedOutputRow", "JobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Job");
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessingJobRow", b =>
+                {
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.InboxItemRow", "InboxItem")
+                        .WithMany("ProcessingJobs")
+                        .HasForeignKey("InboxItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.ProcessingPlanRow", "Plan")
+                        .WithOne("Job")
+                        .HasForeignKey("TraceFold.Media.Infrastructure.Persistence.ProcessingJobRow", "PlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("InboxItem");
+
+                    b.Navigation("Plan");
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessingPlanInputRow", b =>
+                {
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.ProcessingPlanRow", "Plan")
+                        .WithMany("Inputs")
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Plan");
+                });
+
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.SourceFileRow", b =>
                 {
                     b.HasOne("TraceFold.Media.Infrastructure.Persistence.InboxItemRow", "InboxItem")
@@ -640,7 +997,14 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
 
                     b.Navigation("MetadataDraft");
 
+                    b.Navigation("ProcessingJobs");
+
                     b.Navigation("SourceFiles");
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.IngestOperationRow", b =>
+                {
+                    b.Navigation("CleanupEntries");
                 });
 
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.MediaAssetRow", b =>
@@ -648,6 +1012,19 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.Navigation("Authors");
 
                     b.Navigation("Tags");
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessingJobRow", b =>
+                {
+                    b.Navigation("Output");
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ProcessingPlanRow", b =>
+                {
+                    b.Navigation("Inputs");
+
+                    b.Navigation("Job")
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }

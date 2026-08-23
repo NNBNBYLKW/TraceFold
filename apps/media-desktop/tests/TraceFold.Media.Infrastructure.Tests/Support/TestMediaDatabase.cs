@@ -55,6 +55,14 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         return Task.FromResult(database);
     }
 
+    public static async Task<TestMediaDatabase> CreateAtMigrationAsync(
+        string targetMigration)
+    {
+        TestMediaDatabase database = await CreateAsync();
+        await database.MigrateAsync(targetMigration);
+        return database;
+    }
+
     public IDbContextFactory<MediaDesktopDbContext> CreateContextFactory() =>
         new TestContextFactory(_options);
 
@@ -208,6 +216,22 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         command.CommandText = "SELECT COUNT(*) FROM ingest_operations";
         object? value = await command.ExecuteScalarAsync();
         return Convert.ToInt32(value);
+    }
+
+    public async Task<string?> ReadInboxStateAsync(Guid inboxItemId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT state FROM inbox_items WHERE upper(id) = upper($id)";
+        DbParameter parameter = command.CreateParameter();
+        parameter.ParameterName = "$id";
+        parameter.Value = inboxItemId.ToString();
+        command.Parameters.Add(parameter);
+        object? value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? null : Convert.ToString(value);
     }
 
     public async Task<PersistedIngestSnapshot> ReadSingleIngestAsync()

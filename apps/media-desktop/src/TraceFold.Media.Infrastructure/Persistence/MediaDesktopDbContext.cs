@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Ingest;
+using TraceFold.Media.Domain.Processing;
 
 namespace TraceFold.Media.Infrastructure.Persistence;
 
@@ -32,6 +33,18 @@ public sealed class MediaDesktopDbContext(
 
     internal DbSet<IngestOperationRow> IngestOperations => Set<IngestOperationRow>();
 
+    internal DbSet<ProcessingPlanRow> ProcessingPlans => Set<ProcessingPlanRow>();
+
+    internal DbSet<ProcessingPlanInputRow> ProcessingPlanInputs =>
+        Set<ProcessingPlanInputRow>();
+
+    internal DbSet<ProcessingJobRow> ProcessingJobs => Set<ProcessingJobRow>();
+
+    internal DbSet<ProcessedOutputRow> ProcessedOutputs => Set<ProcessedOutputRow>();
+
+    internal DbSet<IngestCleanupEntryRow> IngestCleanupEntries =>
+        Set<IngestCleanupEntryRow>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureAppSettings(modelBuilder.Entity<AppSettingsRow>());
@@ -45,6 +58,11 @@ public sealed class MediaDesktopDbContext(
         ConfigureMediaAssetAuthor(modelBuilder.Entity<MediaAssetAuthorRow>());
         ConfigureMediaAssetTag(modelBuilder.Entity<MediaAssetTagRow>());
         ConfigureIngestOperation(modelBuilder.Entity<IngestOperationRow>());
+        ConfigureProcessingPlan(modelBuilder.Entity<ProcessingPlanRow>());
+        ConfigureProcessingPlanInput(modelBuilder.Entity<ProcessingPlanInputRow>());
+        ConfigureProcessingJob(modelBuilder.Entity<ProcessingJobRow>());
+        ConfigureProcessedOutput(modelBuilder.Entity<ProcessedOutputRow>());
+        ConfigureIngestCleanupEntry(modelBuilder.Entity<IngestCleanupEntryRow>());
     }
 
     private static void ConfigureAppSettings(EntityTypeBuilder<AppSettingsRow> row)
@@ -235,6 +253,93 @@ public sealed class MediaDesktopDbContext(
             .WithMany(item => item.IngestOperations)
             .HasForeignKey(item => item.InboxItemId)
             .OnDelete(DeleteBehavior.Restrict);
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureProcessingPlan(EntityTypeBuilder<ProcessingPlanRow> row)
+    {
+        row.ToTable("processing_plans");
+        row.HasKey(item => item.Id);
+        row.Property(item => item.ProcessorKey).IsRequired().HasMaxLength(128);
+        row.Property(item => item.ProcessorVersion).IsRequired().HasMaxLength(128);
+        row.Property(item => item.ProcessorDisplayName).IsRequired().HasMaxLength(1024);
+        row.Property(item => item.Capability).IsRequired().HasMaxLength(128);
+        row.Property(item => item.OutputFilename).IsRequired().HasMaxLength(1024);
+        row.Property(item => item.WorkDirectoryRelativePath)
+            .IsRequired()
+            .HasMaxLength(4096);
+        row.Property(item => item.StepKeysJson).IsRequired();
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureProcessingPlanInput(
+        EntityTypeBuilder<ProcessingPlanInputRow> row)
+    {
+        row.ToTable("processing_plan_inputs");
+        row.HasKey(item => item.Id);
+        row.Property(item => item.Role).IsRequired().HasMaxLength(128);
+        row.Property(item => item.FullPath).IsRequired().HasMaxLength(4096);
+        row.Property(item => item.Filename).IsRequired().HasMaxLength(1024);
+        row.Property(item => item.Sha256).IsRequired().HasMaxLength(64);
+        row.HasIndex(item => new { item.PlanId, item.Role }).IsUnique();
+        row.HasOne(item => item.Plan)
+            .WithMany(item => item.Inputs)
+            .HasForeignKey(item => item.PlanId)
+            .OnDelete(DeleteBehavior.Cascade);
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureProcessingJob(EntityTypeBuilder<ProcessingJobRow> row)
+    {
+        row.ToTable("processing_jobs");
+        row.HasKey(item => item.Id);
+        row.Property(item => item.Status)
+            .HasConversion(
+                value => value.ToString().ToLowerInvariant(),
+                value => Enum.Parse<ProcessingJobStatus>(value, true))
+            .HasMaxLength(64);
+        row.Property(item => item.CurrentStepKey).HasMaxLength(128);
+        row.Property(item => item.ErrorCode).HasMaxLength(128);
+        row.Property(item => item.CorrelationId).IsRequired().HasMaxLength(64);
+        row.HasIndex(item => item.ActiveInboxItemId).IsUnique();
+        row.HasOne(item => item.Plan)
+            .WithOne(item => item.Job)
+            .HasForeignKey<ProcessingJobRow>(item => item.PlanId)
+            .OnDelete(DeleteBehavior.Cascade);
+        row.HasOne(item => item.InboxItem)
+            .WithMany(item => item.ProcessingJobs)
+            .HasForeignKey(item => item.InboxItemId)
+            .OnDelete(DeleteBehavior.Restrict);
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureProcessedOutput(EntityTypeBuilder<ProcessedOutputRow> row)
+    {
+        row.ToTable("processed_outputs");
+        row.HasKey(item => item.JobId);
+        row.Property(item => item.RelativePath).IsRequired().HasMaxLength(4096);
+        row.Property(item => item.Sha256).IsRequired().HasMaxLength(64);
+        row.HasIndex(item => item.ActiveInboxItemId).IsUnique();
+        row.HasOne(item => item.Job)
+            .WithOne(item => item.Output)
+            .HasForeignKey<ProcessedOutputRow>(item => item.JobId)
+            .OnDelete(DeleteBehavior.Cascade);
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureIngestCleanupEntry(
+        EntityTypeBuilder<IngestCleanupEntryRow> row)
+    {
+        row.ToTable("ingest_cleanup_entries");
+        row.HasKey(item => item.Id);
+        row.Property(item => item.CleanupKind).IsRequired().HasMaxLength(128);
+        row.Property(item => item.ControlledPath).IsRequired().HasMaxLength(4096);
+        row.Property(item => item.Sha256).IsRequired().HasMaxLength(64);
+        row.HasIndex(item => new { item.OperationId, item.Ordinal }).IsUnique();
+        row.HasOne(item => item.Operation)
+            .WithMany(item => item.CleanupEntries)
+            .HasForeignKey(item => item.OperationId)
+            .OnDelete(DeleteBehavior.Cascade);
         UseSnakeCaseColumns(row);
     }
 

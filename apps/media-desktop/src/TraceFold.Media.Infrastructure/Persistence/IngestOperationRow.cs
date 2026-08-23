@@ -35,4 +35,6 @@ internal sealed class IngestOperationRow
     public DateTimeOffset CreatedAtUtc { get; set; }
 
     public DateTimeOffset UpdatedAtUtc { get; set; }
+
+    public ICollection<IngestCleanupEntryRow> CleanupEntries { get; } = [];
 }
