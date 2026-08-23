@@ -3,8 +3,8 @@
 ## 验收对象
 
 - 验收时间：2026-08-23 12:07:26 +08:00
-- 分支：`codex/native-media-desktop-stage3`
-- 代码与测试包提交：`8459f40624b37400ac7dc888661d97c4bf5d7806`
+- 最终分支：`main`
+- 合并、测试与最终测试包提交：`f576878dc5e63b9f1f2474a1556305d74257cdfc`
 - 对比基线 `main`：`be363084c02ffb8dda88e2f32febf17fb237c52a`
 - 平台：Windows 11 x64，本机离线依赖缓存，无网络下载
 
@@ -47,7 +47,7 @@ dotnet test apps/media-desktop/tests/TraceFold.Media.Desktop.Tests/TraceFold.Med
 
 ## 最终离线包
 
-当前隔离工作区中的产物：
+主工作区中的最终产物：
 
 ```text
 dist\TraceFold-MediaDesktop-Stage3-win-x64
@@ -55,16 +55,16 @@ dist\TraceFold-MediaDesktop-Stage3-win-x64.zip
 ```
 
 - 包目录：575 个文件，550,953,856 字节；
-- ZIP：219,579,099 字节；
-- ZIP SHA-256：`97787CA83F6288CAAA306F8C7A06E8B08A449BFA88E0E554C294D6F396F369D3`。
+- ZIP：219,579,041 字节；
+- ZIP SHA-256：`DE07D655F709EE6185682EB35639045EF95BD042D2B8B53A424D49F01587E4E3`。
 
 发布命令：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-media-desktop.ps1 -FfmpegSourceRoot 'C:\Program Files\ffmpeg' -NugetPackageSource 'T:\Windows\Documents\GitHub\TraceFold\apps\media-desktop\.packages'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-media-desktop.ps1 -FfmpegSourceRoot 'C:\Program Files\ffmpeg'
 ```
 
-`-NugetPackageSource` 只用于隔离 worktree 读取主工作区的实体离线缓存；在主工作区可省略，默认仍使用 `apps\media-desktop\.packages`。发布脚本先验证工具与许可证，完整生成暂存包和 ZIP 后才原子替换现有 Stage 3 产物。
+发布脚本使用主工作区的 `apps\media-desktop\.packages` 离线缓存，先验证工具与许可证，完整生成暂存包和 ZIP 后才原子替换现有 Stage 3 产物。
 
 ## 固定媒体工具
 
