@@ -4,6 +4,7 @@ using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 
@@ -40,9 +41,25 @@ public static class DependencyInjection
         services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IMediaPreviewResolver>(provider =>
             provider.GetRequiredService<MediaPreviewResolver>());
-        services.AddSingleton<OrdinaryIngestService>();
-        services.AddSingleton<IOrdinaryIngestService>(provider =>
-            provider.GetRequiredService<OrdinaryIngestService>());
+        services.AddSingleton<IMediaProcessor, Mp4M4aMergeProcessor>();
+        services.AddSingleton<IMediaProcessorRegistry, MediaProcessorRegistry>();
+        services.AddSingleton<IProcessingPlanner, ProcessingPlanner>();
+        services.AddSingleton<IProcessingQueueSignal, ProcessingQueueSignal>();
+        services.AddSingleton<IProcessingExecutionController,
+            ProcessingExecutionController>();
+        services.AddSingleton<ProcessingProgressBuffer>();
+        services.AddSingleton<IProcessingCommandService, ProcessingCommandService>();
+        services.AddSingleton<IProcessingInvalidationService,
+            ProcessingInvalidationService>();
+        services.AddSingleton<IProcessingJobExecutor, ProcessingJobExecutor>();
+        services.AddSingleton<IProcessingRecoveryService, ProcessingRecoveryService>();
+        services.AddSingleton<IProcessingDiagnosticsService,
+            ProcessingDiagnosticsService>();
+        services.AddSingleton<IIngestInputResolver, IngestInputResolver>();
+        services.AddSingleton<IIngestCleanupService, IngestCleanupService>();
+        services.AddSingleton<IngestService>();
+        services.AddSingleton<IIngestService>(provider =>
+            provider.GetRequiredService<IngestService>());
         services.AddSingleton<IngestRecoveryService>();
         services.AddSingleton<IIngestRecoveryService>(provider =>
             provider.GetRequiredService<IngestRecoveryService>());

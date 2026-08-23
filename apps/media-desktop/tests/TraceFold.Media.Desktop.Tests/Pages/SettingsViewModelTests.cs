@@ -1,4 +1,5 @@
 using TraceFold.Media.Application.Settings;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Desktop.Services;
 using TraceFold.Media.Desktop.Tests.Support;
@@ -197,6 +198,29 @@ public sealed class SettingsViewModelTests
         Assert.False(viewModel.SaveCommand.CanExecute(null));
     }
 
+    [Fact]
+    public async Task LoadAsync_shows_stable_processing_tool_diagnostic()
+    {
+        var viewModel = new SettingsViewModel(
+            new QueueFolderPicker(),
+            new DirectorySettingsService(
+                new AlwaysWritableProbe(),
+                new InMemorySettingsStore()),
+            new FakeStartupCoordinator(),
+            new FakeScanPreferencesService(ScanPreferences.Default),
+            new FakeProcessingDiagnostics(
+                new ProcessingDiagnosticsDto(
+                    false,
+                    null,
+                    "processing.tool_missing")));
+
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "不可用：processing.tool_missing",
+            viewModel.ProcessingToolStatus);
+    }
+
     private static SettingsViewModel CreateViewModel(
         IFolderPicker picker,
         IScanPreferencesService? preferences = null) =>
@@ -239,5 +263,12 @@ public sealed class SettingsViewModelTests
                 _preferences,
                 null));
         }
+    }
+
+    private sealed class FakeProcessingDiagnostics(
+        ProcessingDiagnosticsDto result) : IProcessingDiagnosticsService
+    {
+        public Task<ProcessingDiagnosticsDto> CheckAsync(
+            CancellationToken cancellationToken) => Task.FromResult(result);
     }
 }

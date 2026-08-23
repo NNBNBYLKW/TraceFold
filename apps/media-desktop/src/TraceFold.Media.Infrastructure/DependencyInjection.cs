@@ -7,10 +7,12 @@ using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Infrastructure.Filesystem;
+using TraceFold.Media.Infrastructure.MediaTools;
 using TraceFold.Media.Infrastructure.Paths;
 using TraceFold.Media.Infrastructure.Persistence;
 using TraceFold.Media.Infrastructure.Settings;
@@ -40,6 +42,7 @@ public static class DependencyInjection
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
         services.AddSingleton<IInboxQueryStore, EfInboxQueryStore>();
         services.AddSingleton<IIngestStore, EfIngestStore>();
+        services.AddSingleton<IProcessingStore, EfProcessingStore>();
         services.AddSingleton<EfTaxonomyStore>();
         services.AddSingleton<ITaxonomyStore>(provider =>
             provider.GetRequiredService<EfTaxonomyStore>());
@@ -50,11 +53,18 @@ public static class DependencyInjection
         services.AddSingleton<IPreviewPathStore, EfPreviewPathStore>();
         services.AddSingleton<IFileHasher, Sha256FileHasher>();
         services.AddSingleton<IControlledMediaStorage, ControlledMediaStorage>();
+        services.AddSingleton<IProcessingWorkspace, ControlledProcessingWorkspace>();
+        services.AddSingleton<IProcessingFileVerifier, ProcessingFileVerifier>();
+        services.AddSingleton(new MediaToolOptions(
+            Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg")));
+        services.AddSingleton<BundledMediaToolLocator>();
+        services.AddSingleton<IMediaTool, FfmpegMediaTool>();
         services.AddSingleton<IScanPreferencesStore, EfScanPreferencesStore>();
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IApplicationLifetimeToken, HostApplicationLifetimeToken>();
         services.AddHostedService<CandidateStabilityWorker>();
         services.AddHostedService<AutomaticInboxScanWorker>();
+        services.AddHostedService<ProcessingQueueWorker>();
         services.AddSingleton<IDatabaseInitializer, DatabaseInitializer>();
         return services;
     }

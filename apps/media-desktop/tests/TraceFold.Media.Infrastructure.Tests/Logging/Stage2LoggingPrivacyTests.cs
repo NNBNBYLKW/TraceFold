@@ -108,7 +108,7 @@ public sealed class Stage2LoggingPrivacyTests
             Assert.True(metadata.Succeeded);
 
             IngestResult result = await provider
-                .GetRequiredService<IOrdinaryIngestService>()
+                .GetRequiredService<IIngestService>()
                 .IngestAsync(card.Id, TestContext.Current.CancellationToken);
 
             string captured = string.Join(Environment.NewLine, logs.Messages);

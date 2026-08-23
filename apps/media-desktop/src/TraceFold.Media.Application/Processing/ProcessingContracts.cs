@@ -377,3 +377,14 @@ public interface IProcessingInvalidationService
         Guid inboxItemId,
         CancellationToken cancellationToken);
 }
+
+public sealed record ProcessingDiagnosticsDto(
+    bool Available,
+    string? Version,
+    string? ErrorCode);
+
+public interface IProcessingDiagnosticsService
+{
+    Task<ProcessingDiagnosticsDto> CheckAsync(
+        CancellationToken cancellationToken);
+}

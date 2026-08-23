@@ -24,7 +24,7 @@ public sealed class DatabaseInitializationTests
 
         await using (ServiceProvider first = BuildServices(temp.Path))
         {
-            Assert.NotNull(first.GetRequiredService<OrdinaryIngestService>());
+            Assert.NotNull(first.GetRequiredService<IngestService>());
             Assert.NotNull(first.GetRequiredService<IStartupCoordinator>());
             await first.GetRequiredService<IDatabaseInitializer>()
                 .InitializeAsync(CancellationToken.None);

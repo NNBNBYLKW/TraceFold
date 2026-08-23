@@ -91,6 +91,21 @@
                 </Grid>
             </Border>
 
+            <Border
+                Padding="18"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="6">
+                    <TextBlock FontWeight="SemiBold" Text="前置处理工具" />
+                    <TextBlock
+                        AutomationProperties.AutomationId="ProcessingToolStatus"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.ProcessingToolStatus, Mode=OneWay}" />
+                </StackPanel>
+            </Border>
+
             <ItemsControl
                 AutomationProperties.AutomationId="SettingsValidationErrors"
                 ItemsSource="{x:Bind ViewModel.Errors, Mode=OneWay}">

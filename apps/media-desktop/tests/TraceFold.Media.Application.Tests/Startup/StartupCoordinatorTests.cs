@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Ingest;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 using Xunit;
@@ -100,6 +101,30 @@ public sealed class StartupCoordinatorTests
 
         Assert.Equal(["database", "recovery", "gate"], calls);
         Assert.Equal(StartupState.Ready, coordinator.Current.State);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_interrupts_processing_after_ingest_before_gate()
+    {
+        var calls = new List<string>();
+        LibraryFolders folders = CreateSiblingFolders();
+        var coordinator = new StartupCoordinator(
+            new FakeDatabaseInitializer(() => calls.Add("database")),
+            new DirectorySettingsService(
+                new AlwaysWritableProbe(),
+                new FakeSettingsStore(folders, () => calls.Add("directories"))),
+            new RecordingLogger<StartupCoordinator>(),
+            new RecordingRecovery(() => calls.Add("ingest-recovery")),
+            new RecordingRuntimeGate(() => calls.Add("gate-open")),
+            new RecordingProcessingRecovery(
+                () => calls.Add("processing-recovery")));
+
+        await coordinator.InitializeAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["database", "directories", "ingest-recovery",
+             "processing-recovery", "gate-open"],
+            calls);
     }
 
     public static TheoryData<LibraryFolders> ValidFolders =>
@@ -218,5 +243,15 @@ public sealed class StartupCoordinatorTests
             Task.CompletedTask;
 
         public void Open() => callback();
+    }
+
+    private sealed class RecordingProcessingRecovery(Action callback)
+        : IProcessingRecoveryService
+    {
+        public Task ReconcileAsync(CancellationToken cancellationToken)
+        {
+            callback();
+            return Task.CompletedTask;
+        }
     }
 }

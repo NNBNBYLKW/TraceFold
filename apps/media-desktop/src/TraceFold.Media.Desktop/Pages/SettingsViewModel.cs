@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Desktop.Services;
 
 namespace TraceFold.Media.Desktop.Pages;
@@ -10,7 +11,8 @@ public sealed partial class SettingsViewModel(
     IFolderPicker folderPicker,
     DirectorySettingsService settingsService,
     IStartupCoordinator startupCoordinator,
-    IScanPreferencesService scanPreferencesService) : ObservableObject
+    IScanPreferencesService scanPreferencesService,
+    IProcessingDiagnosticsService? processingDiagnostics = null) : ObservableObject
 {
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private bool _hasLoaded;
@@ -42,6 +44,9 @@ public sealed partial class SettingsViewModel(
     [ObservableProperty]
     public partial string LastScanSummary { get; private set; } = "尚无扫描结果。";
 
+    [ObservableProperty]
+    public partial string ProcessingToolStatus { get; private set; } = "正在检查…";
+
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
         await _loadGate.WaitAsync(cancellationToken);
@@ -67,6 +72,15 @@ public sealed partial class SettingsViewModel(
                 ScanPreferences preferences =
                     await scanPreferencesService.LoadAsync(cancellationToken);
                 ApplyScanPreferences(preferences);
+                if (processingDiagnostics is not null)
+                {
+                    ProcessingDiagnosticsDto diagnostic =
+                        await processingDiagnostics.CheckAsync(cancellationToken);
+                    ProcessingToolStatus = diagnostic.Available
+                        ? $"可用：{diagnostic.Version ?? "版本未知"}"
+                        : $"不可用：{diagnostic.ErrorCode
+                            ?? "processing.tool_unavailable"}";
+                }
             }
             finally
             {

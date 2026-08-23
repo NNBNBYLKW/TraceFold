@@ -257,10 +257,6 @@ public interface IIngestService
         CancellationToken cancellationToken);
 }
 
-public interface IOrdinaryIngestService : IIngestService
-{
-}
-
 public interface IIngestInputResolver
 {
     Task<PreparedIngestInput> ResolveAsync(

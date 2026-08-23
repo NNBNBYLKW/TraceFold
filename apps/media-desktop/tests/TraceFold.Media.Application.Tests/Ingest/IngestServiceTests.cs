@@ -10,7 +10,7 @@ using Xunit;
 
 namespace TraceFold.Media.Application.Tests.Ingest;
 
-public sealed class OrdinaryIngestServiceTests
+public sealed class IngestServiceTests
 {
     [Fact]
     public async Task IngestAsync_commits_asset_before_deleting_source()
@@ -53,7 +53,7 @@ public sealed class OrdinaryIngestServiceTests
             Guid itemId,
             RecordingIngestStore store,
             RecordingStorage storage,
-            OrdinaryIngestService service)
+            IngestService service)
         {
             _root = root;
             ItemId = itemId;
@@ -68,7 +68,7 @@ public sealed class OrdinaryIngestServiceTests
 
         public RecordingStorage Storage { get; }
 
-        public OrdinaryIngestService Service { get; }
+        public IngestService Service { get; }
 
         public static Task<IngestFixture> ReadyOrdinaryAsync() => CreateAsync(null);
 
@@ -116,14 +116,15 @@ public sealed class OrdinaryIngestServiceTests
             var storage = new RecordingStorage(store, conflict == ConflictKind.Name);
             var settings = new FixedSettingsStore(
                 new LibraryFolders(inbox, library, work));
-            var service = new OrdinaryIngestService(
+            var service = new IngestService(
                 new CompletedScanner(),
                 store,
                 settings,
-                new FixedHasher(),
+                new TestInputResolver(),
                 storage,
+                new IngestCleanupService(store, storage),
                 new MediaOperationCoordinator(),
-                NullLogger<OrdinaryIngestService>.Instance);
+                NullLogger<IngestService>.Instance);
             return new IngestFixture(root, itemId, store, storage, service);
         }
     }
@@ -311,6 +312,29 @@ public sealed class OrdinaryIngestServiceTests
             string path,
             CancellationToken cancellationToken) =>
             Task.FromResult(new string('A', 64));
+    }
+
+    private sealed class TestInputResolver : IIngestInputResolver
+    {
+        public Task<PreparedIngestInput> ResolveAsync(
+            IngestCandidate candidate,
+            CancellationToken cancellationToken)
+        {
+            IngestSourceRecord source = candidate.Sources.Single();
+            string hash = new('A', 64);
+            var cleanup = new IngestCleanupFile(
+                IngestCleanupKind.InboxSource,
+                source.FullPath,
+                source.Size,
+                hash);
+            return Task.FromResult(new PreparedIngestInput(
+                cleanup.Kind,
+                source.FullPath,
+                source.Size,
+                source.LastWriteTimeUtc,
+                hash,
+                [cleanup]));
+        }
     }
 
     private sealed class FixedSettingsStore(LibraryFolders folders)

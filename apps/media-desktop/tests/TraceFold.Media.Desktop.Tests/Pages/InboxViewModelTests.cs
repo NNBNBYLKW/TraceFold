@@ -118,11 +118,33 @@ public sealed class InboxViewModelTests
         Assert.True(viewModel.StopProcessingCommand.CanExecute(null));
     }
 
+    [Fact]
+    public async Task Missing_processing_tool_disables_start_but_keeps_refresh_available()
+    {
+        var query = new SingleItemInboxQuery(
+            InboxItemState.RequiresProcessing,
+            InboxAction.Preview | InboxAction.EditMetadata
+                | InboxAction.OpenFolder | InboxAction.StartProcessing);
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            processingCommands: new RecordingProcessingCommandService(),
+            diagnostics: new FixedProcessingDiagnostics(available: false));
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(viewModel.StartProcessingCommand.CanExecute(null));
+        Assert.True(viewModel.RefreshCommand.CanExecute(null));
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
-        IOrdinaryIngestService? ingest = null,
-        IProcessingCommandService? processingCommands = null) =>
+        IIngestService? ingest = null,
+        IProcessingCommandService? processingCommands = null,
+        IProcessingDiagnosticsService? diagnostics = null) =>
         new(
             query,
             new CompletedScanner(),
@@ -132,7 +154,8 @@ public sealed class InboxViewModelTests
             new InboxInspectorViewModel(metadata),
             ingest ?? new RecordingIngestService(() => true),
             new NoOpRecoveryService(),
-            processingCommands ?? new RecordingProcessingCommandService());
+            processingCommands ?? new RecordingProcessingCommandService(),
+            diagnostics);
 
     private static MetadataEditorViewModel CreateMetadata() =>
         new(
@@ -226,7 +249,7 @@ public sealed class InboxViewModelTests
     }
 
     private sealed class RecordingIngestService(Func<bool> metadataWasFlushed)
-        : IOrdinaryIngestService
+        : IIngestService
     {
         public bool ObservedFlushedMetadata { get; private set; }
 
@@ -316,6 +339,17 @@ public sealed class InboxViewModelTests
         public Task<ProcessingCommandResult> RetryAsync(Guid inboxItemId, CancellationToken cancellationToken) =>
             Task.FromResult(new ProcessingCommandResult(
                 ProcessingCommandOutcome.Queued, Guid.NewGuid(), "已加入处理队列。"));
+    }
+
+    private sealed class FixedProcessingDiagnostics(bool available)
+        : IProcessingDiagnosticsService
+    {
+        public Task<ProcessingDiagnosticsDto> CheckAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ProcessingDiagnosticsDto(
+                available,
+                available ? "test" : null,
+                available ? null : "processing.tool_missing"));
     }
 
     private sealed class CompletedScanner : IInboxScanner

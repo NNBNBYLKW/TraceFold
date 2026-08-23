@@ -46,7 +46,7 @@ public sealed class AppShutdownCoordinator
         _mediaOperations = mediaOperations;
         _hostStopper = hostStopper;
         _logger = logger;
-        _timeout = timeout ?? TimeSpan.FromSeconds(5);
+        _timeout = timeout ?? TimeSpan.FromSeconds(15);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)

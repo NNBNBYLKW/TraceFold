@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace TraceFold.Media.Architecture.Tests;
@@ -76,6 +77,46 @@ public sealed class ArchitectureTests
                 Assert.False(
                     referencesWinUi,
                     $"{projectFile} must not reference WinUI or Windows App SDK.");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ViewModels_do_not_accept_infrastructure_or_process_types()
+    {
+        string sourceRoot = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "TraceFold.Media.Desktop"));
+        string[] forbidden =
+        [
+            "IMediaTool",
+            "IProcessingStore",
+            "MediaDesktopDbContext",
+            "Process"
+        ];
+
+        foreach (string viewModel in Directory.GetFiles(
+                     sourceRoot,
+                     "*ViewModel.cs",
+                     SearchOption.AllDirectories))
+        {
+            string source = await File.ReadAllTextAsync(
+                viewModel,
+                TestContext.Current.CancellationToken);
+            foreach (string typeName in forbidden)
+            {
+                Assert.False(
+                    Regex.IsMatch(
+                        source,
+                        $@"\b{Regex.Escape(typeName)}\b",
+                        RegexOptions.CultureInvariant),
+                    $"{viewModel} must not reference {typeName}.");
             }
         }
     }

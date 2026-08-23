@@ -200,7 +200,7 @@ public sealed class OrdinaryMediaFlowTests
             Inbox = provider.GetRequiredService<IInboxQueryService>();
             Metadata = provider.GetRequiredService<IMetadataEditorService>();
             Taxonomy = provider.GetRequiredService<ITaxonomyService>();
-            Ingest = provider.GetRequiredService<IOrdinaryIngestService>();
+            Ingest = provider.GetRequiredService<IIngestService>();
             Library = provider.GetRequiredService<ILibraryQueryService>();
             Preview = provider.GetRequiredService<IMediaPreviewResolver>();
         }
@@ -215,7 +215,7 @@ public sealed class OrdinaryMediaFlowTests
 
         public ITaxonomyService Taxonomy { get; }
 
-        public IOrdinaryIngestService Ingest { get; }
+        public IIngestService Ingest { get; }
 
         public ILibraryQueryService Library { get; }
 

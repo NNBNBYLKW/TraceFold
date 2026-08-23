@@ -15,7 +15,7 @@ public class IngestService(
     IControlledMediaStorage storage,
     IIngestCleanupService cleanup,
     IMediaOperationCoordinator coordinator,
-    ILogger logger) : IIngestService
+    ILogger<IngestService> logger) : IIngestService
 {
     private readonly SemaphoreSlim commitGate = new(1, 1);
 

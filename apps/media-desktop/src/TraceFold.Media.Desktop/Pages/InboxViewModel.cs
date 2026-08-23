@@ -25,9 +25,10 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IInboxActivityNotifier _activity;
     private readonly IUiDispatcher _dispatcher;
     private readonly IMediaPreviewResolver _previewResolver;
-    private readonly IOrdinaryIngestService _ingest;
+    private readonly IIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
     private readonly IProcessingCommandService? _processingCommands;
+    private readonly IProcessingDiagnosticsService? _processingDiagnostics;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private bool _hasLoaded;
@@ -40,9 +41,10 @@ public sealed partial class InboxViewModel : ObservableObject
         IUiDispatcher dispatcher,
         IMediaPreviewResolver previewResolver,
         InboxInspectorViewModel inspector,
-        IOrdinaryIngestService ingest,
+        IIngestService ingest,
         IIngestRecoveryService recovery,
-        IProcessingCommandService? processingCommands = null)
+        IProcessingCommandService? processingCommands = null,
+        IProcessingDiagnosticsService? processingDiagnostics = null)
     {
         _query = query;
         _scanner = scanner;
@@ -53,6 +55,7 @@ public sealed partial class InboxViewModel : ObservableObject
         _ingest = ingest;
         _recovery = recovery;
         _processingCommands = processingCommands;
+        _processingDiagnostics = processingDiagnostics;
         StateFilters =
         [
             new("全部状态", null),
@@ -95,6 +98,9 @@ public sealed partial class InboxViewModel : ObservableObject
     [ObservableProperty]
     public partial string OperationMessage { get; private set; } = string.Empty;
 
+    [ObservableProperty]
+    public partial bool ProcessingAvailable { get; private set; } = true;
+
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
         await _loadGate.WaitAsync(cancellationToken);
@@ -106,7 +112,15 @@ public sealed partial class InboxViewModel : ObservableObject
                 _hasLoaded = true;
             }
 
+            if (_processingDiagnostics is not null)
+            {
+                ProcessingDiagnosticsDto diagnostic =
+                    await _processingDiagnostics.CheckAsync(cancellationToken);
+                ProcessingAvailable = diagnostic.Available;
+            }
+
             await ReloadCardsAsync(cancellationToken);
+            NotifyCommands();
         }
         finally
         {
@@ -407,6 +421,7 @@ public sealed partial class InboxViewModel : ObservableObject
 
     private bool CanStartProcessing() => !IsBusy
         && _processingCommands is not null
+        && ProcessingAvailable
         && Inspector.AllowedActions.HasFlag(InboxAction.StartProcessing);
 
     private bool CanCancelProcessing() => !IsBusy
@@ -419,6 +434,7 @@ public sealed partial class InboxViewModel : ObservableObject
 
     private bool CanRetryProcessing() => !IsBusy
         && _processingCommands is not null
+        && ProcessingAvailable
         && Inspector.AllowedActions.HasFlag(InboxAction.RetryProcessing);
 
     private void NotifyCommands()

@@ -111,7 +111,7 @@ public static class Stage2PackageProbe
             Require(metadata.Succeeded, "probe.metadata_failed");
 
             IngestResult ingest = await host.Services
-                .GetRequiredService<IOrdinaryIngestService>()
+                .GetRequiredService<IIngestService>()
                 .IngestAsync(card.Id, cancellationToken);
             Require(
                 ingest.Outcome == IngestOutcome.Completed,
