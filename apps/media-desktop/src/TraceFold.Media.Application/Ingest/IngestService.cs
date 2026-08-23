@@ -362,5 +362,6 @@ public class IngestService(
         IngestOutcome outcome,
         string message,
         Guid? operationId = null,
-        Guid? assetId = null) => new(outcome, operationId, assetId, message);
+        Guid? assetId = null) =>
+        new(outcome, operationId, assetId, null, message);
 }

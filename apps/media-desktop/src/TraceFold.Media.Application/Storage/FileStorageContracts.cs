@@ -11,6 +11,19 @@ public sealed record CommittedFile(
     long Size,
     string Sha256);
 
+public sealed record LibraryFileSnapshot(
+    string FullPath,
+    string RelativePath,
+    long Size,
+    DateTimeOffset LastWriteTimeUtc,
+    string Sha256);
+
+public sealed record ReplacementBackup(
+    string FullPath,
+    string RelativePath,
+    long Size,
+    string Sha256);
+
 public enum SourceDeleteOutcome
 {
     Deleted,

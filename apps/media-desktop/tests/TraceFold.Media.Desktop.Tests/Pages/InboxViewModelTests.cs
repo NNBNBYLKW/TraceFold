@@ -287,6 +287,7 @@ public sealed class InboxViewModelTests
                 IngestOutcome.Completed,
                 Guid.NewGuid(),
                 Guid.NewGuid(),
+                null,
                 "ingest.completed"));
         }
     }
