@@ -8,5 +8,6 @@ public enum IngestOperationStage
     DatabaseCommitted,
     CleanupPending,
     Completed,
-    Failed
+    Failed,
+    RecoveryBlocked
 }

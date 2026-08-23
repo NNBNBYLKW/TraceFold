@@ -145,6 +145,100 @@ public sealed class InboxItemTests
         Assert.True(item.AllowedActions.HasFlag(InboxAction.Retry));
     }
 
+    [Fact]
+    public void Conflict_item_can_reopen_or_return_to_ready_without_ingesting()
+    {
+        InboxItem item = ReadyItem();
+        item.BlockConflict("ingest.conflict");
+
+        Assert.True(item.AllowedActions.HasFlag(InboxAction.ResolveConflict));
+        Assert.False(item.AllowedActions.HasFlag(InboxAction.Ingest));
+
+        item.ReturnConflictToReady();
+
+        Assert.Equal(InboxItemState.ReadyToTag, item.State);
+        Assert.Null(item.ErrorCode);
+    }
+
+    [Fact]
+    public void Chosen_conflict_can_begin_the_shared_ingest_pipeline()
+    {
+        InboxItem item = ReadyItem();
+        item.BlockConflict("ingest.conflict");
+
+        item.BeginResolvedIngest();
+
+        Assert.Equal(InboxItemState.Ingesting, item.State);
+        Assert.Null(item.ErrorCode);
+    }
+
+    [Fact]
+    public void Recovery_block_exposes_only_safe_recovery_actions()
+    {
+        InboxItem item = ReadyItem();
+        item.BeginIngest();
+
+        item.BlockRecovery("recovery.identity_ambiguous");
+
+        Assert.Equal(InboxItemState.RecoveryBlocked, item.State);
+        Assert.Equal("recovery.identity_ambiguous", item.ErrorCode);
+        Assert.True(item.AllowedActions.HasFlag(InboxAction.Preview));
+        Assert.True(item.AllowedActions.HasFlag(InboxAction.OpenFolder));
+        Assert.True(item.AllowedActions.HasFlag(InboxAction.RecheckRecovery));
+        Assert.False(item.AllowedActions.HasFlag(InboxAction.Ingest));
+        Assert.False(item.AllowedActions.HasFlag(InboxAction.Retry));
+    }
+
+    [Fact]
+    public void Source_change_can_reset_a_recovery_blocked_item()
+    {
+        InboxItem item = ReadyItem();
+        item.BeginIngest();
+        item.BlockRecovery("recovery.identity_ambiguous");
+
+        item.ResetForSourceChange();
+
+        Assert.Equal(InboxItemState.WaitingForStability, item.State);
+        Assert.Null(item.ErrorCode);
+    }
+
+    [Fact]
+    public void Cleanup_pending_item_can_become_recovery_blocked()
+    {
+        InboxItem item = ReadyItem();
+        item.BeginIngest();
+        item.MarkCleanupPending();
+
+        item.BlockRecovery("recovery.cleanup_identity_ambiguous");
+
+        Assert.Equal(InboxItemState.RecoveryBlocked, item.State);
+        Assert.Equal("recovery.cleanup_identity_ambiguous", item.ErrorCode);
+    }
+
+    [Fact]
+    public void Failed_ingest_item_can_become_recovery_blocked()
+    {
+        InboxItem item = ReadyItem();
+        item.BeginIngest();
+        item.Fail("ingest.database_failed", isRetryable: true);
+
+        item.BlockRecovery("recovery.database_identity_ambiguous");
+
+        Assert.Equal(InboxItemState.RecoveryBlocked, item.State);
+        Assert.False(item.IsRetryable);
+    }
+
+    [Fact]
+    public void Processing_failure_cannot_become_an_ingest_recovery_block()
+    {
+        InboxItem item = ProcessingItem();
+        item.FailProcessing("processing.ffmpeg_failed", isRetryable: true);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            item.BlockRecovery("recovery.identity_ambiguous"));
+        Assert.Equal(InboxItemState.Failed, item.State);
+    }
+
     private static InboxItem RequiredItem()
     {
         InboxItem item = InboxItem.Discover(Guid.NewGuid());
@@ -158,6 +252,14 @@ public sealed class InboxItemTests
         InboxItem item = RequiredItem();
         item.QueueProcessing();
         item.BeginProcessing();
+        return item;
+    }
+
+    private static InboxItem ReadyItem()
+    {
+        InboxItem item = InboxItem.Discover(Guid.NewGuid());
+        item.MarkAnalyzing();
+        item.MarkReady();
         return item;
     }
 }

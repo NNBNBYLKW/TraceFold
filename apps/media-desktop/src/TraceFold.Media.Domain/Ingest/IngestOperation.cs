@@ -15,6 +15,8 @@ public sealed class IngestOperation
 
     public IngestOperationStage Stage { get; private set; }
 
+    public IngestOperationStage? BlockedFromStage { get; private set; }
+
     public void AdvanceTo(IngestOperationStage next)
     {
         bool allowed = (Stage, next) switch
@@ -26,7 +28,9 @@ public sealed class IngestOperation
             (IngestOperationStage.DatabaseCommitted, IngestOperationStage.Completed) => true,
             (IngestOperationStage.CleanupPending, IngestOperationStage.Completed) => true,
             (_, IngestOperationStage.Failed)
-                when Stage is not IngestOperationStage.Completed and not IngestOperationStage.Failed => true,
+                when Stage is not IngestOperationStage.Completed
+                    and not IngestOperationStage.Failed
+                    and not IngestOperationStage.RecoveryBlocked => true,
             _ => false
         };
 
@@ -37,5 +41,31 @@ public sealed class IngestOperation
         }
 
         Stage = next;
+    }
+
+    public void BlockRecovery()
+    {
+        if (Stage is IngestOperationStage.Completed
+            or IngestOperationStage.Failed
+            or IngestOperationStage.RecoveryBlocked)
+        {
+            throw new InvalidOperationException(
+                $"Cannot block recovery for an ingest operation in {Stage} state.");
+        }
+
+        BlockedFromStage = Stage;
+        Stage = IngestOperationStage.RecoveryBlocked;
+    }
+
+    public void ResumeRecovery()
+    {
+        if (Stage != IngestOperationStage.RecoveryBlocked || BlockedFromStage is null)
+        {
+            throw new InvalidOperationException(
+                "Only a recovery-blocked ingest operation can resume.");
+        }
+
+        Stage = BlockedFromStage.Value;
+        BlockedFromStage = null;
     }
 }

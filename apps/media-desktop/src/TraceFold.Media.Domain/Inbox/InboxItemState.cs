@@ -14,5 +14,6 @@ public enum InboxItemState
     SourceMissing,
     ProcessingQueued,
     Processing,
-    ProcessingInterrupted
+    ProcessingInterrupted,
+    RecoveryBlocked
 }
