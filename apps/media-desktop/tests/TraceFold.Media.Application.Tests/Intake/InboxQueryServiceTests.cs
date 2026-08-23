@@ -1,5 +1,6 @@
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Domain.Processing;
 using Xunit;
 
 namespace TraceFold.Media.Application.Tests.Intake;
@@ -36,6 +37,27 @@ public sealed class InboxQueryServiceTests
         InboxCardDto card = Assert.Single(result);
         Assert.Equal("ready.jpg", card.DisplayName);
         Assert.True(card.CanIngest);
+    }
+
+    [Theory]
+    [InlineData("check_sources", "检查源文件")]
+    [InlineData("merge", "合并音视频")]
+    [InlineData("verify_output", "验证输出")]
+    [InlineData("future_step", "正在处理")]
+    public void Processing_summary_uses_one_stable_step_text_mapper(
+        string stepKey,
+        string expected)
+    {
+        var summary = new ProcessingSummaryDto(
+            Guid.NewGuid(),
+            ProcessingJobStatus.Running,
+            "合并视频和音频",
+            ProcessingPresentationMapper.StepText(stepKey),
+            63,
+            null,
+            false);
+
+        Assert.Equal(expected, summary.StepText);
     }
 
     private static InboxCardDto Card(

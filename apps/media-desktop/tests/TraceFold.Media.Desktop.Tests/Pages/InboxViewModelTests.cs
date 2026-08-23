@@ -2,7 +2,9 @@ using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Domain.Processing;
 using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Desktop.Services;
 using Xunit;
@@ -61,10 +63,66 @@ public sealed class InboxViewModelTests
         Assert.Equal("入库完成。", viewModel.OperationMessage);
     }
 
+    [Fact]
+    public async Task Required_item_exposes_start_and_never_calls_ingest()
+    {
+        var query = new SingleItemInboxQuery(
+            InboxItemState.RequiresProcessing,
+            InboxAction.Preview | InboxAction.EditMetadata
+                | InboxAction.OpenFolder | InboxAction.StartProcessing);
+        var ingest = new RecordingIngestService(() => true);
+        var processing = new RecordingProcessingCommandService();
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            ingest,
+            processing);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(viewModel.StartProcessingCommand.CanExecute(null));
+        Assert.False(viewModel.IngestCommand.CanExecute(null));
+        await viewModel.StartProcessingCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, processing.StartCalls);
+        Assert.Equal(0, ingest.CallCount);
+    }
+
+    [Fact]
+    public async Task Running_item_exposes_stop_and_card_progress()
+    {
+        var processing = new ProcessingSummaryDto(
+            Guid.NewGuid(),
+            ProcessingJobStatus.Running,
+            "合并视频和音频",
+            "合并音视频",
+            63,
+            null,
+            false);
+        var query = new SingleItemInboxQuery(
+            InboxItemState.Processing,
+            InboxAction.Preview | InboxAction.EditMetadata
+                | InboxAction.OpenFolder | InboxAction.StopProcessing,
+            processing);
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            processingCommands: new RecordingProcessingCommandService());
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        InboxCardViewModel card = Assert.Single(viewModel.Items);
+        await viewModel.SelectAsync(card, TestContext.Current.CancellationToken);
+
+        Assert.Equal("合并音视频 63%", card.ProgressText);
+        Assert.True(viewModel.StopProcessingCommand.CanExecute(null));
+    }
+
     private static InboxViewModel CreateViewModel(
-        RecordingInboxQuery query,
+        IInboxQueryService query,
         MetadataEditorViewModel metadata,
-        IOrdinaryIngestService? ingest = null) =>
+        IOrdinaryIngestService? ingest = null,
+        IProcessingCommandService? processingCommands = null) =>
         new(
             query,
             new CompletedScanner(),
@@ -73,7 +131,13 @@ public sealed class InboxViewModelTests
             new MissingPreviewResolver(),
             new InboxInspectorViewModel(metadata),
             ingest ?? new RecordingIngestService(() => true),
-            new NoOpRecoveryService());
+            new NoOpRecoveryService(),
+            processingCommands ?? new RecordingProcessingCommandService());
+
+    private static MetadataEditorViewModel CreateMetadata() =>
+        new(
+            new RecordingMetadataGateway(),
+            new BlockingDebounceScheduler());
 
     private sealed class RecordingInboxQuery : IInboxQueryService
     {
@@ -166,10 +230,13 @@ public sealed class InboxViewModelTests
     {
         public bool ObservedFlushedMetadata { get; private set; }
 
+        public int CallCount { get; private set; }
+
         public Task<IngestResult> IngestAsync(
             Guid inboxItemId,
             CancellationToken cancellationToken)
         {
+            CallCount++;
             ObservedFlushedMetadata = metadataWasFlushed();
             return Task.FromResult(new IngestResult(
                 IngestOutcome.Completed,
@@ -177,6 +244,78 @@ public sealed class InboxViewModelTests
                 Guid.NewGuid(),
                 "ingest.completed"));
         }
+    }
+
+    private sealed class SingleItemInboxQuery : IInboxQueryService
+    {
+        private readonly InboxDetailsDto details;
+
+        public SingleItemInboxQuery(
+            InboxItemState state,
+            InboxAction allowedActions,
+            ProcessingSummaryDto? processing = null)
+        {
+            var card = new InboxCardDto(
+                Guid.NewGuid(),
+                "clip.mp4",
+                "clip.mp4",
+                MediaKind.Video,
+                state,
+                state.ToString(),
+                false,
+                processing);
+            var owner = new MetadataOwner(MetadataOwnerKind.InboxItem, card.Id);
+            details = new InboxDetailsDto(
+                card,
+                [],
+                null,
+                new MetadataDocument(owner, null, [], null, [], 0),
+                allowedActions,
+                null,
+                "mp4_m4a_merge",
+                false,
+                processing);
+        }
+
+        public Task<IReadOnlyList<InboxCardDto>> SearchAsync(
+            InboxQuery query,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<InboxCardDto>>([details.Card]);
+
+        public Task<InboxDetailsDto?> GetDetailsAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<InboxDetailsDto?>(details);
+
+        public Task ClearMissingAsync(Guid inboxItemId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingProcessingCommandService
+        : IProcessingCommandService
+    {
+        public int StartCalls { get; private set; }
+
+        public Task<ProcessingCommandResult> StartAsync(Guid inboxItemId, CancellationToken cancellationToken)
+        {
+            StartCalls++;
+            return Task.FromResult(new ProcessingCommandResult(
+                ProcessingCommandOutcome.Queued,
+                Guid.NewGuid(),
+                "已加入处理队列。"));
+        }
+
+        public Task<ProcessingCommandResult> CancelQueuedAsync(Guid inboxItemId, CancellationToken cancellationToken) =>
+            Task.FromResult(new ProcessingCommandResult(
+                ProcessingCommandOutcome.Cancelled, Guid.NewGuid(), "已取消排队。"));
+
+        public Task<ProcessingCommandResult> StopAsync(Guid inboxItemId, CancellationToken cancellationToken) =>
+            Task.FromResult(new ProcessingCommandResult(
+                ProcessingCommandOutcome.StopRequested, Guid.NewGuid(), "正在停止处理。"));
+
+        public Task<ProcessingCommandResult> RetryAsync(Guid inboxItemId, CancellationToken cancellationToken) =>
+            Task.FromResult(new ProcessingCommandResult(
+                ProcessingCommandOutcome.Queued, Guid.NewGuid(), "已加入处理队列。"));
     }
 
     private sealed class CompletedScanner : IInboxScanner

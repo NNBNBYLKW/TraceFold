@@ -33,6 +33,19 @@ public sealed class InboxCardViewModel
 
     public string StatusText => Card.StatusText;
 
+    public string ProgressText => Card.Processing is null
+        ? string.Empty
+        : State == InboxItemState.ProcessingQueued
+            ? "排队中"
+            : $"{Card.Processing.StepText} {Card.Processing.ProgressPercent}%";
+
+    public double ProcessingProgress => Card.Processing?.ProgressPercent ?? 0;
+
+    public Visibility ProcessingVisibility => State is
+        InboxItemState.ProcessingQueued or InboxItemState.Processing
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
     public InboxItemState State => Card.State;
 
     public ImageSource? ThumbnailSource => _thumbnailUri is null

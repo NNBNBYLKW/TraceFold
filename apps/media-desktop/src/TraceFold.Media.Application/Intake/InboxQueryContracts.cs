@@ -1,6 +1,7 @@
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Domain.Processing;
 
 namespace TraceFold.Media.Application.Intake;
 
@@ -13,7 +14,28 @@ public sealed record InboxCardDto(
     MediaKind MediaKind,
     InboxItemState State,
     string StatusText,
-    bool CanIngest);
+    bool CanIngest,
+    ProcessingSummaryDto? Processing = null);
+
+public sealed record ProcessingSummaryDto(
+    Guid JobId,
+    ProcessingJobStatus Status,
+    string ProcessorDisplayName,
+    string StepText,
+    int ProgressPercent,
+    string? ErrorCode,
+    bool IsRetryable);
+
+public static class ProcessingPresentationMapper
+{
+    public static string StepText(string? stepKey) => stepKey switch
+    {
+        "check_sources" => "检查源文件",
+        "merge" => "合并音视频",
+        "verify_output" => "验证输出",
+        _ => "正在处理"
+    };
+}
 
 public sealed record InboxSourceFileDto(
     string Filename,
@@ -30,7 +52,8 @@ public sealed record InboxDetailsDto(
     InboxAction AllowedActions,
     string? ErrorCode,
     string? RequiredCapability,
-    bool IsRetryable);
+    bool IsRetryable,
+    ProcessingSummaryDto? Processing = null);
 
 public interface IInboxQueryStore
 {

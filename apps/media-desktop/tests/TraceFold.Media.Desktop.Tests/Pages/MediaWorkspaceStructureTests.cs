@@ -27,6 +27,22 @@ public sealed class MediaWorkspaceStructureTests
             "AutomationProperties.AutomationId=\"InspectorPane\"",
             inboxXaml,
             StringComparison.Ordinal);
+        foreach (string id in new[]
+        {
+            "InboxStartProcessingButton",
+            "InboxCancelProcessingButton",
+            "InboxStopProcessingButton",
+            "InboxRetryProcessingButton",
+            "InboxProcessingProgress",
+            "InboxProcessingStep"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                inboxXaml,
+                StringComparison.Ordinal);
+        }
+
         Assert.Contains("MediaPlayerElement", previewXaml, StringComparison.Ordinal);
     }
 

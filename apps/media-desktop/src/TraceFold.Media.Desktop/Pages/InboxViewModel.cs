@@ -5,6 +5,7 @@ using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Desktop.Services;
 
@@ -26,6 +27,7 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IMediaPreviewResolver _previewResolver;
     private readonly IOrdinaryIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
+    private readonly IProcessingCommandService? _processingCommands;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private bool _hasLoaded;
@@ -39,7 +41,8 @@ public sealed partial class InboxViewModel : ObservableObject
         IMediaPreviewResolver previewResolver,
         InboxInspectorViewModel inspector,
         IOrdinaryIngestService ingest,
-        IIngestRecoveryService recovery)
+        IIngestRecoveryService recovery,
+        IProcessingCommandService? processingCommands = null)
     {
         _query = query;
         _scanner = scanner;
@@ -49,11 +52,15 @@ public sealed partial class InboxViewModel : ObservableObject
         Inspector = inspector;
         _ingest = ingest;
         _recovery = recovery;
+        _processingCommands = processingCommands;
         StateFilters =
         [
             new("全部状态", null),
             new("待入库", InboxItemState.ReadyToTag),
             new("需要处理", InboxItemState.RequiresProcessing),
+            new("排队中", InboxItemState.ProcessingQueued),
+            new("处理中", InboxItemState.Processing),
+            new("已中断", InboxItemState.ProcessingInterrupted),
             new("存在冲突", InboxItemState.ConflictBlocked),
             new("源文件缺失", InboxItemState.SourceMissing),
             new("处理失败", InboxItemState.Failed)
@@ -252,6 +259,30 @@ public sealed partial class InboxViewModel : ObservableObject
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanStartProcessing))]
+    private Task StartProcessingAsync(CancellationToken cancellationToken) =>
+        RunProcessingAsync(
+            (itemId, token) => _processingCommands!.StartAsync(itemId, token),
+            cancellationToken);
+
+    [RelayCommand(CanExecute = nameof(CanCancelProcessing))]
+    private Task CancelProcessingAsync(CancellationToken cancellationToken) =>
+        RunProcessingAsync(
+            (itemId, token) => _processingCommands!.CancelQueuedAsync(itemId, token),
+            cancellationToken);
+
+    [RelayCommand(CanExecute = nameof(CanStopProcessing))]
+    private Task StopProcessingAsync(CancellationToken cancellationToken) =>
+        RunProcessingAsync(
+            (itemId, token) => _processingCommands!.StopAsync(itemId, token),
+            cancellationToken);
+
+    [RelayCommand(CanExecute = nameof(CanRetryProcessing))]
+    private Task RetryProcessingAsync(CancellationToken cancellationToken) =>
+        RunProcessingAsync(
+            (itemId, token) => _processingCommands!.RetryAsync(itemId, token),
+            cancellationToken);
+
     partial void OnSearchTextChanged(string value)
     {
         _ = value;
@@ -374,13 +405,77 @@ public sealed partial class InboxViewModel : ObservableObject
         && (Inspector.AllowedActions.HasFlag(InboxAction.Retry)
             || Inspector.AllowedActions.HasFlag(InboxAction.RetryCleanup));
 
+    private bool CanStartProcessing() => !IsBusy
+        && _processingCommands is not null
+        && Inspector.AllowedActions.HasFlag(InboxAction.StartProcessing);
+
+    private bool CanCancelProcessing() => !IsBusy
+        && _processingCommands is not null
+        && Inspector.AllowedActions.HasFlag(InboxAction.CancelProcessing);
+
+    private bool CanStopProcessing() => !IsBusy
+        && _processingCommands is not null
+        && Inspector.AllowedActions.HasFlag(InboxAction.StopProcessing);
+
+    private bool CanRetryProcessing() => !IsBusy
+        && _processingCommands is not null
+        && Inspector.AllowedActions.HasFlag(InboxAction.RetryProcessing);
+
     private void NotifyCommands()
     {
         RefreshCommand.NotifyCanExecuteChanged();
         IngestCommand.NotifyCanExecuteChanged();
         ClearMissingCommand.NotifyCanExecuteChanged();
         RetryCommand.NotifyCanExecuteChanged();
+        StartProcessingCommand.NotifyCanExecuteChanged();
+        CancelProcessingCommand.NotifyCanExecuteChanged();
+        StopProcessingCommand.NotifyCanExecuteChanged();
+        RetryProcessingCommand.NotifyCanExecuteChanged();
     }
+
+    private async Task RunProcessingAsync(
+        Func<Guid, CancellationToken, Task<ProcessingCommandResult>> command,
+        CancellationToken cancellationToken)
+    {
+        InboxCardViewModel? selected = SelectedItem;
+        if (selected is null || IsBusy || _processingCommands is null)
+        {
+            return;
+        }
+
+        Guid inboxItemId = selected.Id;
+        IsBusy = true;
+        try
+        {
+            ProcessingCommandResult result = await command(
+                inboxItemId,
+                cancellationToken);
+            await ReloadCardsAsync(cancellationToken);
+            InboxCardViewModel? refreshed = Items.FirstOrDefault(
+                item => item.Id == inboxItemId);
+            await SelectAsync(refreshed, cancellationToken);
+            OperationMessage = ProcessingMessage(result);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private static string ProcessingMessage(ProcessingCommandResult result) =>
+        !string.IsNullOrWhiteSpace(result.Message)
+            ? result.Message
+            : result.Outcome switch
+            {
+                ProcessingCommandOutcome.Queued => "已加入处理队列。",
+                ProcessingCommandOutcome.Cancelled => "已取消排队。",
+                ProcessingCommandOutcome.StopRequested => "正在停止处理。",
+                ProcessingCommandOutcome.ToolUnavailable => "前置处理工具不可用。",
+                ProcessingCommandOutcome.SourceMissing => "源文件已不存在。",
+                ProcessingCommandOutcome.SourceChanged => "源文件已变化，请重新刷新。",
+                ProcessingCommandOutcome.ShuttingDown => "软件正在关闭。",
+                _ => "前置处理操作未完成。"
+            };
 
     private static string IngestMessage(IngestResult result) =>
         result.Outcome switch

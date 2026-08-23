@@ -28,6 +28,7 @@ public sealed class EfPreviewPathStore(
             MetadataOwnerKind.InboxItem => await FindInboxAsync(
                 context,
                 settings.InboxDirectory,
+                settings.WorkDirectory,
                 owner.Id,
                 cancellationToken),
             MetadataOwnerKind.MediaAsset => await FindAssetAsync(
@@ -42,9 +43,32 @@ public sealed class EfPreviewPathStore(
     private static async Task<PreviewPathRecord?> FindInboxAsync(
         MediaDesktopDbContext context,
         string inboxRoot,
+        string workRoot,
         Guid inboxItemId,
         CancellationToken cancellationToken)
     {
+        var processed = await context.ProcessedOutputs
+            .AsNoTracking()
+            .Where(output => output.ActiveInboxItemId == inboxItemId
+                && output.IsValid)
+            .Join(
+                context.InboxItems.AsNoTracking(),
+                output => output.InboxItemId,
+                item => item.Id,
+                (output, item) => new
+                {
+                    item.MediaKind,
+                    output.RelativePath
+                })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (processed is not null)
+        {
+            string processedPath = ControlledPathGuard.RequireDescendant(
+                workRoot,
+                Path.Combine(workRoot, processed.RelativePath));
+            return new PreviewPathRecord(processed.MediaKind, processedPath);
+        }
+
         var record = await (
                 from item in context.InboxItems.AsNoTracking()
                 join source in context.SourceFiles.AsNoTracking()

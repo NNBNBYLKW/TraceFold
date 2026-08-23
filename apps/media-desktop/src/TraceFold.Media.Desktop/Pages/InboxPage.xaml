@@ -66,7 +66,7 @@
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1"
                             CornerRadius="8">
-                            <Grid RowDefinitions="120,Auto,Auto">
+                            <Grid RowDefinitions="120,Auto,Auto,Auto,Auto">
                                 <Border
                                     Background="{ThemeResource SubtleFillColorSecondaryBrush}"
                                     CornerRadius="5">
@@ -92,6 +92,18 @@
                                     Margin="0,3,0,0"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Text="{x:Bind StatusText}" />
+                                <TextBlock
+                                    Grid.Row="3"
+                                    Margin="0,4,0,0"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                    Text="{x:Bind ProgressText}"
+                                    Visibility="{x:Bind ProcessingVisibility}" />
+                                <ProgressBar
+                                    Grid.Row="4"
+                                    Margin="0,5,0,0"
+                                    Maximum="100"
+                                    Value="{x:Bind ProcessingProgress}"
+                                    Visibility="{x:Bind ProcessingVisibility}" />
                             </Grid>
                         </Border>
                     </DataTemplate>
@@ -127,6 +139,35 @@
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="{x:Bind ViewModel.Inspector.StatusMessage, Mode=OneWay}"
                         TextWrapping="Wrap" />
+                    <Border
+                        Padding="12"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="6"
+                        Visibility="{x:Bind ViewModel.Inspector.ProcessingVisibility, Mode=OneWay}">
+                        <StackPanel Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock
+                                    FontWeight="SemiBold"
+                                    Text="{x:Bind ViewModel.Inspector.ProcessorName, Mode=OneWay}" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind ViewModel.Inspector.ProcessingStatusText, Mode=OneWay}" />
+                            </Grid>
+                            <TextBlock
+                                AutomationProperties.AutomationId="InboxProcessingStep"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.Inspector.ProcessingStepText, Mode=OneWay}" />
+                            <ProgressBar
+                                AutomationProperties.AutomationId="InboxProcessingProgress"
+                                Maximum="100"
+                                Value="{x:Bind ViewModel.Inspector.ProcessingProgressPercent, Mode=OneWay}" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.Inspector.ErrorCode, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
                     <TextBox
                         AutomationProperties.AutomationId="DisplayNameBox"
                         Header="显示名称"
@@ -157,6 +198,31 @@
                         Command="{x:Bind ViewModel.IngestCommand}"
                         Content="正式入库"
                         Style="{StaticResource AccentButtonStyle}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="InboxStartProcessingButton"
+                        Command="{x:Bind ViewModel.StartProcessingCommand}"
+                        Content="开始前置处理"
+                        Style="{StaticResource AccentButtonStyle}"
+                        Visibility="{x:Bind ViewModel.Inspector.StartProcessingVisibility, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="InboxCancelProcessingButton"
+                        Command="{x:Bind ViewModel.CancelProcessingCommand}"
+                        Content="取消排队"
+                        Visibility="{x:Bind ViewModel.Inspector.CancelProcessingVisibility, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="InboxStopProcessingButton"
+                        Command="{x:Bind ViewModel.StopProcessingCommand}"
+                        Content="停止处理"
+                        Visibility="{x:Bind ViewModel.Inspector.StopProcessingVisibility, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="InboxRetryProcessingButton"
+                        Command="{x:Bind ViewModel.RetryProcessingCommand}"
+                        Content="重新处理"
+                        Visibility="{x:Bind ViewModel.Inspector.RetryProcessingVisibility, Mode=OneWay}" />
                     <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                         <Button
                             HorizontalAlignment="Stretch"
