@@ -11,5 +11,8 @@ public enum InboxItemState
     CleanupPending,
     Completed,
     Failed,
-    SourceMissing
+    SourceMissing,
+    ProcessingQueued,
+    Processing,
+    ProcessingInterrupted
 }

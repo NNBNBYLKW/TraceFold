@@ -25,11 +25,24 @@ public sealed class InboxItem
             InboxAction.Preview | InboxAction.EditMetadata |
             InboxAction.Ingest | InboxAction.OpenFolder,
         InboxItemState.RequiresProcessing =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder,
+            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
+            InboxAction.StartProcessing,
+        InboxItemState.ProcessingQueued =>
+            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
+            InboxAction.CancelProcessing,
+        InboxItemState.Processing =>
+            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
+            InboxAction.StopProcessing,
+        InboxItemState.ProcessingInterrupted =>
+            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
+            InboxAction.RetryProcessing,
         InboxItemState.ConflictBlocked =>
             InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder,
         InboxItemState.CleanupPending =>
             InboxAction.Preview | InboxAction.RetryCleanup | InboxAction.OpenFolder,
+        InboxItemState.Failed when IsRetryable && RequiredCapability is not null =>
+            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
+            InboxAction.RetryProcessing,
         InboxItemState.Failed when IsRetryable =>
             InboxAction.Preview | InboxAction.Retry | InboxAction.OpenFolder,
         InboxItemState.SourceMissing => InboxAction.ClearMissing,
@@ -56,6 +69,57 @@ public sealed class InboxItem
         TransitionTo(InboxItemState.RequiresProcessing, InboxItemState.Analyzing);
         ClearError();
         RequiredCapability = requiredCapability;
+    }
+
+    public void QueueProcessing()
+    {
+        if (RequiredCapability is null)
+        {
+            throw new InvalidOperationException(
+                "An inbox item without a required capability cannot be queued.");
+        }
+
+        TransitionTo(
+            InboxItemState.ProcessingQueued,
+            InboxItemState.RequiresProcessing,
+            InboxItemState.ProcessingInterrupted,
+            InboxItemState.Failed);
+        ClearError();
+    }
+
+    public void BeginProcessing()
+    {
+        TransitionTo(InboxItemState.Processing, InboxItemState.ProcessingQueued);
+        ClearError();
+    }
+
+    public void CancelQueuedProcessing()
+    {
+        TransitionTo(InboxItemState.RequiresProcessing, InboxItemState.ProcessingQueued);
+        ClearError();
+    }
+
+    public void InterruptProcessing()
+    {
+        TransitionTo(
+            InboxItemState.ProcessingInterrupted,
+            InboxItemState.ProcessingQueued,
+            InboxItemState.Processing);
+        ClearError();
+    }
+
+    public void CompleteProcessing()
+    {
+        TransitionTo(InboxItemState.ReadyToTag, InboxItemState.Processing);
+        ClearStatusDetails();
+    }
+
+    public void FailProcessing(string errorCode, bool isRetryable)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(errorCode);
+        TransitionTo(InboxItemState.Failed, InboxItemState.Processing);
+        ErrorCode = errorCode;
+        IsRetryable = isRetryable;
     }
 
     public void BeginIngest()
@@ -132,6 +196,9 @@ public sealed class InboxItem
             InboxItemState.Analyzing,
             InboxItemState.ReadyToTag,
             InboxItemState.RequiresProcessing,
+            InboxItemState.ProcessingQueued,
+            InboxItemState.Processing,
+            InboxItemState.ProcessingInterrupted,
             InboxItemState.ConflictBlocked,
             InboxItemState.Failed,
             InboxItemState.SourceMissing);

@@ -10,5 +10,9 @@ public enum InboxAction
     Retry = 8,
     ClearMissing = 16,
     OpenFolder = 32,
-    RetryCleanup = 64
+    RetryCleanup = 64,
+    StartProcessing = 128,
+    CancelProcessing = 256,
+    StopProcessing = 512,
+    RetryProcessing = 1024
 }
