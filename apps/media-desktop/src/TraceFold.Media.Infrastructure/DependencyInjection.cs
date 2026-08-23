@@ -43,6 +43,7 @@ public static class DependencyInjection
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
         services.AddSingleton<IInboxQueryStore, EfInboxQueryStore>();
         services.AddSingleton<IIngestStore, EfIngestStore>();
+        services.AddSingleton<IConflictCaseStore, EfConflictCaseStore>();
         services.AddSingleton<IProcessingStore, EfProcessingStore>();
         services.AddSingleton<EfTaxonomyStore>();
         services.AddSingleton<ITaxonomyStore>(provider =>
