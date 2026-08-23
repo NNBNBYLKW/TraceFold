@@ -68,9 +68,7 @@ public sealed class IngestCleanupServiceTests
         public Task CompleteAsync(Guid operationId, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<IngestCandidate?> LoadCandidateAsync(Guid inboxItemId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IngestOperationRecord?> FindActiveAsync(Guid inboxItemId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<ConflictCheck> CheckConflictsAsync(string targetFilename, string sourceSha256, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task BlockConflictAsync(Guid inboxItemId, ConflictKind kind, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<IngestOperationRecord> CreateAsync(IngestPreparation preparation, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IngestOperationRecord> CreateAsync(IngestPreparation preparation, IngestExecutionPlan plan, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task MarkStagedAsync(Guid operationId, StagedFile staged, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task AbandonForRetryAsync(Guid operationId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task MarkFileCommittedAsync(Guid operationId, CommittedFile committed, CancellationToken cancellationToken) => throw new NotSupportedException();

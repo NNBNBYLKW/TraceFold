@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Settings;
-using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Ingest;
 
@@ -12,13 +11,11 @@ public class IngestService(
     IIngestStore store,
     IDirectorySettingsStore settingsStore,
     IIngestInputResolver inputResolver,
-    IControlledMediaStorage storage,
-    IIngestCleanupService cleanup,
+    IConflictDetectionService detector,
+    IIngestExecutionService executor,
     IMediaOperationCoordinator coordinator,
     ILogger<IngestService> logger) : IIngestService
 {
-    private readonly SemaphoreSlim commitGate = new(1, 1);
-
     public async Task<IngestResult> IngestAsync(
         Guid inboxItemId,
         CancellationToken cancellationToken)
@@ -36,8 +33,6 @@ public class IngestService(
         await using (lease)
         {
             CancellationToken operationToken = lease.CancellationToken;
-            IngestOperationRecord? operation = null;
-            bool gateEntered = false;
             try
             {
                 await scanner.ScanAsync(ScanTrigger.PreIngest, operationToken);
@@ -64,8 +59,6 @@ public class IngestService(
                     return Result(IngestOutcome.NotReady, "ingest.not_ready");
                 }
 
-                await commitGate.WaitAsync(operationToken);
-                gateEntered = true;
                 PreparedIngestInput input;
                 try
                 {
@@ -78,219 +71,47 @@ public class IngestService(
                     return InputFailure(error);
                 }
 
-                ConflictKind? conflict = await ResolveConflictAsync(
+                IngestPreparation preparation = IngestPreparation.From(
+                    candidate!,
+                    input);
+                ConflictCaseRecord? conflict = await detector.DetectAsync(
+                    preparation,
                     folders,
-                    candidate!.ActualFilename,
-                    input.Sha256,
                     operationToken);
-                if (conflict.HasValue)
+                if (conflict is not null)
                 {
-                    await store.BlockConflictAsync(
-                        inboxItemId,
-                        conflict.Value,
-                        operationToken);
                     return Result(
                         IngestOutcome.ConflictBlocked,
-                        conflict == ConflictKind.Name
-                            ? "ingest.name_conflict"
-                            : "ingest.content_conflict");
+                        "ingest.conflict",
+                        conflictCaseId: conflict.Id);
                 }
 
-                operation = await store.CreateAsync(
-                    IngestPreparation.From(candidate, input),
-                    operationToken);
-
-                StagedFile staged;
-                try
-                {
-                    staged = await storage.StageAsync(
-                        operation.Id,
-                        folders,
-                        input,
-                        operationToken);
-                    await store.MarkStagedAsync(operation.Id, staged, operationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception error)
-                {
-                    return await FailAsync(
-                        operation,
-                        "ingest.stage_failed",
-                        error,
-                        operationToken);
-                }
-
-                CommittedFile committed;
-                try
-                {
-                    committed = await storage.CommitAsync(
-                        operation.Id,
-                        folders,
-                        staged,
-                        candidate.ActualFilename,
-                        operationToken);
-                    await store.MarkFileCommittedAsync(
-                        operation.Id,
-                        committed,
-                        operationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception error)
-                {
-                    return await FailAsync(
-                        operation,
-                        "ingest.commit_failed",
-                        error,
-                        operationToken);
-                }
-
-                Guid assetId;
-                try
-                {
-                    assetId = await store.CommitAssetAsync(
-                        operation.Id,
-                        committed,
-                        operationToken);
-                    operation = operation with
-                    {
-                        Stage = IngestOperationStage.DatabaseCommitted,
-                        AssetId = assetId
-                    };
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception error)
-                {
-                    logger.LogError(
-                        error,
-                        "IngestDatabaseCommitFailed OperationId={OperationId}",
-                        operation.Id);
-                    return Result(
-                        IngestOutcome.Failed,
-                        "ingest.database_failed",
-                        operation.Id);
-                }
-
-                if (!await storage.VerifyCommittedAsync(
-                        folders,
-                        committed,
-                        operationToken))
-                {
-                    await store.MarkCleanupPendingAsync(
-                        operation.Id,
-                        "ingest.commit_failed",
-                        operationToken);
-                    return Result(
-                        IngestOutcome.CleanupPending,
-                        "ingest.commit_failed",
-                        operation.Id,
-                        assetId);
-                }
-
-                CleanupResult cleanupResult = await cleanup.CleanupAsync(
-                    operation,
+                return await executor.ExecuteAsync(
+                    preparation,
+                    IngestExecutionPlan.Create(candidate!.ActualFilename),
                     folders,
                     operationToken);
-                if (!cleanupResult.Completed)
-                {
-                    return Result(
-                        IngestOutcome.CleanupPending,
-                        cleanupResult.ErrorCode ?? "ingest.cleanup_failed",
-                        operation.Id,
-                        assetId);
-                }
-
-                return Result(
-                    IngestOutcome.Completed,
-                    "ingest.completed",
-                    operation.Id,
-                    assetId);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
             catch (OperationCanceledException error)
             {
-                logger.LogInformation(
-                    error,
-                    "IngestStopped OperationId={OperationId}",
-                    operation?.Id);
+                logger.LogInformation(error, "IngestStopped");
                 return Result(
                     IngestOutcome.ShuttingDown,
-                    "ingest.shutting_down",
-                    operation?.Id);
+                    "ingest.shutting_down");
             }
             catch (Exception error)
             {
-                logger.LogError(
-                    error,
-                    "IngestFailed OperationId={OperationId}",
-                    operation?.Id);
-                if (operation is not null)
-                {
-                    await store.FailAsync(
-                        operation.Id,
-                        "ingest.commit_failed",
-                        isRetryable: true,
-                        CancellationToken.None);
-                }
-
+                logger.LogError(error, "IngestFailed");
                 return Result(
                     IngestOutcome.Failed,
-                    "ingest.commit_failed",
-                    operation?.Id);
-            }
-            finally
-            {
-                if (gateEntered)
-                {
-                    commitGate.Release();
-                }
+                    "ingest.commit_failed");
             }
         }
-    }
-
-    private async Task<ConflictKind?> ResolveConflictAsync(
-        LibraryFolders folders,
-        string targetFilename,
-        string sha256,
-        CancellationToken cancellationToken) =>
-        await storage.TargetExistsAsync(
-            folders,
-            targetFilename,
-            cancellationToken)
-            ? ConflictKind.Name
-            : (await store.CheckConflictsAsync(
-                targetFilename,
-                sha256,
-                cancellationToken)).Kind;
-
-    private async Task<IngestResult> FailAsync(
-        IngestOperationRecord operation,
-        string errorCode,
-        Exception error,
-        CancellationToken cancellationToken)
-    {
-        logger.LogError(
-            error,
-            "IngestStageFailed OperationId={OperationId} ErrorCode={ErrorCode}",
-            operation.Id,
-            errorCode);
-        await store.FailAsync(
-            operation.Id,
-            errorCode,
-            isRetryable: true,
-            cancellationToken);
-        return Result(IngestOutcome.Failed, errorCode, operation.Id);
     }
 
     private static IngestResult? ValidateCandidate(IngestCandidate? candidate)
@@ -339,29 +160,34 @@ public class IngestService(
                 IngestOutcome.Completed,
                 "ingest.completed",
                 operation.Id,
-                operation.AssetId),
-            IngestOperationStage.DatabaseCommitted or IngestOperationStage.CleanupPending =>
-                Result(
+                operation.AssetId,
+                operation.ConflictCaseId),
+            IngestOperationStage.DatabaseCommitted
+                or IngestOperationStage.CleanupPending => Result(
                     IngestOutcome.CleanupPending,
                     operation.ErrorCode ?? "ingest.cleanup_failed",
                     operation.Id,
-                    operation.AssetId),
+                    operation.AssetId,
+                    operation.ConflictCaseId),
             IngestOperationStage.Failed => Result(
                 IngestOutcome.Failed,
                 operation.ErrorCode ?? "ingest.commit_failed",
                 operation.Id,
-                operation.AssetId),
+                operation.AssetId,
+                operation.ConflictCaseId),
             _ => Result(
                 IngestOutcome.InProgress,
                 "ingest.in_progress",
                 operation.Id,
-                operation.AssetId)
+                operation.AssetId,
+                operation.ConflictCaseId)
         };
 
     private static IngestResult Result(
         IngestOutcome outcome,
         string message,
         Guid? operationId = null,
-        Guid? assetId = null) =>
-        new(outcome, operationId, assetId, null, message);
+        Guid? assetId = null,
+        Guid? conflictCaseId = null) =>
+        new(outcome, operationId, assetId, conflictCaseId, message);
 }

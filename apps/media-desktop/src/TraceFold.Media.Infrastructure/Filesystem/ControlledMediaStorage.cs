@@ -310,6 +310,17 @@ public sealed partial class ControlledMediaStorage(IFileHasher hasher) : IContro
                     folders,
                     cleanupFile,
                     cancellationToken),
+            IngestCleanupKind.ReplacementBackup =>
+                DeleteBackupIfMatchesAsync(
+                    folders,
+                    new ReplacementBackup(
+                        cleanupFile.FullPath,
+                        Path.GetRelativePath(
+                            folders.LibraryDirectory,
+                            cleanupFile.FullPath),
+                        cleanupFile.Size,
+                        cleanupFile.Sha256),
+                    cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(cleanupFile))
         };
     }

@@ -84,7 +84,8 @@ public sealed class OrdinaryMediaFlowTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(IngestOutcome.ConflictBlocked, result.Outcome);
-        Assert.Equal("ingest.name_conflict", result.Message);
+        Assert.Equal("ingest.conflict", result.Message);
+        Assert.NotNull(result.ConflictCaseId);
         Assert.True(File.Exists(source));
     }
 
@@ -109,7 +110,8 @@ public sealed class OrdinaryMediaFlowTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(IngestOutcome.ConflictBlocked, result.Outcome);
-        Assert.Equal("ingest.content_conflict", result.Message);
+        Assert.Equal("ingest.conflict", result.Message);
+        Assert.NotNull(result.ConflictCaseId);
         Assert.True(File.Exists(duplicate));
     }
 
@@ -318,6 +320,15 @@ public sealed class OrdinaryMediaFlowTests
     {
         private readonly ControlledMediaStorage _inner =
             new(new Sha256FileHasher());
+
+        public Task<LibraryFileSnapshot?> InspectTargetAsync(
+            LibraryFolders folders,
+            string targetFilename,
+            CancellationToken cancellationToken) =>
+            _inner.InspectTargetAsync(
+                folders,
+                targetFilename,
+                cancellationToken);
 
         public Task<bool> TargetExistsAsync(
             LibraryFolders folders,

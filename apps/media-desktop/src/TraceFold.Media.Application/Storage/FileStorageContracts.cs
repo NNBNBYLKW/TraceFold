@@ -153,13 +153,25 @@ public interface IControlledMediaStorage
     Task<SourceDeleteResult> DeleteCleanupFileIfMatchesAsync(
         LibraryFolders folders,
         IngestCleanupFile cleanupFile,
-        CancellationToken cancellationToken) =>
-        DeleteSourceIfMatchesAsync(
-            folders,
-            cleanupFile.FullPath,
-            cleanupFile.Size,
-            cleanupFile.Sha256,
-            cancellationToken);
+        CancellationToken cancellationToken) => cleanupFile.Kind switch
+        {
+            IngestCleanupKind.ReplacementBackup => DeleteBackupIfMatchesAsync(
+                folders,
+                new ReplacementBackup(
+                    cleanupFile.FullPath,
+                    Path.GetRelativePath(
+                        folders.LibraryDirectory,
+                        cleanupFile.FullPath),
+                    cleanupFile.Size,
+                    cleanupFile.Sha256),
+                cancellationToken),
+            _ => DeleteSourceIfMatchesAsync(
+                folders,
+                cleanupFile.FullPath,
+                cleanupFile.Size,
+                cleanupFile.Sha256,
+                cancellationToken)
+        };
 
     Task<bool> VerifyCommittedAsync(
         LibraryFolders folders,

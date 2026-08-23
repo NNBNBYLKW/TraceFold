@@ -155,19 +155,9 @@ public sealed class IngestRecoveryServiceTests
             CancellationToken cancellationToken) =>
             Task.FromResult<IngestCandidate?>(null);
 
-        public Task<ConflictCheck> CheckConflictsAsync(
-            string targetFilename,
-            string sourceSha256,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new ConflictCheck(null));
-
-        public Task BlockConflictAsync(
-            Guid inboxItemId,
-            ConflictKind kind,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
         public Task<IngestOperationRecord> CreateAsync(
             IngestPreparation preparation,
+            IngestExecutionPlan plan,
             CancellationToken cancellationToken) => Task.FromResult(_operation);
 
         public Task MarkStagedAsync(

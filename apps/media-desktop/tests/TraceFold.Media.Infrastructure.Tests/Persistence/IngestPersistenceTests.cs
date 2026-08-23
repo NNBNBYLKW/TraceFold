@@ -30,6 +30,7 @@ public sealed class IngestPersistenceTests
         string hash = new string('A', 64);
         IngestOperationRecord operation = await store.CreateAsync(
             Preparation(candidate, hash),
+            IngestExecutionPlan.Create(candidate.ActualFilename),
             TestContext.Current.CancellationToken);
         var staged = new StagedFile("C:/work/payload", 3, hash);
         var committed = new CommittedFile(
@@ -76,9 +77,11 @@ public sealed class IngestPersistenceTests
 
         IngestOperationRecord first = await store.CreateAsync(
             preparation,
+            IngestExecutionPlan.Create(candidate.ActualFilename),
             TestContext.Current.CancellationToken);
         IngestOperationRecord second = await store.CreateAsync(
             preparation,
+            IngestExecutionPlan.Create(candidate.ActualFilename),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(first.Id, second.Id);
@@ -103,6 +106,7 @@ public sealed class IngestPersistenceTests
             TestContext.Current.CancellationToken))!;
         IngestOperationRecord operation = await store.CreateAsync(
             Preparation(candidate, hash),
+            IngestExecutionPlan.Create(candidate.ActualFilename),
             TestContext.Current.CancellationToken);
         var committed = new CommittedFile(
             "C:/library/photo.jpg",
@@ -142,6 +146,7 @@ public sealed class IngestPersistenceTests
         string hash = new string('A', 64);
         IngestOperationRecord operation = await firstStore.CreateAsync(
             Preparation(candidate, hash),
+            IngestExecutionPlan.Create(candidate.ActualFilename),
             TestContext.Current.CancellationToken);
         var committed = new CommittedFile(
             "C:/library/photo.jpg",
@@ -175,23 +180,6 @@ public sealed class IngestPersistenceTests
     }
 
     [Fact]
-    public async Task Registered_hash_conflict_is_detected_before_staging()
-    {
-        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
-        await database.MigrateAsync();
-        string hash = new string('B', 64);
-        await InsertAssetAsync(database, Guid.NewGuid(), "existing.jpg", hash);
-        var store = new EfIngestStore(database.CreateContextFactory());
-
-        ConflictCheck result = await store.CheckConflictsAsync(
-            "different.jpg",
-            hash,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ConflictKind.RegisteredContent, result.Kind);
-    }
-
-    [Fact]
     public async Task Create_persists_ordered_cleanup_manifest_and_entry_completion()
     {
         await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
@@ -218,6 +206,7 @@ public sealed class IngestPersistenceTests
             ]);
         IngestOperationRecord operation = await store.CreateAsync(
             IngestPreparation.From(candidate, input),
+            IngestExecutionPlan.Create(candidate.ActualFilename),
             TestContext.Current.CancellationToken);
 
         IReadOnlyList<IngestCleanupEntryRecord> entries =
@@ -240,6 +229,198 @@ public sealed class IngestPersistenceTests
         Assert.False(reloaded[0].Completed);
         Assert.True(reloaded[1].Completed);
         Assert.False(reloaded[2].Completed);
+    }
+
+    [Fact]
+    public async Task Replacement_create_persists_plan_old_asset_and_backup_cleanup()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        Guid itemId = await CreateReadyInboxWithMetadataAsync(database);
+        Guid assetId = Guid.NewGuid();
+        string oldHash = new('B', 64);
+        await InsertAssetAsync(database, assetId, "photo.jpg", oldHash);
+        ConflictCaseRecord conflict = await OpenConflictAsync(
+            database, itemId, assetId, isRegistered: true, oldHash);
+        var store = new EfIngestStore(database.CreateContextFactory());
+        IngestCandidate candidate = (await store.LoadCandidateAsync(
+            itemId, TestContext.Current.CancellationToken))!;
+        LibraryFileSnapshot target = Target("photo.jpg", oldHash);
+        IngestExecutionPlan plan = IngestExecutionPlan.ReplaceRegistered(
+            conflict.Id, assetId, 0, target);
+
+        IngestOperationRecord operation = await store.CreateAsync(
+            Preparation(candidate, new string('A', 64)),
+            plan,
+            TestContext.Current.CancellationToken);
+        var backup = new ReplacementBackup(
+            $"C:/library/.tracefold/recovery/{operation.Id:N}/original.jpg",
+            $".tracefold/recovery/{operation.Id:N}/original.jpg",
+            3,
+            oldHash);
+        await store.MarkStagedAsync(
+            operation.Id,
+            new StagedFile("C:/work/payload", 3, new string('A', 64)),
+            TestContext.Current.CancellationToken);
+        await store.MarkBackupCreatedAsync(
+            operation.Id,
+            backup,
+            TestContext.Current.CancellationToken);
+        IngestOperationRecord loaded = (await store.FindActiveAsync(
+            itemId,
+            TestContext.Current.CancellationToken))!;
+        IReadOnlyList<IngestCleanupEntryRecord> cleanup =
+            await store.LoadCleanupEntriesAsync(
+                operation.Id,
+                TestContext.Current.CancellationToken);
+
+        Assert.Equal(IngestDisposition.ReplaceRegistered, loaded.Disposition);
+        Assert.Equal(conflict.Id, loaded.ConflictCaseId);
+        Assert.Equal(assetId, loaded.ReplacementAssetId);
+        Assert.Equal(IngestBackupState.Created, loaded.BackupState);
+        Assert.Equal(backup.RelativePath, loaded.BackupRelativePath);
+        Assert.Equal(
+            IngestCleanupKind.ReplacementBackup,
+            cleanup[^1].File.Kind);
+        Assert.True(await database.ScalarAsync<long>(
+            "SELECT length(old_asset_snapshot_json) FROM ingest_operations") > 0);
+    }
+
+    [Fact]
+    public async Task Registered_replacement_preserves_identity_and_resolves_case_atomically()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        Guid itemId = await CreateReadyInboxWithMetadataAsync(database);
+        Guid assetId = Guid.NewGuid();
+        string oldHash = new('B', 64);
+        string newHash = new('A', 64);
+        await InsertAssetAsync(database, assetId, "photo.jpg", oldHash);
+        await LinkAssetToDraftTaxonomyAsync(database, assetId);
+        ConflictCaseRecord conflict = await OpenConflictAsync(
+            database, itemId, assetId, isRegistered: true, oldHash);
+        var store = new EfIngestStore(database.CreateContextFactory());
+        IngestCandidate candidate = (await store.LoadCandidateAsync(
+            itemId, TestContext.Current.CancellationToken))!;
+        IngestOperationRecord operation = await store.CreateAsync(
+            Preparation(candidate, newHash),
+            IngestExecutionPlan.ReplaceRegistered(
+                conflict.Id,
+                assetId,
+                0,
+                Target("photo.jpg", oldHash)),
+            TestContext.Current.CancellationToken);
+        var committed = new CommittedFile(
+            "C:/library/photo.jpg", "photo.jpg", 3, newHash);
+        await store.MarkStagedAsync(
+            operation.Id,
+            new StagedFile("C:/work/payload", 3, newHash),
+            TestContext.Current.CancellationToken);
+        await store.MarkBackupCreatedAsync(
+            operation.Id,
+            new ReplacementBackup(
+                $"C:/library/.tracefold/recovery/{operation.Id:N}/original.jpg",
+                $".tracefold/recovery/{operation.Id:N}/original.jpg",
+                3,
+                oldHash),
+            TestContext.Current.CancellationToken);
+        await store.MarkFileCommittedAsync(
+            operation.Id,
+            committed,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(await store.ReplacementDatabaseMatchesExpectedAsync(
+            operation.Id,
+            TestContext.Current.CancellationToken));
+        Guid first = await store.CommitAssetAsync(
+            operation.Id,
+            committed,
+            TestContext.Current.CancellationToken);
+        Guid replay = await store.CommitAssetAsync(
+            operation.Id,
+            committed,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(assetId, first);
+        Assert.Equal(first, replay);
+        Assert.Equal("photo.jpg", await database.ScalarAsync<string>(
+            "SELECT actual_filename FROM media_assets"));
+        Assert.Equal("photo.jpg", await database.ScalarAsync<string>(
+            "SELECT relative_path FROM media_assets"));
+        Assert.Equal(newHash, await database.ScalarAsync<string>(
+            "SELECT sha256 FROM media_assets"));
+        Assert.Equal(1L, await database.ScalarAsync<long>(
+            "SELECT metadata_version FROM media_assets"));
+        Assert.Equal(1L, await database.ScalarAsync<long>(
+            "SELECT count(*) FROM media_asset_authors"));
+        Assert.Equal(1L, await database.ScalarAsync<long>(
+            "SELECT count(*) FROM media_asset_tags"));
+        Assert.Equal("resolved", await database.ScalarAsync<string>(
+            "SELECT status FROM conflict_cases"));
+        Assert.Equal(
+            operation.Id.ToString().ToUpperInvariant(),
+            (await database.ScalarAsync<string>(
+                "SELECT operation_id FROM conflict_cases")).ToUpperInvariant());
+        Assert.False(await store.ReplacementDatabaseMatchesExpectedAsync(
+            operation.Id,
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Unmanaged_replacement_creates_one_new_asset_at_selected_path()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        Guid itemId = await CreateReadyInboxWithMetadataAsync(database);
+        string oldHash = new('B', 64);
+        string newHash = new('A', 64);
+        ConflictCaseRecord conflict = await OpenConflictAsync(
+            database,
+            itemId,
+            assetId: null,
+            isRegistered: false,
+            oldHash);
+        var store = new EfIngestStore(database.CreateContextFactory());
+        IngestCandidate candidate = (await store.LoadCandidateAsync(
+            itemId, TestContext.Current.CancellationToken))!;
+        IngestOperationRecord operation = await store.CreateAsync(
+            Preparation(candidate, newHash),
+            IngestExecutionPlan.ReplaceUnregistered(
+                conflict.Id,
+                Target("photo.jpg", oldHash)),
+            TestContext.Current.CancellationToken);
+        var committed = new CommittedFile(
+            "C:/library/photo.jpg", "photo.jpg", 3, newHash);
+        await store.MarkStagedAsync(
+            operation.Id,
+            new StagedFile("C:/work/payload", 3, newHash),
+            TestContext.Current.CancellationToken);
+        await store.MarkBackupCreatedAsync(
+            operation.Id,
+            new ReplacementBackup(
+                $"C:/library/.tracefold/recovery/{operation.Id:N}/original.jpg",
+                $".tracefold/recovery/{operation.Id:N}/original.jpg",
+                3,
+                oldHash),
+            TestContext.Current.CancellationToken);
+        await store.MarkFileCommittedAsync(
+            operation.Id,
+            committed,
+            TestContext.Current.CancellationToken);
+
+        Guid assetId = await store.CommitAssetAsync(
+            operation.Id,
+            committed,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1L, await database.ScalarAsync<long>(
+            "SELECT count(*) FROM media_assets"));
+        Assert.Equal(
+            assetId.ToString().ToUpperInvariant(),
+            (await database.ScalarAsync<string>(
+                "SELECT id FROM media_assets")).ToUpperInvariant());
+        Assert.Equal("photo.jpg", await database.ScalarAsync<string>(
+            "SELECT actual_filename FROM media_assets"));
     }
 
     private static async Task<Guid> CreateReadyInboxWithMetadataAsync(
@@ -315,6 +496,63 @@ public sealed class IngestPersistenceTests
             candidate.Metadata.TagIds,
             candidate.MetadataVersion);
 
+    private static async Task<ConflictCaseRecord> OpenConflictAsync(
+        TestMediaDatabase database,
+        Guid itemId,
+        Guid? assetId,
+        bool isRegistered,
+        string oldHash)
+    {
+        Guid matchId = Guid.NewGuid();
+        var match = new ConflictMatchRecord(
+            matchId,
+            ConflictReason.Name,
+            isRegistered,
+            assetId,
+            isRegistered ? 0 : null,
+            "photo.jpg",
+            "photo.jpg",
+            null,
+            MediaKind.Image,
+            3,
+            Instant,
+            oldHash,
+            new ConflictMetadataSnapshot(null, [], null, []),
+            new ConflictTechnicalMetadata("jpg", null, null, null));
+        var cases = new EfConflictCaseStore(
+            database.CreateContextFactory(),
+            TimeProvider.System);
+        ConflictCaseRecord conflict = await cases.ReplaceOpenAsync(
+            itemId,
+            new ConflictInputSnapshot(
+                "C:/inbox/photo.jpg",
+                3,
+                Instant,
+                new string('A', 64),
+                "photo.jpg",
+                1),
+            [match],
+            TestContext.Current.CancellationToken);
+        await cases.ChooseAsync(
+            conflict.Id,
+            ConflictResolution.Replace,
+            matchId,
+            TestContext.Current.CancellationToken);
+        return (await cases.LoadAsync(
+            conflict.Id,
+            TestContext.Current.CancellationToken))!;
+    }
+
+    private static LibraryFileSnapshot Target(
+        string filename,
+        string hash) =>
+        new(
+            $"C:/library/{filename}",
+            filename,
+            3,
+            Instant,
+            hash);
+
     private static Task InsertAssetAsync(
         TestMediaDatabase database,
         Guid id,
@@ -330,4 +568,20 @@ public sealed class IngestPersistenceTests
                  '{filename.ToUpperInvariant()}', 3, '{hash}', 0,
                  '2026-08-22T10:00:00+00:00', '2026-08-22T10:00:00+00:00')
             """);
+
+    private static async Task LinkAssetToDraftTaxonomyAsync(
+        TestMediaDatabase database,
+        Guid assetId)
+    {
+        string authorId = await database.ScalarAsync<string>(
+            "SELECT author_id FROM inbox_draft_authors");
+        string tagId = await database.ScalarAsync<string>(
+            "SELECT tag_id FROM inbox_draft_tags");
+        await database.ExecuteSqlAsync($"""
+            INSERT INTO media_asset_authors (media_asset_id, author_id, ordinal)
+            VALUES ('{assetId.ToString().ToUpperInvariant()}', '{authorId}', 0);
+            INSERT INTO media_asset_tags (media_asset_id, tag_id, ordinal)
+            VALUES ('{assetId.ToString().ToUpperInvariant()}', '{tagId}', 0);
+            """);
+    }
 }

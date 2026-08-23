@@ -1,3 +1,4 @@
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Infrastructure.Filesystem;
 using TraceFold.Media.Infrastructure.Tests.Support;
@@ -480,6 +481,27 @@ public sealed partial class ControlledMediaStorageTests
             await File.ReadAllBytesAsync(
                 replacement.Backup.FullPath,
                 TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Replacement_backup_cleanup_kind_uses_guarded_backup_deletion()
+    {
+        using var folders = TestMediaFolders.Create();
+        ReplacementFixture replacement = await ReplaceAsync(folders);
+        var cleanup = new IngestCleanupFile(
+            IngestCleanupKind.ReplacementBackup,
+            replacement.Backup.FullPath,
+            replacement.Backup.Size,
+            replacement.Backup.Sha256);
+
+        SourceDeleteResult result =
+            await replacement.Storage.DeleteCleanupFileIfMatchesAsync(
+                folders.Value,
+                cleanup,
+                TestContext.Current.CancellationToken);
+
+        Assert.Equal(SourceDeleteOutcome.Deleted, result.Outcome);
+        Assert.False(File.Exists(replacement.Backup.FullPath));
     }
 
     private static async Task<StagedFile> StageAsync(

@@ -60,6 +60,9 @@ public static class DependencyInjection
         services.AddSingleton<IConflictDetectionService,
             ConflictDetectionService>();
         services.AddSingleton<IConflictQueryService, ConflictQueryService>();
+        services.AddSingleton<IIngestExecutionService, IngestExecutionService>();
+        services.AddSingleton<IConflictResolutionService,
+            ConflictResolutionService>();
         services.AddSingleton<IngestService>();
         services.AddSingleton<IIngestService>(provider =>
             provider.GetRequiredService<IngestService>());

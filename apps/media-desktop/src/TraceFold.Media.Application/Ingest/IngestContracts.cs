@@ -7,17 +7,6 @@ using TraceFold.Media.Domain.Metadata;
 
 namespace TraceFold.Media.Application.Ingest;
 
-public enum ConflictKind
-{
-    Name,
-    RegisteredContent
-}
-
-public sealed record ConflictCheck(ConflictKind? Kind)
-{
-    public bool HasConflict => Kind.HasValue;
-}
-
 public enum IngestOutcome
 {
     Completed,
@@ -200,7 +189,8 @@ public sealed record IngestCandidate(
 public enum IngestCleanupKind
 {
     InboxSource,
-    ProcessingOutput
+    ProcessingOutput,
+    ReplacementBackup
 }
 
 public sealed record IngestCleanupFile(
@@ -343,24 +333,40 @@ public interface IIngestStore
         Guid inboxItemId,
         CancellationToken cancellationToken);
 
-    Task<ConflictCheck> CheckConflictsAsync(
-        string targetFilename,
-        string sourceSha256,
-        CancellationToken cancellationToken);
-
-    Task BlockConflictAsync(
-        Guid inboxItemId,
-        ConflictKind kind,
-        CancellationToken cancellationToken);
-
     Task<IngestOperationRecord> CreateAsync(
         IngestPreparation preparation,
+        IngestExecutionPlan plan,
         CancellationToken cancellationToken);
 
     Task MarkStagedAsync(
         Guid operationId,
         StagedFile staged,
         CancellationToken cancellationToken);
+
+    Task MarkBackupCreatedAsync(
+        Guid operationId,
+        ReplacementBackup backup,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support replacement backups.");
+
+    Task MarkBackupRestoredAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support replacement restore.");
+
+    Task MarkRecoveryBlockedAsync(
+        Guid operationId,
+        string errorCode,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support blocked recovery.");
+
+    Task<bool> ReplacementDatabaseMatchesExpectedAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(false);
 
     Task AbandonForRetryAsync(
         Guid operationId,

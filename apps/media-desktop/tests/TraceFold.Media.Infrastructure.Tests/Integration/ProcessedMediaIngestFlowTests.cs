@@ -171,13 +171,21 @@ public sealed class ProcessedMediaIngestFlowTests
             var invalidation = new ProcessingInvalidationService(
                 processingStore,
                 controller);
+            var conflictStore = new EfConflictCaseStore(
+                Database.CreateContextFactory(),
+                TimeProvider.System);
+            var cleanup = new IngestCleanupService(ingestStore, storage);
             var service = new IngestService(
                 new NoOpScanner(),
                 ingestStore,
                 new EfDirectorySettingsStore(Database.CreateContextFactory()),
                 new IngestInputResolver(processingStore, hasher, invalidation),
-                storage,
-                new IngestCleanupService(ingestStore, storage),
+                new ConflictDetectionService(conflictStore, storage),
+                new IngestExecutionService(
+                    ingestStore,
+                    storage,
+                    cleanup,
+                    NullLogger<IngestExecutionService>.Instance),
                 new MediaOperationCoordinator(),
                 NullLogger<IngestService>.Instance);
             return await service.IngestAsync(
@@ -289,6 +297,7 @@ public sealed class ProcessedMediaIngestFlowTests
         ControlledMediaStorage inner,
         bool failCommit) : IControlledMediaStorage
     {
+        public Task<LibraryFileSnapshot?> InspectTargetAsync(LibraryFolders folders, string targetFilename, CancellationToken cancellationToken) => inner.InspectTargetAsync(folders, targetFilename, cancellationToken);
         public Task<bool> TargetExistsAsync(LibraryFolders folders, string targetFilename, CancellationToken cancellationToken) => inner.TargetExistsAsync(folders, targetFilename, cancellationToken);
         public Task<StagedFile> StageAsync(Guid operationId, LibraryFolders folders, string sourcePath, string expectedSha256, CancellationToken cancellationToken) => inner.StageAsync(operationId, folders, sourcePath, expectedSha256, cancellationToken);
         public Task<StagedFile> StageAsync(Guid operationId, LibraryFolders folders, PreparedIngestInput input, CancellationToken cancellationToken) => inner.StageAsync(operationId, folders, input, cancellationToken);

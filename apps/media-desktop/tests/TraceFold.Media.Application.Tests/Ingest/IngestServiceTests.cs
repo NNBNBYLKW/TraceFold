@@ -12,89 +12,105 @@ namespace TraceFold.Media.Application.Tests.Ingest;
 
 public sealed class IngestServiceTests
 {
+    private const string HashA =
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    private static readonly DateTimeOffset ObservedAt =
+        new(2026, 8, 24, 1, 2, 3, TimeSpan.Zero);
+    private static readonly LibraryFolders Folders = new(
+        "T:\\inbox",
+        "T:\\library",
+        "T:\\work");
+
     [Fact]
-    public async Task IngestAsync_commits_asset_before_deleting_source()
+    public async Task Initial_ingest_returns_persisted_case_before_execution()
     {
-        await using IngestFixture fixture = await IngestFixture.ReadyOrdinaryAsync();
-
-        IngestResult result = await fixture.Service.IngestAsync(
-            fixture.ItemId,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(IngestOutcome.Completed, result.Outcome);
-        Assert.True(fixture.Store.AssetCommitted);
-        Assert.True(fixture.Storage.DeleteObservedAfterAssetCommit);
-        Assert.False(fixture.Storage.SourceExists);
-    }
-
-    [Theory]
-    [InlineData(ConflictKind.Name)]
-    [InlineData(ConflictKind.RegisteredContent)]
-    public async Task IngestAsync_blocks_conflict_before_staging(ConflictKind kind)
-    {
-        await using IngestFixture fixture = await IngestFixture.WithConflictAsync(kind);
+        IngestFixture fixture = IngestFixture.Create();
+        fixture.Detector.Result = Conflict(fixture.ItemId);
 
         IngestResult result = await fixture.Service.IngestAsync(
             fixture.ItemId,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(IngestOutcome.ConflictBlocked, result.Outcome);
+        Assert.Equal(fixture.Detector.Result.Id, result.ConflictCaseId);
         Assert.Null(result.OperationId);
-        Assert.Equal(0, fixture.Storage.StageCallCount);
-        Assert.True(fixture.Storage.SourceExists);
+        Assert.Equal(0, fixture.Executor.CallCount);
     }
 
-    private sealed class IngestFixture : IAsyncDisposable
+    [Fact]
+    public async Task Ordinary_no_conflict_ingest_uses_the_single_execution_pipeline()
     {
-        private readonly string _root;
+        IngestFixture fixture = IngestFixture.Create();
 
+        IngestResult result = await fixture.Service.IngestAsync(
+            fixture.ItemId,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(IngestOutcome.Completed, result.Outcome);
+        Assert.Equal(1, fixture.Executor.CallCount);
+        Assert.Equal(IngestDisposition.Create, fixture.Executor.Plan!.Disposition);
+        Assert.Equal("photo.jpg", fixture.Executor.Plan.RequestedTargetFilename);
+        Assert.Equal(HashA, fixture.Executor.Preparation!.Input.Sha256);
+    }
+
+    private static ConflictCaseRecord Conflict(Guid inboxItemId)
+    {
+        var match = new ConflictMatchRecord(
+            Guid.NewGuid(),
+            ConflictReason.Name,
+            false,
+            null,
+            null,
+            "photo.jpg",
+            "photo.jpg",
+            null,
+            MediaKind.Image,
+            2,
+            ObservedAt,
+            new string('B', 64),
+            new ConflictMetadataSnapshot(null, [], null, []),
+            new ConflictTechnicalMetadata("jpg", null, null, null));
+        return new ConflictCaseRecord(
+            Guid.NewGuid(),
+            inboxItemId,
+            ConflictCaseStatus.Open,
+            new ConflictInputSnapshot(
+                "T:\\inbox\\photo.jpg",
+                3,
+                ObservedAt,
+                HashA,
+                "photo.jpg",
+                1),
+            null,
+            null,
+            null,
+            [match]);
+    }
+
+    private sealed class IngestFixture
+    {
         private IngestFixture(
-            string root,
             Guid itemId,
-            RecordingIngestStore store,
-            RecordingStorage storage,
+            DetectionStub detector,
+            ExecutionStub executor,
             IngestService service)
         {
-            _root = root;
             ItemId = itemId;
-            Store = store;
-            Storage = storage;
+            Detector = detector;
+            Executor = executor;
             Service = service;
         }
 
         public Guid ItemId { get; }
 
-        public RecordingIngestStore Store { get; }
+        public DetectionStub Detector { get; }
 
-        public RecordingStorage Storage { get; }
+        public ExecutionStub Executor { get; }
 
         public IngestService Service { get; }
 
-        public static Task<IngestFixture> ReadyOrdinaryAsync() => CreateAsync(null);
-
-        public static Task<IngestFixture> WithConflictAsync(ConflictKind kind) =>
-            CreateAsync(kind);
-
-        public ValueTask DisposeAsync()
+        public static IngestFixture Create()
         {
-            Directory.Delete(_root, recursive: true);
-            return ValueTask.CompletedTask;
-        }
-
-        private static async Task<IngestFixture> CreateAsync(ConflictKind? conflict)
-        {
-            string root = Path.Combine(
-                Path.GetTempPath(),
-                $"tracefold-ingest-unit-{Guid.NewGuid():N}");
-            string inbox = Directory.CreateDirectory(Path.Combine(root, "inbox")).FullName;
-            string library = Directory.CreateDirectory(Path.Combine(root, "library")).FullName;
-            string work = Directory.CreateDirectory(Path.Combine(root, "work")).FullName;
-            string source = Path.Combine(inbox, "photo.jpg");
-            await File.WriteAllBytesAsync(
-                source,
-                [1, 2, 3],
-                TestContext.Current.CancellationToken);
-            var info = new FileInfo(source);
             Guid itemId = Guid.NewGuid();
             var candidate = new IngestCandidate(
                 itemId,
@@ -102,41 +118,75 @@ public sealed class IngestServiceTests
                 MediaKind.Image,
                 "photo.jpg",
                 null,
-                [
-                    new IngestSourceRecord(
-                        source,
-                        info.Length,
-                        new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
-                        IsPresent: true,
-                        IsPrimary: true)
-                ],
+                [new IngestSourceRecord(
+                    "T:\\inbox\\photo.jpg",
+                    3,
+                    ObservedAt,
+                    true,
+                    true)],
                 MetadataSelection.Create("display", [], null, []),
-                MetadataVersion: 0);
-            var store = new RecordingIngestStore(candidate, conflict);
-            var storage = new RecordingStorage(store, conflict == ConflictKind.Name);
-            var settings = new FixedSettingsStore(
-                new LibraryFolders(inbox, library, work));
+                1);
+            var detector = new DetectionStub();
+            var executor = new ExecutionStub();
             var service = new IngestService(
                 new CompletedScanner(),
-                store,
-                settings,
-                new TestInputResolver(),
-                storage,
-                new IngestCleanupService(store, storage),
+                new CandidateStore(candidate),
+                new FixedSettingsStore(),
+                new InputResolver(),
+                detector,
+                executor,
                 new MediaOperationCoordinator(),
                 NullLogger<IngestService>.Instance);
-            return new IngestFixture(root, itemId, store, storage, service);
+            return new IngestFixture(itemId, detector, executor, service);
         }
     }
 
-    private sealed class RecordingIngestStore(
-        IngestCandidate candidate,
-        ConflictKind? conflict) : IIngestStore
+    private sealed class DetectionStub : IConflictDetectionService
     {
-        private IngestOperationRecord? _operation;
+        public ConflictCaseRecord? Result { get; set; }
 
-        public bool AssetCommitted { get; private set; }
+        public Task<ConflictCaseRecord?> DetectAsync(
+            IngestPreparation preparation,
+            LibraryFolders folders,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(Result);
 
+        public Task<ConflictRevalidationResult> RevalidateAsync(
+            ConflictCaseRecord conflict,
+            IngestPreparation current,
+            LibraryFolders folders,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class ExecutionStub : IIngestExecutionService
+    {
+        public int CallCount { get; private set; }
+
+        public IngestPreparation? Preparation { get; private set; }
+
+        public IngestExecutionPlan? Plan { get; private set; }
+
+        public Task<IngestResult> ExecuteAsync(
+            IngestPreparation preparation,
+            IngestExecutionPlan plan,
+            LibraryFolders folders,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            Preparation = preparation;
+            Plan = plan;
+            return Task.FromResult(new IngestResult(
+                IngestOutcome.Completed,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                null,
+                "ingest.completed"));
+        }
+    }
+
+    private sealed class CandidateStore(IngestCandidate candidate) : IIngestStore
+    {
         public Task<IngestCandidate?> LoadCandidateAsync(
             Guid inboxItemId,
             CancellationToken cancellationToken) =>
@@ -144,222 +194,83 @@ public sealed class IngestServiceTests
 
         public Task<IngestOperationRecord?> FindActiveAsync(
             Guid inboxItemId,
-            CancellationToken cancellationToken) => Task.FromResult(_operation);
-
-        public Task<ConflictCheck> CheckConflictsAsync(
-            string targetFilename,
-            string sourceSha256,
             CancellationToken cancellationToken) =>
-            Task.FromResult(new ConflictCheck(
-                conflict == ConflictKind.RegisteredContent ? conflict : null));
-
-        public Task BlockConflictAsync(
-            Guid inboxItemId,
-            ConflictKind kind,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            Task.FromResult<IngestOperationRecord?>(null);
 
         public Task<IngestOperationRecord> CreateAsync(
             IngestPreparation preparation,
-            CancellationToken cancellationToken)
-        {
-            _operation = new IngestOperationRecord(
-                Guid.NewGuid(),
-                preparation.InboxItemId,
-                IngestOperationStage.Created,
-                IngestDisposition.Create,
-                null,
-                preparation.SourcePath,
-                preparation.SourceSize,
-                preparation.SourceLastWriteTimeUtc,
-                preparation.SourceSha256,
-                preparation.TargetFilename,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                IngestBackupState.NotRequired,
-                null,
-                null,
-                null,
-                null,
-                null,
-                0,
-                null);
-            return Task.FromResult(_operation);
-        }
+            IngestExecutionPlan plan,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task MarkStagedAsync(
             Guid operationId,
             StagedFile staged,
-            CancellationToken cancellationToken)
-        {
-            _operation = _operation! with
-            {
-                Stage = IngestOperationStage.Staged,
-                StagedPath = staged.FullPath
-            };
-            return Task.CompletedTask;
-        }
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task AbandonForRetryAsync(
             Guid operationId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task MarkFileCommittedAsync(
             Guid operationId,
             CommittedFile committed,
-            CancellationToken cancellationToken)
-        {
-            _operation = _operation! with { Stage = IngestOperationStage.FileCommitted };
-            return Task.CompletedTask;
-        }
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task<Guid> CommitAssetAsync(
             Guid operationId,
             CommittedFile committed,
-            CancellationToken cancellationToken)
-        {
-            AssetCommitted = true;
-            Guid assetId = Guid.NewGuid();
-            _operation = _operation! with
-            {
-                Stage = IngestOperationStage.DatabaseCommitted,
-                AssetId = assetId
-            };
-            return Task.FromResult(assetId);
-        }
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task MarkCleanupPendingAsync(
             Guid operationId,
             string errorCode,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task CompleteAsync(
             Guid operationId,
-            CancellationToken cancellationToken)
-        {
-            _operation = _operation! with { Stage = IngestOperationStage.Completed };
-            return Task.CompletedTask;
-        }
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task FailAsync(
             Guid operationId,
             string errorCode,
             bool isRetryable,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task<IReadOnlyList<IngestOperationRecord>> LoadIncompleteAsync(
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<IngestOperationRecord>>([]);
     }
 
-    private sealed class RecordingStorage(
-        RecordingIngestStore store,
-        bool targetExists) : IControlledMediaStorage
-    {
-        public int StageCallCount { get; private set; }
-
-        public bool SourceExists { get; private set; } = true;
-
-        public bool DeleteObservedAfterAssetCommit { get; private set; }
-
-        public Task<bool> TargetExistsAsync(
-            LibraryFolders folders,
-            string targetFilename,
-            CancellationToken cancellationToken) => Task.FromResult(targetExists);
-
-        public Task<StagedFile> StageAsync(
-            Guid operationId,
-            LibraryFolders folders,
-            string sourcePath,
-            string expectedSha256,
-            CancellationToken cancellationToken)
-        {
-            StageCallCount++;
-            return Task.FromResult(new StagedFile(
-                Path.Combine(folders.WorkDirectory, "payload"),
-                3,
-                expectedSha256));
-        }
-
-        public Task<CommittedFile> CommitAsync(
-            Guid operationId,
-            LibraryFolders folders,
-            StagedFile staged,
-            string targetFilename,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new CommittedFile(
-                Path.Combine(folders.LibraryDirectory, targetFilename),
-                targetFilename,
-                staged.Size,
-                staged.Sha256));
-
-        public Task<SourceDeleteResult> DeleteSourceIfMatchesAsync(
-            LibraryFolders folders,
-            string sourcePath,
-            long expectedSize,
-            string expectedSha256,
-            CancellationToken cancellationToken)
-        {
-            DeleteObservedAfterAssetCommit = store.AssetCommitted;
-            SourceExists = false;
-            return Task.FromResult(new SourceDeleteResult(SourceDeleteOutcome.Deleted));
-        }
-
-        public Task<bool> VerifyCommittedAsync(
-            LibraryFolders folders,
-            CommittedFile committed,
-            CancellationToken cancellationToken) => Task.FromResult(true);
-
-        public Task CleanupTemporaryFilesAsync(
-            Guid operationId,
-            LibraryFolders folders,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-    }
-
-    private sealed class FixedHasher : IFileHasher
-    {
-        public Task<string> ComputeSha256Async(
-            string path,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new string('A', 64));
-    }
-
-    private sealed class TestInputResolver : IIngestInputResolver
+    private sealed class InputResolver : IIngestInputResolver
     {
         public Task<PreparedIngestInput> ResolveAsync(
             IngestCandidate candidate,
-            CancellationToken cancellationToken)
-        {
-            IngestSourceRecord source = candidate.Sources.Single();
-            string hash = new('A', 64);
-            var cleanup = new IngestCleanupFile(
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new PreparedIngestInput(
                 IngestCleanupKind.InboxSource,
-                source.FullPath,
-                source.Size,
-                hash);
-            return Task.FromResult(new PreparedIngestInput(
-                cleanup.Kind,
-                source.FullPath,
-                source.Size,
-                source.LastWriteTimeUtc,
-                hash,
-                [cleanup]));
-        }
+                "T:\\inbox\\photo.jpg",
+                3,
+                ObservedAt,
+                HashA,
+                []));
     }
 
-    private sealed class FixedSettingsStore(LibraryFolders folders)
-        : IDirectorySettingsStore
+    private sealed class FixedSettingsStore : IDirectorySettingsStore
     {
-        public Task<LibraryFolders?> LoadAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<LibraryFolders?>(folders);
+        public Task<LibraryFolders?> LoadAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult<LibraryFolders?>(Folders);
 
         public Task SaveAsync(
-            LibraryFolders value,
+            LibraryFolders folders,
             CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
