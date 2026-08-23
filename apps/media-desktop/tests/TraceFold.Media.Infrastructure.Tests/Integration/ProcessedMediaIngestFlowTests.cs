@@ -5,6 +5,7 @@ using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Domain.Ingest;
 using TraceFold.Media.Infrastructure.Filesystem;
 using TraceFold.Media.Infrastructure.MediaTools;
 using TraceFold.Media.Infrastructure.Persistence;
@@ -43,6 +44,36 @@ public sealed class ProcessedMediaIngestFlowTests
         Assert.True(File.Exists(fixture.InboxMp4));
         Assert.True(File.Exists(fixture.InboxM4a));
         Assert.True(File.Exists(fixture.ProcessedOutputPath));
+    }
+
+    [Fact]
+    public async Task Processed_output_conflict_preserves_originals_until_selected_replace_succeeds()
+    {
+        await using ProcessedFixture fixture = await ProcessedFixture.CreateAsync();
+        byte[] expectedOutput = await File.ReadAllBytesAsync(
+            fixture.ProcessedOutputPath,
+            TestContext.Current.CancellationToken);
+        File.WriteAllBytes(
+            Path.Combine(fixture.Folders.Library, "paired.mp4"),
+            [9, 8, 7, 6]);
+
+        IngestResult blocked = await fixture.IngestAsync(failCommit: false);
+
+        Assert.Equal(IngestOutcome.ConflictBlocked, blocked.Outcome);
+        Assert.True(File.Exists(fixture.InboxMp4));
+        Assert.True(File.Exists(fixture.InboxM4a));
+        Assert.True(File.Exists(fixture.ProcessedOutputPath));
+
+        IngestResult resolved = await fixture.ResolveUnmanagedReplaceAsync(
+            blocked.ConflictCaseId!.Value);
+
+        Assert.Equal(IngestOutcome.Completed, resolved.Outcome);
+        Assert.False(File.Exists(fixture.InboxMp4));
+        Assert.False(File.Exists(fixture.InboxM4a));
+        Assert.False(File.Exists(fixture.ProcessedOutputPath));
+        Assert.Equal(expectedOutput, await File.ReadAllBytesAsync(
+            Path.Combine(fixture.Folders.Library, "paired.mp4"),
+            TestContext.Current.CancellationToken));
     }
 
     private sealed class ProcessedFixture : IAsyncDisposable
@@ -190,6 +221,52 @@ public sealed class ProcessedMediaIngestFlowTests
                 NullLogger<IngestService>.Instance);
             return await service.IngestAsync(
                 ItemId,
+                TestContext.Current.CancellationToken);
+        }
+
+        public async Task<IngestResult> ResolveUnmanagedReplaceAsync(Guid caseId)
+        {
+            var ingestStore = new EfIngestStore(Database.CreateContextFactory());
+            IControlledMediaStorage storage = new ControlledMediaStorage(hasher);
+            var invalidation = new ProcessingInvalidationService(
+                processingStore,
+                controller);
+            var conflictStore = new EfConflictCaseStore(
+                Database.CreateContextFactory(),
+                TimeProvider.System);
+            var settings = new EfDirectorySettingsStore(
+                Database.CreateContextFactory());
+            var input = new IngestInputResolver(
+                processingStore,
+                hasher,
+                invalidation);
+            var detector = new ConflictDetectionService(conflictStore, storage);
+            var cleanup = new IngestCleanupService(ingestStore, storage);
+            var executor = new IngestExecutionService(
+                ingestStore,
+                storage,
+                cleanup,
+                NullLogger<IngestExecutionService>.Instance);
+            var resolution = new ConflictResolutionService(
+                conflictStore,
+                ingestStore,
+                settings,
+                input,
+                detector,
+                storage,
+                executor,
+                new NoOpActivity(),
+                new MediaOperationCoordinator());
+            ConflictCaseRecord conflict = (await conflictStore.LoadAsync(
+                caseId,
+                TestContext.Current.CancellationToken))!;
+            ConflictMatchRecord selected = Assert.Single(
+                conflict.Matches,
+                match => !match.IsRegistered);
+            return await resolution.ResolveAsync(
+                caseId,
+                ConflictResolution.Replace,
+                selected.Id,
                 TestContext.Current.CancellationToken);
         }
 

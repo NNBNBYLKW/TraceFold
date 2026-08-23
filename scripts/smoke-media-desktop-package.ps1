@@ -1,24 +1,37 @@
 [CmdletBinding()]
 param(
-    [string] $PackageDirectory
+    [string] $PackageDirectory,
+    [Parameter(Mandatory)][ValidateSet('4A','4B')][string] $StageCheckpoint
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($PackageDirectory)) {
-    $PackageDirectory = Join-Path $repoRoot 'dist\TraceFold-MediaDesktop-Stage3-win-x64'
+    $PackageDirectory = Join-Path $repoRoot "dist\TraceFold-MediaDesktop-Stage$StageCheckpoint-win-x64"
+}
+if ($StageCheckpoint -ne '4A') {
+    throw 'Stage 4B package smoke is enabled after the recovery checkpoint is implemented.'
 }
 $packageRoot = [IO.Path]::GetFullPath($PackageDirectory)
 $exePath = [IO.Path]::GetFullPath((Join-Path $packageRoot 'TraceFold.Media.exe'))
 $packageToolRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'tools\ffmpeg'))
 $packageFfmpegPath = [IO.Path]::GetFullPath((Join-Path $packageToolRoot 'ffmpeg.exe'))
 $packageFfprobePath = [IO.Path]::GetFullPath((Join-Path $packageToolRoot 'ffprobe.exe'))
+$packageVersionPath = [IO.Path]::GetFullPath((Join-Path $packageRoot 'package-version.json'))
 if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
     throw "Package executable is missing: $exePath"
 }
 if (-not (Test-Path -LiteralPath $packageFfmpegPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $packageFfprobePath -PathType Leaf)) {
     throw 'Package-local FFmpeg or FFprobe is missing.'
+}
+if (-not (Test-Path -LiteralPath $packageVersionPath -PathType Leaf)) {
+    throw 'Package version manifest is missing.'
+}
+$packageVersion = Get-Content -LiteralPath $packageVersionPath -Raw | ConvertFrom-Json
+if ($packageVersion.StageCheckpoint -ne $StageCheckpoint -or
+    [string]$packageVersion.SourceCommit -notmatch '^[0-9a-f]{40}$') {
+    throw 'Package version manifest does not identify the checkpoint source commit.'
 }
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -31,7 +44,7 @@ $secondary = $null
 $fatalLaunch = $null
 $probeProcess = $null
 $probeToken = [Guid]::NewGuid().ToString('D')
-$probeName = "tracefold-media-desktop-stage3-probe-$([Guid]::NewGuid().ToString('N'))"
+$probeName = "tracefold-media-desktop-stage4-probe-$([Guid]::NewGuid().ToString('N'))"
 $probeRoot = [IO.Path]::GetFullPath((Join-Path $tempBase $probeName))
 $probeMarker = Join-Path $probeRoot 'probe-owner.txt'
 
@@ -171,36 +184,52 @@ try {
     $probeFixtures = Join-Path $probeRoot 'fixtures'
     New-Item -ItemType Directory -Path $probeFixtures | Out-Null
     $fixtureSource = Join-Path $repoRoot 'apps\media-api\tests\fixtures\media'
-    Copy-Item `
-        -LiteralPath (Join-Path $fixtureSource 'paired.mp4') `
-        -Destination $probeFixtures
-    Copy-Item `
-        -LiteralPath (Join-Path $fixtureSource 'paired.m4a') `
-        -Destination $probeFixtures
+    foreach ($fixtureName in @('paired.mp4', 'paired.m4a', 'photo.jpg')) {
+        Copy-Item `
+            -LiteralPath (Join-Path $fixtureSource $fixtureName) `
+            -Destination $probeFixtures
+    }
     $probeArguments = @(
-        '--stage3-package-probe-root',
+        '--stage4-package-probe-root',
         ('"{0}"' -f $probeRoot),
-        '--stage3-package-probe-token',
-        $probeToken)
+        '--stage4-package-probe-token',
+        $probeToken,
+        '--stage4-package-probe-mode',
+        'conflict')
     $probeProcess = Start-Process `
         -FilePath $exePath `
         -ArgumentList $probeArguments `
         -PassThru `
         -WindowStyle Hidden
-    if (-not $probeProcess.WaitForExit(45000)) {
-        throw 'Stage 3 package probe did not exit within 45 seconds.'
+    if (-not $probeProcess.WaitForExit(60000)) {
+        throw 'Stage 4A package probe did not exit within 60 seconds.'
     }
     if ($probeProcess.ExitCode -ne 0) {
-        throw "Stage 3 package probe failed with exit code $($probeProcess.ExitCode)."
+        throw "Stage 4A package probe failed with exit code $($probeProcess.ExitCode)."
     }
 
-    $probeResultPath = Join-Path $probeRoot 'stage3-probe-result.json'
+    $probeResultPath = Join-Path $probeRoot 'stage4-probe-result.json'
     if (-not (Test-Path -LiteralPath $probeResultPath -PathType Leaf)) {
-        throw 'Stage 3 package probe result is missing.'
+        throw 'Stage 4A package probe result is missing.'
     }
     $result = Get-Content -LiteralPath $probeResultPath -Raw | ConvertFrom-Json
     if (-not $result.Succeeded) {
-        throw "Stage 3 package probe reported failure: $($result.ErrorCode)"
+        throw "Stage 4A package probe reported failure: $($result.ErrorCode)"
+    }
+    foreach ($caseProperty in @(
+            'RegisteredReplacePassed',
+            'ContentKeepBothPassed',
+            'UnmanagedReplacePassed',
+            'ReopenPassed',
+            'ProcessedMediaPassed')) {
+        if (-not [bool]$result.$caseProperty) {
+            throw "Stage 4A package probe case failed: $caseProperty"
+        }
+    }
+    if ([int]$result.ImageAssetCount -ne 3 -or
+        [int]$result.VideoAssetCount -ne 1 -or
+        [int]$result.TotalAssetCount -ne 4) {
+        throw 'Stage 4A package probe asset counts are invalid.'
     }
     $reportedToolPath = [IO.Path]::GetFullPath([string]$result.ToolPath)
     if (-not [StringComparer]::OrdinalIgnoreCase.Equals(
@@ -215,13 +244,17 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $probeRoot 'library\paired.mp4'))) {
         throw 'Probe formal file is missing.'
     }
-    if (-not $result.HasVideo -or -not $result.HasAudio) {
-        throw 'Probe formal media did not validate video and audio streams.'
-    }
     $processingRoot = Join-Path $probeRoot 'work\.tracefold\processing'
     if ((Test-Path -LiteralPath $processingRoot) -and
         @(Get-ChildItem -LiteralPath $processingRoot -Force).Count -ne 0) {
         throw 'Probe processing workspace was not cleaned.'
+    }
+    foreach ($storageCategory in @('commit', 'recovery')) {
+        $storageRoot = Join-Path $probeRoot "library\.tracefold\$storageCategory"
+        if ((Test-Path -LiteralPath $storageRoot) -and
+            @(Get-ChildItem -LiteralPath $storageRoot -Force).Count -ne 0) {
+            throw "Probe retained internal storage content: $storageCategory"
+        }
     }
 
     $packageProcesses = @(Get-PackageProcesses)
@@ -243,7 +276,7 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath (Join-Path $tempRoot 'media-desktop.db') -PathType Leaf)) {
-        throw 'Stage 3 database was not created under the smoke root.'
+        throw 'Stage 4 database was not created under the smoke root.'
     }
     $logs = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'logs') -File -Filter 'tracefold-*.log')
     if ($logs.Count -eq 0) {
@@ -260,7 +293,8 @@ try {
     }
 
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
-    Write-Output 'PASS: Stage 3 package-local FFmpeg processing, preview, and ingest flow verified'
+    Write-Output 'PASS: Stage 4A registered replace, Keep Both, unmanaged replace, and reopen flows verified'
+    Write-Output 'PASS: Stage 4A package-local FFmpeg processing and clean storage verified'
 }
 finally {
     @(Get-PackageFfmpegProcesses) |
@@ -290,7 +324,7 @@ finally {
 
     Assert-DirectTempChild -Path $probeRoot -ExpectedName $probeName
     if ((Test-Path -LiteralPath $probeRoot) -and
-        $probeName.StartsWith('tracefold-media-desktop-stage3-probe-', [StringComparison]::Ordinal)) {
+        $probeName.StartsWith('tracefold-media-desktop-stage4-probe-', [StringComparison]::Ordinal)) {
         Assert-NoReparseTree -Path $probeRoot
         if (-not (Test-Path -LiteralPath $probeMarker -PathType Leaf) -or
             [IO.File]::ReadAllText($probeMarker) -ne $probeToken) {

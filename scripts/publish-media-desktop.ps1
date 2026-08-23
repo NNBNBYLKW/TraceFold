@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory)][ValidateSet('4A','4B')][string] $StageCheckpoint,
     [Parameter(Mandatory)][string] $FfmpegSourceRoot,
     [string] $NugetPackageSource
 )
@@ -7,15 +8,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $distRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'dist'))
-$packageName = 'TraceFold-MediaDesktop-Stage3-win-x64'
+$packageName = "TraceFold-MediaDesktop-Stage$StageCheckpoint-win-x64"
 $archiveName = "$packageName.zip"
 $packageDir = [IO.Path]::GetFullPath((Join-Path $distRoot $packageName))
 $zipPath = [IO.Path]::GetFullPath((Join-Path $distRoot $archiveName))
-$stagingName = ".tracefold-stage3-publish-$([Guid]::NewGuid().ToString('N'))"
+$stageSlug = $StageCheckpoint.ToLowerInvariant()
+$stagingName = ".tracefold-stage$stageSlug-publish-$([Guid]::NewGuid().ToString('N'))"
 $stagingRoot = [IO.Path]::GetFullPath((Join-Path $distRoot $stagingName))
 $stagingPackage = [IO.Path]::GetFullPath((Join-Path $stagingRoot $packageName))
 $stagingZip = [IO.Path]::GetFullPath((Join-Path $stagingRoot $archiveName))
-$backupName = ".tracefold-stage3-backup-$([Guid]::NewGuid().ToString('N'))"
+$backupName = ".tracefold-stage$stageSlug-backup-$([Guid]::NewGuid().ToString('N'))"
 $backupRoot = [IO.Path]::GetFullPath((Join-Path $distRoot $backupName))
 $backupPackage = [IO.Path]::GetFullPath((Join-Path $backupRoot $packageName))
 $backupZip = [IO.Path]::GetFullPath((Join-Path $backupRoot $archiveName))
@@ -221,6 +223,15 @@ $distItem = Get-Item -LiteralPath $distRoot -Force
 if (($distItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw "Distribution root cannot be a reparse point: $distRoot"
 }
+$sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw 'Unable to identify the source commit for the package.'
+}
+$trackedChanges = @(& git -C $repoRoot status --porcelain --untracked-files=no)
+if ($LASTEXITCODE -ne 0 -or $trackedChanges.Count -ne 0) {
+    throw 'Refusing to package tracked source changes that are not committed.'
+}
+$informationalVersion = "4.0.0-stage$stageSlug+$sourceCommit"
 
 try {
     Invoke-DotNet -DotNetArguments @(
@@ -244,10 +255,21 @@ try {
         '-p:PublishProfile=win-x64',
         '-p:DebugType=none',
         '-p:DebugSymbols=false',
+        '-p:Version=4.0.0',
+        '-p:FileVersion=4.0.0.0',
+        "-p:InformationalVersion=$informationalVersion",
         "-p:TraceFoldFfmpegSourceRoot=$ffmpegRoot",
         '--no-restore',
         '--disable-build-servers',
         '-o', $stagingPackage)
+
+    [pscustomobject]@{
+        StageCheckpoint = $StageCheckpoint
+        SourceCommit = $sourceCommit.ToLowerInvariant()
+        InformationalVersion = $informationalVersion
+    } | ConvertTo-Json | Set-Content `
+        -LiteralPath (Join-Path $stagingPackage 'package-version.json') `
+        -Encoding UTF8
 
     Assert-NoReparseTree -Path $stagingPackage
     $publishedToolRoot = Join-Path $stagingPackage 'tools\ffmpeg'

@@ -2,29 +2,32 @@ using System.Security.Cryptography;
 
 namespace TraceFold.Media.Desktop.Diagnostics;
 
-public enum Stage3PackageProbeOptionState
+public enum Stage4PackageProbeOptionState
 {
     NotRequested,
     Ready,
     Invalid
 }
 
-public sealed record Stage3PackageProbeOptionResult(
-    Stage3PackageProbeOptionState State,
-    Stage3PackageProbeOptions? Options,
+public sealed record Stage4PackageProbeOptionResult(
+    Stage4PackageProbeOptionState State,
+    Stage4PackageProbeOptions? Options,
     string? ErrorCode);
 
-public sealed record Stage3PackageProbeOptions(
+public sealed record Stage4PackageProbeOptions(
     string Root,
     Guid Token,
-    string TokenText)
+    string TokenText,
+    string Mode)
 {
-    public const string RootArgument = "--stage3-package-probe-root";
-    public const string TokenArgument = "--stage3-package-probe-token";
+    public const string RootArgument = "--stage4-package-probe-root";
+    public const string TokenArgument = "--stage4-package-probe-token";
+    public const string ModeArgument = "--stage4-package-probe-mode";
+    public const string ConflictMode = "conflict";
     public const string RootNamePrefix =
-        "tracefold-media-desktop-stage3-probe-";
+        "tracefold-media-desktop-stage4-probe-";
 
-    public const string ResultFilename = "stage3-probe-result.json";
+    public const string ResultFilename = "stage4-probe-result.json";
     public const string FixturesDirectoryName = "fixtures";
     public const string OwnerFilename = "probe-owner.txt";
 
@@ -34,34 +37,38 @@ public sealed record Stage3PackageProbeOptions(
             ["paired.mp4"] =
                 "B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3",
             ["paired.m4a"] =
-                "187F3BE0AB2C07C6A967840BEBFA0EB1646227B52179387F74AB4D8BBC64AAC1"
+                "187F3BE0AB2C07C6A967840BEBFA0EB1646227B52179387F74AB4D8BBC64AAC1",
+            ["photo.jpg"] =
+                "7D1BD6791F1D40FFAFE6C7704FB2E71B6FBF6CBD26B71F9A45E62460D61312A6"
         };
 
     private static readonly string[] ReservedEntries =
         ["data", "inbox", "library", "work", ResultFilename];
 
-    public static Stage3PackageProbeOptionResult Parse(
+    public static Stage4PackageProbeOptionResult Parse(
         IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         bool requested = arguments.Any(argument =>
             argument.Equals(RootArgument, StringComparison.Ordinal)
-            || argument.Equals(TokenArgument, StringComparison.Ordinal));
+            || argument.Equals(TokenArgument, StringComparison.Ordinal)
+            || argument.Equals(ModeArgument, StringComparison.Ordinal));
         if (!requested)
         {
-            return new Stage3PackageProbeOptionResult(
-                Stage3PackageProbeOptionState.NotRequested,
+            return new Stage4PackageProbeOptionResult(
+                Stage4PackageProbeOptionState.NotRequested,
                 null,
                 null);
         }
 
-        if (arguments.Count != 4)
+        if (arguments.Count != 6)
         {
             return Invalid("probe.invalid_arguments");
         }
 
         string? rootValue = null;
         string? tokenText = null;
+        string? mode = null;
         for (int index = 0; index < arguments.Count; index += 2)
         {
             string name = arguments[index];
@@ -76,6 +83,11 @@ public sealed record Stage3PackageProbeOptions(
             {
                 tokenText = value;
             }
+            else if (name.Equals(ModeArgument, StringComparison.Ordinal)
+                     && mode is null)
+            {
+                mode = value;
+            }
             else
             {
                 return Invalid("probe.invalid_arguments");
@@ -84,7 +96,8 @@ public sealed record Stage3PackageProbeOptions(
 
         if (string.IsNullOrWhiteSpace(rootValue)
             || string.IsNullOrWhiteSpace(tokenText)
-            || !Guid.TryParse(tokenText, out Guid token))
+            || !Guid.TryParse(tokenText, out Guid token)
+            || !StringComparer.Ordinal.Equals(mode, ConflictMode))
         {
             return Invalid("probe.invalid_arguments");
         }
@@ -149,9 +162,13 @@ public sealed record Stage3PackageProbeOptions(
                 return Invalid("probe.fixtures_invalid");
             }
 
-            return new Stage3PackageProbeOptionResult(
-                Stage3PackageProbeOptionState.Ready,
-                new Stage3PackageProbeOptions(root, token, tokenText),
+            return new Stage4PackageProbeOptionResult(
+                Stage4PackageProbeOptionState.Ready,
+                new Stage4PackageProbeOptions(
+                    root,
+                    token,
+                    tokenText,
+                    ConflictMode),
                 null);
         }
         catch (Exception error) when (error is
@@ -198,8 +215,8 @@ public sealed record Stage3PackageProbeOptions(
         return true;
     }
 
-    private static Stage3PackageProbeOptionResult Invalid(string errorCode) =>
-        new(Stage3PackageProbeOptionState.Invalid, null, errorCode);
+    private static Stage4PackageProbeOptionResult Invalid(string errorCode) =>
+        new(Stage4PackageProbeOptionState.Invalid, null, errorCode);
 
     private static bool IsReparsePoint(string path) =>
         File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
