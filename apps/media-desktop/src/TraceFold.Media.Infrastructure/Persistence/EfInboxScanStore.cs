@@ -45,12 +45,15 @@ public sealed class EfInboxScanStore(
         List<SourceFileRow> activeSources = await context.SourceFiles
             .Where(row => row.ActivePathKey != null)
             .Include(row => row.InboxItem)
+                .ThenInclude(item => item.ProcessingJobs)
+                    .ThenInclude(job => job.Output)
             .ToListAsync(cancellationToken);
         var sourcesByPath = activeSources.ToDictionary(
             row => row.ActivePathKey!,
             StringComparer.OrdinalIgnoreCase);
         var createdItemIds = new HashSet<Guid>();
         var updatedItemIds = new HashSet<Guid>();
+        var sourceChangedItemIds = new HashSet<Guid>();
 
         foreach (CandidateGroup group in reconciliation.Groups)
         {
@@ -170,12 +173,23 @@ public sealed class EfInboxScanStore(
             bool scanManagedState = item.State is
                 InboxItemState.WaitingForStability or
                 InboxItemState.Analyzing or
-                InboxItemState.ReadyToTag or
                 InboxItemState.RequiresProcessing or
-                InboxItemState.SourceMissing;
+                InboxItemState.SourceMissing
+                || (item.State == InboxItemState.ReadyToTag
+                    && !item.ProcessingJobs.Any(job =>
+                        job.Output is
+                        {
+                            IsValid: true,
+                            ActiveInboxItemId: not null
+                        }));
             if (sourceChanged || scanManagedState)
             {
                 ApplyCandidateState(item, group, currentGroupSources, sourceChanged);
+            }
+
+            if (sourceChanged && !created)
+            {
+                sourceChangedItemIds.Add(item.Id);
             }
         }
 
@@ -188,6 +202,10 @@ public sealed class EfInboxScanStore(
             }
 
             source.IsPresent = false;
+            if (!createdItemIds.Contains(source.InboxItemId))
+            {
+                sourceChangedItemIds.Add(source.InboxItemId);
+            }
             if (source.InboxItem.State is not
                 (InboxItemState.Ingesting or
                  InboxItemState.CleanupPending or
@@ -215,7 +233,8 @@ public sealed class EfInboxScanStore(
         return new ScanPersistenceResult(
             createdItemIds.Count,
             updatedItemIds.Count,
-            waiting);
+            waiting,
+            sourceChangedItemIds.ToArray());
     }
 
     public async Task<bool> HasWaitingCandidatesAsync(CancellationToken cancellationToken)

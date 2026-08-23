@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Domain.Inbox;
@@ -88,10 +89,30 @@ public sealed class ScanInboxServiceTests
         Assert.Equal(result.Message, preferences.LastScanSummary);
     }
 
+    [Fact]
+    public async Task Completed_scan_invalidates_each_item_with_changed_sources()
+    {
+        Guid first = Guid.NewGuid();
+        Guid second = Guid.NewGuid();
+        var invalidation = new RecordingProcessingInvalidation();
+        ScanInboxService service = CreateService(
+            new SourceChangedScanStore([first, second]),
+            new SnapshotCatalog(Snapshot("C:/inbox/photo.jpg", 10, Instant)),
+            invalidation: invalidation);
+
+        ScanResult result = await service.ScanAsync(
+            ScanTrigger.Manual,
+            CancellationToken.None);
+
+        Assert.Equal(ScanOutcome.Completed, result.Outcome);
+        Assert.Equal([first, second], invalidation.ItemIds);
+    }
+
     private static ScanInboxService CreateService(
         IInboxScanStore store,
         IInboxFileCatalog catalog,
-        IScanPreferencesStore? preferences = null)
+        IScanPreferencesStore? preferences = null,
+        IProcessingInvalidationService? invalidation = null)
     {
         var settings = new DirectorySettingsService(
             new AlwaysValidDirectoryProbe(),
@@ -107,7 +128,8 @@ public sealed class ScanInboxServiceTests
             new FixedTimeProvider(Instant),
             new NeverStoppingLifetimeToken(),
             NullLogger<ScanInboxService>.Instance,
-            preferences);
+            preferences,
+            invalidation);
     }
 
     private static FileSnapshot Snapshot(
@@ -243,7 +265,8 @@ public sealed class ScanInboxServiceTests
             return Task.FromResult(new ScanPersistenceResult(
                 created,
                 updated,
-                waiting));
+                waiting,
+                []));
         }
 
         public Task<bool> HasWaitingCandidatesAsync(CancellationToken cancellationToken) =>
@@ -260,6 +283,43 @@ public sealed class ScanInboxServiceTests
             InboxItem Item,
             FileFingerprint Fingerprint,
             int StableCount);
+    }
+
+    private sealed class SourceChangedScanStore(
+        IReadOnlyList<Guid> sourceChangedItemIds) : IInboxScanStore
+    {
+        public Task<IReadOnlyDictionary<string, DateTimeOffset>> LoadFirstObservedAsync(
+            IReadOnlySet<string> normalizedPaths,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyDictionary<string, DateTimeOffset>>(
+                new Dictionary<string, DateTimeOffset>());
+
+        public Task<ScanPersistenceResult> ReconcileAsync(
+            ScanReconciliation reconciliation,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ScanPersistenceResult(
+                0,
+                0,
+                false,
+                sourceChangedItemIds));
+
+        public Task<bool> HasWaitingCandidatesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+
+        public Task ClearMissingAsync(Guid inboxItemId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingProcessingInvalidation
+        : IProcessingInvalidationService
+    {
+        public List<Guid> ItemIds { get; } = [];
+
+        public Task InvalidateAsync(Guid inboxItemId, CancellationToken cancellationToken)
+        {
+            ItemIds.Add(inboxItemId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingActivityNotifier : IInboxActivityNotifier

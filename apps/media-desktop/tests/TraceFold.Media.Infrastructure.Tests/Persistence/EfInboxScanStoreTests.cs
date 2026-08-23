@@ -32,6 +32,7 @@ public sealed class EfInboxScanStoreTests
         Assert.Equal(firstId, item.Id);
         Assert.Equal("readytotag", item.State);
         Assert.Equal(2, item.PrimaryStableObservationCount);
+        Assert.Empty(second.SourceChangedItemIds);
     }
 
     [Fact]
@@ -47,7 +48,7 @@ public sealed class EfInboxScanStoreTests
         PersistedInboxSnapshot before = await database.ReadSingleInboxAsync();
         await database.SetDraftVersionAsync(before.Id, 7);
 
-        await store.ReconcileAsync(
+        ScanPersistenceResult changed = await store.ReconcileAsync(
             DirectReconciliation(20, Instant.AddSeconds(4)),
             CancellationToken.None);
 
@@ -58,6 +59,7 @@ public sealed class EfInboxScanStoreTests
         Assert.Equal(20, after.PrimarySourceSize);
         Assert.Null(after.PrimarySha256);
         Assert.Equal(7, after.DraftVersion);
+        Assert.Equal([before.Id], changed.SourceChangedItemIds);
     }
 
     [Fact]
@@ -69,7 +71,7 @@ public sealed class EfInboxScanStoreTests
         await store.ReconcileAsync(DirectReconciliation(10, Instant), CancellationToken.None);
         Guid id = (await database.ReadSingleInboxAsync()).Id;
 
-        await store.ReconcileAsync(
+        ScanPersistenceResult missingResult = await store.ReconcileAsync(
             new ScanReconciliation(
                 "C:/inbox",
                 Instant.AddSeconds(2),
@@ -81,6 +83,7 @@ public sealed class EfInboxScanStoreTests
         Assert.Equal("sourcemissing", missing.State);
         Assert.False(missing.PrimaryIsPresent);
         Assert.Equal(1, await database.CountInboxItemsAsync());
+        Assert.Equal([id], missingResult.SourceChangedItemIds);
 
         await store.ClearMissingAsync(id, CancellationToken.None);
 
@@ -96,14 +99,18 @@ public sealed class EfInboxScanStoreTests
         await store.ReconcileAsync(Mp4OnlyReconciliation(Instant), CancellationToken.None);
         Guid originalId = (await database.ReadSingleInboxAsync()).Id;
 
-        await store.ReconcileAsync(PairReconciliation(Instant.AddSeconds(2)), CancellationToken.None);
-        await store.ReconcileAsync(PairReconciliation(Instant.AddSeconds(4)), CancellationToken.None);
+        ScanPersistenceResult added = await store.ReconcileAsync(
+            PairReconciliation(Instant.AddSeconds(2)), CancellationToken.None);
+        ScanPersistenceResult stable = await store.ReconcileAsync(
+            PairReconciliation(Instant.AddSeconds(4)), CancellationToken.None);
 
         PersistedInboxSnapshot item = await database.ReadSingleInboxAsync();
         Assert.Equal(originalId, item.Id);
         Assert.Equal("requiresprocessing", item.State);
         Assert.Equal("mp4_m4a_merge", item.RequiredCapability);
         Assert.Equal(2, item.SourceCount);
+        Assert.Equal([originalId], added.SourceChangedItemIds);
+        Assert.Empty(stable.SourceChangedItemIds);
     }
 
     private static ScanReconciliation DirectReconciliation(

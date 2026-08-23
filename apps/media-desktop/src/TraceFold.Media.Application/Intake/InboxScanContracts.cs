@@ -9,7 +9,8 @@ public sealed record ScanReconciliation(
 public sealed record ScanPersistenceResult(
     int CreatedItems,
     int UpdatedItems,
-    bool HasWaitingCandidates);
+    bool HasWaitingCandidates,
+    IReadOnlyList<Guid> SourceChangedItemIds);
 
 public interface IInboxScanStore
 {

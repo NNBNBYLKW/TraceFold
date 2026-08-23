@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 
@@ -13,7 +14,8 @@ public sealed class ScanInboxService(
     TimeProvider timeProvider,
     IApplicationLifetimeToken lifetime,
     ILogger<ScanInboxService> logger,
-    IScanPreferencesStore? scanPreferencesStore = null) : IInboxScanner
+    IScanPreferencesStore? scanPreferencesStore = null,
+    IProcessingInvalidationService? processingInvalidation = null) : IInboxScanner
 {
     private readonly object _sync = new();
     private Task<ScanResult>? _activeScan;
@@ -125,6 +127,16 @@ public sealed class ScanInboxService(
                     groups,
                     observedPaths),
                 cancellationToken);
+
+            if (processingInvalidation is not null)
+            {
+                foreach (Guid inboxItemId in persisted.SourceChangedItemIds)
+                {
+                    await processingInvalidation.InvalidateAsync(
+                        inboxItemId,
+                        cancellationToken);
+                }
+            }
 
             if (persisted.HasWaitingCandidates)
             {
