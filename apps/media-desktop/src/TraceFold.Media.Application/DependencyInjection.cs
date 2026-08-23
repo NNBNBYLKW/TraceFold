@@ -57,6 +57,9 @@ public static class DependencyInjection
             ProcessingDiagnosticsService>();
         services.AddSingleton<IIngestInputResolver, IngestInputResolver>();
         services.AddSingleton<IIngestCleanupService, IngestCleanupService>();
+        services.AddSingleton<IConflictDetectionService,
+            ConflictDetectionService>();
+        services.AddSingleton<IConflictQueryService, ConflictQueryService>();
         services.AddSingleton<IngestService>();
         services.AddSingleton<IIngestService>(provider =>
             provider.GetRequiredService<IngestService>());
