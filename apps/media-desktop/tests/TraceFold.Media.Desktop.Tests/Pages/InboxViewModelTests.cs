@@ -139,6 +139,28 @@ public sealed class InboxViewModelTests
         Assert.True(viewModel.RefreshCommand.CanExecute(null));
     }
 
+    [Fact]
+    public async Task Reloading_selected_item_refreshes_card_and_inspector_details()
+    {
+        var query = new SingleItemInboxQuery(
+            InboxItemState.ProcessingQueued,
+            InboxAction.Preview | InboxAction.CancelProcessing);
+        InboxViewModel viewModel = CreateViewModel(query, CreateMetadata());
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+
+        query.SetState(
+            InboxItemState.ReadyToTag,
+            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.Ingest);
+        await viewModel.ApplyFiltersAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(InboxItemState.ReadyToTag, viewModel.SelectedItem?.State);
+        Assert.Equal(InboxItemState.ReadyToTag, viewModel.Inspector.State);
+        Assert.Equal(string.Empty, viewModel.Inspector.ProcessingStatusText);
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
@@ -271,15 +293,32 @@ public sealed class InboxViewModelTests
 
     private sealed class SingleItemInboxQuery : IInboxQueryService
     {
-        private readonly InboxDetailsDto details;
+        private readonly Guid id = Guid.NewGuid();
+        private InboxDetailsDto details;
 
         public SingleItemInboxQuery(
             InboxItemState state,
             InboxAction allowedActions,
             ProcessingSummaryDto? processing = null)
         {
+            details = CreateDetails(state, allowedActions, processing);
+        }
+
+        public void SetState(
+            InboxItemState state,
+            InboxAction allowedActions,
+            ProcessingSummaryDto? processing = null)
+        {
+            details = CreateDetails(state, allowedActions, processing);
+        }
+
+        private InboxDetailsDto CreateDetails(
+            InboxItemState state,
+            InboxAction allowedActions,
+            ProcessingSummaryDto? processing)
+        {
             var card = new InboxCardDto(
-                Guid.NewGuid(),
+                id,
                 "clip.mp4",
                 "clip.mp4",
                 MediaKind.Video,
@@ -288,7 +327,7 @@ public sealed class InboxViewModelTests
                 false,
                 processing);
             var owner = new MetadataOwner(MetadataOwnerKind.InboxItem, card.Id);
-            details = new InboxDetailsDto(
+            return new InboxDetailsDto(
                 card,
                 [],
                 null,

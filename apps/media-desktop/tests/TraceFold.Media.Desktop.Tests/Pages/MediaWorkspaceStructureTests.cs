@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Xml.Linq;
 using Xunit;
 
 namespace TraceFold.Media.Desktop.Tests.Pages;
@@ -58,6 +60,24 @@ public sealed class MediaWorkspaceStructureTests
             "AutomationProperties.AutomationId=\"InspectorPane\"",
             shellXaml,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Shell_navigation_keeps_the_three_column_workspace_compact()
+    {
+        XDocument shell = XDocument.Load(
+            DesktopSource("Shell", "ShellPage.xaml"));
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XElement navigation = Assert.Single(
+            shell.Descendants(presentation + "NavigationView"));
+        XAttribute? openPaneLength = navigation.Attribute("OpenPaneLength");
+
+        Assert.NotNull(openPaneLength);
+        double width = double.Parse(
+            openPaneLength.Value,
+            CultureInfo.InvariantCulture);
+        Assert.InRange(width, 180, 240);
     }
 
     [Fact]

@@ -334,6 +334,7 @@ public sealed partial class InboxViewModel : ObservableObject
         await _reloadGate.WaitAsync(cancellationToken);
         try
         {
+            Guid? selectedId = SelectedItem?.Id;
             IReadOnlyList<InboxCardDto> cards = await _query.SearchAsync(
                 new InboxQuery(
                     string.IsNullOrWhiteSpace(SearchText) ? null : SearchText,
@@ -367,6 +368,13 @@ public sealed partial class InboxViewModel : ObservableObject
             foreach (InboxCardViewModel item in items)
             {
                 Items.Add(item);
+            }
+
+            if (selectedId.HasValue)
+            {
+                InboxCardViewModel? refreshed = Items.FirstOrDefault(
+                    item => item.Id == selectedId.Value);
+                await SelectAsync(refreshed, cancellationToken);
             }
         }
         finally

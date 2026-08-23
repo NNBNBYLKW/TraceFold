@@ -17,6 +17,7 @@
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
             IsTitleBarAutoPaddingEnabled="False"
+            OpenPaneLength="220"
             PaneDisplayMode="Left"
             SelectionChanged="OnSelectionChanged">
             <NavigationView.MenuItems>
