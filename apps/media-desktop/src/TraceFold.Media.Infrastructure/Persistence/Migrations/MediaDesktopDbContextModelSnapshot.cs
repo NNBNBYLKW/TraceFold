@@ -58,6 +58,183 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.ToTable("app_settings", (string)null);
                 });
 
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ConflictCaseRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ActiveInboxItemId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("active_inbox_item_id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid>("InboxItemId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("inbox_item_id");
+
+                    b.Property<DateTimeOffset>("InputLastWriteTimeUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("input_last_write_time_utc");
+
+                    b.Property<string>("InputPath")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("input_path");
+
+                    b.Property<string>("InputSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("input_sha256");
+
+                    b.Property<long>("InputSize")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("input_size");
+
+                    b.Property<string>("InvalidationReason")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("invalidation_reason");
+
+                    b.Property<long>("MetadataVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("metadata_version");
+
+                    b.Property<Guid?>("OperationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("Resolution")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("resolution");
+
+                    b.Property<DateTimeOffset?>("ResolvedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("resolved_at_utc");
+
+                    b.Property<Guid?>("SelectedMatchId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("selected_match_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TargetFilename")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("target_filename");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActiveInboxItemId")
+                        .IsUnique();
+
+                    b.HasIndex("InboxItemId");
+
+                    b.HasIndex("InputSha256");
+
+                    b.HasIndex("OperationId")
+                        .IsUnique();
+
+                    b.ToTable("conflict_cases", (string)null);
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ConflictMatchRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ActualFilename")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("actual_filename");
+
+                    b.Property<Guid?>("AssetId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("asset_id");
+
+                    b.Property<long?>("AssetMetadataVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("asset_metadata_version");
+
+                    b.Property<Guid>("ConflictCaseId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("conflict_case_id");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("display_name");
+
+                    b.Property<bool>("IsRegistered")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("is_registered");
+
+                    b.Property<DateTimeOffset>("LastWriteTimeUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_write_time_utc");
+
+                    b.Property<string>("MediaKind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("media_kind");
+
+                    b.Property<string>("MetadataSnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("metadata_snapshot_json");
+
+                    b.Property<int>("Reason")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("RelativePath")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("relative_path");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sha256");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("size");
+
+                    b.Property<string>("TechnicalSnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("technical_snapshot_json");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConflictCaseId");
+
+                    b.ToTable("conflict_matches", (string)null);
+                });
+
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.InboxDraftAuthorRow", b =>
                 {
                     b.Property<Guid>("InboxItemId")
@@ -181,6 +358,15 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("controlled_path");
 
+                    b.Property<DateTimeOffset?>("LastAttemptAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_attempt_at_utc");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error_code");
+
                     b.Property<Guid>("OperationId")
                         .HasColumnType("TEXT")
                         .HasColumnName("operation_id");
@@ -218,14 +404,76 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("active_inbox_item_id");
 
+                    b.Property<Guid?>("AssetId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("asset_id");
+
+                    b.Property<string>("BackupRelativePath")
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("backup_relative_path");
+
+                    b.Property<string>("BackupSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("backup_sha256");
+
+                    b.Property<long?>("BackupSize")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("backup_size");
+
+                    b.Property<string>("BackupState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("notrequired")
+                        .HasColumnName("backup_state");
+
+                    b.Property<int>("CleanupAttemptCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0)
+                        .HasColumnName("cleanup_attempt_count");
+
+                    b.Property<Guid?>("ConflictCaseId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("conflict_case_id");
+
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at_utc");
+
+                    b.Property<string>("Disposition")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("create")
+                        .HasColumnName("disposition");
 
                     b.Property<string>("ErrorCode")
                         .HasMaxLength(128)
                         .HasColumnType("TEXT")
                         .HasColumnName("error_code");
+
+                    b.Property<DateTimeOffset?>("ExpectedTargetLastWriteTimeUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expected_target_last_write_time_utc");
+
+                    b.Property<string>("ExpectedTargetRelativePath")
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expected_target_relative_path");
+
+                    b.Property<string>("ExpectedTargetSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expected_target_sha256");
+
+                    b.Property<long?>("ExpectedTargetSize")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("expected_target_size");
 
                     b.Property<Guid>("InboxItemId")
                         .HasColumnType("TEXT")
@@ -235,6 +483,27 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("metadata_snapshot_json");
+
+                    b.Property<DateTimeOffset?>("NextCleanupAttemptAtUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("next_cleanup_attempt_at_utc");
+
+                    b.Property<string>("OldAssetSnapshotJson")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("old_asset_snapshot_json");
+
+                    b.Property<string>("RecoveryBlockedFromStage")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("recovery_blocked_from_stage");
+
+                    b.Property<Guid?>("ReplacementAssetId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("replacement_asset_id");
+
+                    b.Property<long?>("ReplacementAssetMetadataVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("replacement_asset_metadata_version");
 
                     b.Property<DateTimeOffset>("SourceLastWriteTimeUtc")
                         .HasColumnType("TEXT")
@@ -287,7 +556,16 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.HasIndex("ActiveInboxItemId")
                         .IsUnique();
 
+                    b.HasIndex("AssetId");
+
+                    b.HasIndex("ConflictCaseId")
+                        .IsUnique();
+
                     b.HasIndex("InboxItemId");
+
+                    b.HasIndex("NextCleanupAttemptAtUtc");
+
+                    b.HasIndex("ReplacementAssetId");
 
                     b.ToTable("ingest_operations", (string)null);
                 });
@@ -382,8 +660,7 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("SeriesId");
 
-                    b.HasIndex("Sha256")
-                        .IsUnique();
+                    b.HasIndex("Sha256");
 
                     b.ToTable("media_assets", (string)null);
                 });
@@ -809,6 +1086,28 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                     b.ToTable("taxonomy_terms", (string)null);
                 });
 
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ConflictCaseRow", b =>
+                {
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.InboxItemRow", "InboxItem")
+                        .WithMany()
+                        .HasForeignKey("InboxItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("InboxItem");
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ConflictMatchRow", b =>
+                {
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.ConflictCaseRow", "ConflictCase")
+                        .WithMany("Matches")
+                        .HasForeignKey("ConflictCaseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConflictCase");
+                });
+
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.InboxDraftAuthorRow", b =>
                 {
                     b.HasOne("TraceFold.Media.Infrastructure.Persistence.TaxonomyTermRow", "Author")
@@ -860,11 +1159,21 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.IngestOperationRow", b =>
                 {
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.MediaAssetRow", null)
+                        .WithMany()
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("TraceFold.Media.Infrastructure.Persistence.InboxItemRow", "InboxItem")
                         .WithMany("IngestOperations")
                         .HasForeignKey("InboxItemId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("TraceFold.Media.Infrastructure.Persistence.MediaAssetRow", null)
+                        .WithMany()
+                        .HasForeignKey("ReplacementAssetId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("InboxItem");
                 });
@@ -985,6 +1294,11 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("InboxItem");
+                });
+
+            modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.ConflictCaseRow", b =>
+                {
+                    b.Navigation("Matches");
                 });
 
             modelBuilder.Entity("TraceFold.Media.Infrastructure.Persistence.InboxItemRow", b =>

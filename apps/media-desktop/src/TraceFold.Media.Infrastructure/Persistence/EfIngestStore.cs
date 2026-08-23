@@ -81,7 +81,7 @@ public sealed class EfIngestStore(
             .FirstOrDefault();
         return row is null
             ? null
-            : await ToRecordAsync(context, row, cancellationToken);
+            : ToRecord(row);
     }
 
     public async Task<ConflictCheck> CheckConflictsAsync(
@@ -150,7 +150,7 @@ public sealed class EfIngestStore(
                 cancellationToken);
         if (existing is not null)
         {
-            return await ToRecordAsync(context, existing, cancellationToken);
+            return ToRecord(existing);
         }
 
         InboxItemRow item = await context.InboxItems.SingleAsync(
@@ -170,11 +170,14 @@ public sealed class EfIngestStore(
             InboxItem = item,
             ActiveInboxItemId = preparation.InboxItemId,
             Stage = IngestOperationStage.Created,
+            Disposition = IngestDisposition.Create,
             SourcePath = preparation.SourcePath,
             SourceSize = preparation.SourceSize,
             SourceLastWriteTimeUtc = preparation.SourceLastWriteTimeUtc,
             SourceSha256 = preparation.SourceSha256,
             TargetFilename = preparation.TargetFilename,
+            BackupState = IngestBackupState.NotRequired,
+            CleanupAttemptCount = 0,
             MetadataSnapshotJson = JsonSerializer.Serialize(
                 MetadataSnapshot.From(preparation)),
             CreatedAtUtc = now,
@@ -219,7 +222,7 @@ public sealed class EfIngestStore(
         {
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return ToRecord(row, null);
+            return ToRecord(row);
         }
         catch (DbUpdateException error) when (IsUniqueConstraint(error))
         {
@@ -231,7 +234,7 @@ public sealed class EfIngestStore(
                 .SingleAsync(
                     operation => operation.ActiveInboxItemId == preparation.InboxItemId,
                     cancellationToken);
-            return await ToRecordAsync(reload, raced, cancellationToken);
+            return ToRecord(raced);
         }
     }
 
@@ -305,11 +308,9 @@ public sealed class EfIngestStore(
             or IngestOperationStage.CleanupPending
             or IngestOperationStage.Completed)
         {
-            Guid existingAssetId = await context.MediaAssets
-                .Where(row => row.Sha256 == operation.SourceSha256)
-                .Select(row => row.Id)
-                .SingleAsync(cancellationToken);
-            return existingAssetId;
+            return operation.AssetId
+                ?? throw new InvalidOperationException(
+                    "Committed operation has no asset id.");
         }
 
         if (operation.Stage != IngestOperationStage.FileCommitted)
@@ -355,6 +356,7 @@ public sealed class EfIngestStore(
                 Ordinal = index
             }));
         operation.Stage = IngestOperationStage.DatabaseCommitted;
+        operation.AssetId = asset.Id;
         operation.ErrorCode = null;
         operation.UpdatedAtUtc = now;
         operation.InboxItem.State = InboxItemState.Completed;
@@ -513,13 +515,10 @@ public sealed class EfIngestStore(
             .Where(row => row.Stage != IngestOperationStage.Completed
                 && row.Stage != IngestOperationStage.Failed)
             .ToArrayAsync(cancellationToken);
-        var result = new List<IngestOperationRecord>(rows.Length);
-        foreach (IngestOperationRow row in rows.OrderBy(item => item.CreatedAtUtc))
-        {
-            result.Add(await ToRecordAsync(context, row, cancellationToken));
-        }
-
-        return result;
+        return rows
+            .OrderBy(item => item.CreatedAtUtc)
+            .Select(ToRecord)
+            .ToArray();
     }
 
     private async Task AdvanceAsync(
@@ -552,34 +551,34 @@ public sealed class EfIngestStore(
         await context.SaveChangesAsync(cancellationToken);
     }
 
-    private static async Task<IngestOperationRecord> ToRecordAsync(
-        MediaDesktopDbContext context,
-        IngestOperationRow row,
-        CancellationToken cancellationToken)
-    {
-        Guid? assetId = await context.MediaAssets
-            .AsNoTracking()
-            .Where(asset => asset.Sha256 == row.SourceSha256)
-            .Select(asset => (Guid?)asset.Id)
-            .SingleOrDefaultAsync(cancellationToken);
-        return ToRecord(row, assetId);
-    }
-
-    private static IngestOperationRecord ToRecord(
-        IngestOperationRow row,
-        Guid? assetId) =>
+    private static IngestOperationRecord ToRecord(IngestOperationRow row) =>
         new(
             row.Id,
             row.InboxItemId,
             row.Stage,
+            row.Disposition,
+            row.ConflictCaseId,
             row.SourcePath,
             row.SourceSize,
             row.SourceLastWriteTimeUtc,
             row.SourceSha256,
             row.TargetFilename,
             row.StagedPath,
-            assetId,
-            row.ErrorCode);
+            row.AssetId,
+            row.ReplacementAssetId,
+            row.ReplacementAssetMetadataVersion,
+            row.ExpectedTargetRelativePath,
+            row.ExpectedTargetSize,
+            row.ExpectedTargetLastWriteTimeUtc,
+            row.ExpectedTargetSha256,
+            row.BackupState,
+            row.BackupRelativePath,
+            row.BackupSize,
+            row.BackupSha256,
+            row.RecoveryBlockedFromStage,
+            row.ErrorCode,
+            row.CleanupAttemptCount,
+            row.NextCleanupAttemptAtUtc);
 
     private static bool IsUniqueConstraint(DbUpdateException error) =>
         error.InnerException is SqliteException sqlite

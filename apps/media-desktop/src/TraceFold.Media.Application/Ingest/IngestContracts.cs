@@ -309,6 +309,8 @@ public sealed record IngestOperationRecord(
     Guid Id,
     Guid InboxItemId,
     IngestOperationStage Stage,
+    IngestDisposition Disposition,
+    Guid? ConflictCaseId,
     string SourcePath,
     long SourceSize,
     DateTimeOffset SourceLastWriteTimeUtc,
@@ -316,7 +318,20 @@ public sealed record IngestOperationRecord(
     string TargetFilename,
     string? StagedPath,
     Guid? AssetId,
-    string? ErrorCode);
+    Guid? ReplacementAssetId,
+    long? ReplacementAssetMetadataVersion,
+    string? ExpectedTargetRelativePath,
+    long? ExpectedTargetSize,
+    DateTimeOffset? ExpectedTargetLastWriteTimeUtc,
+    string? ExpectedTargetSha256,
+    IngestBackupState BackupState,
+    string? BackupRelativePath,
+    long? BackupSize,
+    string? BackupSha256,
+    IngestOperationStage? RecoveryBlockedFromStage,
+    string? ErrorCode,
+    int CleanupAttemptCount,
+    DateTimeOffset? NextCleanupAttemptAtUtc);
 
 public interface IIngestStore
 {

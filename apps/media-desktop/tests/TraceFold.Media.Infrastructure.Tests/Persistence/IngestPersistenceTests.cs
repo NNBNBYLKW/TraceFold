@@ -92,7 +92,11 @@ public sealed class IngestPersistenceTests
         await database.MigrateAsync();
         Guid itemId = await CreateReadyInboxWithMetadataAsync(database);
         string hash = new string('A', 64);
-        await InsertAssetAsync(database, Guid.NewGuid(), "existing.jpg", hash);
+        await InsertAssetAsync(
+            database,
+            Guid.NewGuid(),
+            "photo.jpg",
+            new string('B', 64));
         var store = new EfIngestStore(database.CreateContextFactory());
         IngestCandidate candidate = (await store.LoadCandidateAsync(
             itemId,

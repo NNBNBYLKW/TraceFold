@@ -58,6 +58,8 @@ public sealed class IngestRecoveryServiceTests
                 Guid.NewGuid(),
                 Guid.NewGuid(),
                 IngestOperationStage.FileCommitted,
+                IngestDisposition.Create,
+                null,
                 "C:/inbox/photo.jpg",
                 3,
                 DateTimeOffset.Parse("2026-08-22T10:00:00Z"),
@@ -65,6 +67,19 @@ public sealed class IngestRecoveryServiceTests
                 "photo.jpg",
                 "C:/work/payload",
                 null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                IngestBackupState.NotRequired,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0,
                 null);
             var store = new RecoveryStore(operation);
             var storage = new RecoveryStorage(store, targetMatches);

@@ -166,6 +166,8 @@ public sealed class IngestServiceTests
                 Guid.NewGuid(),
                 preparation.InboxItemId,
                 IngestOperationStage.Created,
+                IngestDisposition.Create,
+                null,
                 preparation.SourcePath,
                 preparation.SourceSize,
                 preparation.SourceLastWriteTimeUtc,
@@ -173,6 +175,19 @@ public sealed class IngestServiceTests
                 preparation.TargetFilename,
                 null,
                 null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                IngestBackupState.NotRequired,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0,
                 null);
             return Task.FromResult(_operation);
         }

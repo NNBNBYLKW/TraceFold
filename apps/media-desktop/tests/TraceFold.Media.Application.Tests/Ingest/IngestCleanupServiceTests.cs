@@ -38,8 +38,10 @@ public sealed class IngestCleanupServiceTests
     private static IngestOperationRecord Operation() =>
         new(
             Guid.NewGuid(), Guid.NewGuid(), IngestOperationStage.DatabaseCommitted,
+            IngestDisposition.Create, null,
             "C:/work/output.mp4", 3, DateTimeOffset.UtcNow, new string('A', 64),
-            "output.mp4", null, Guid.NewGuid(), null);
+            "output.mp4", null, Guid.NewGuid(), null, null, null, null, null, null,
+            IngestBackupState.NotRequired, null, null, null, null, null, 0, null);
 
     private static IngestCleanupEntryRecord Entry(
         Guid operationId,
