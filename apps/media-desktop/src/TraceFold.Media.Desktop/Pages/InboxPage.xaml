@@ -200,6 +200,13 @@
                         Style="{StaticResource AccentButtonStyle}" />
                     <Button
                         HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="ResolveInboxConflictButton"
+                        Command="{x:Bind ViewModel.ResolveConflictCommand}"
+                        Content="处理冲突"
+                        Style="{StaticResource AccentButtonStyle}"
+                        Visibility="{x:Bind ViewModel.Inspector.ResolveConflictVisibility, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
                         AutomationProperties.AutomationId="InboxStartProcessingButton"
                         Command="{x:Bind ViewModel.StartProcessingCommand}"
                         Content="开始前置处理"

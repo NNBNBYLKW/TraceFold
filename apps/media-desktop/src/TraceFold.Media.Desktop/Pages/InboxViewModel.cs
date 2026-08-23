@@ -7,6 +7,7 @@ using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Services;
 
 namespace TraceFold.Media.Desktop.Pages;
@@ -27,6 +28,9 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IMediaPreviewResolver _previewResolver;
     private readonly IIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
+    private readonly IConflictQueryService _conflictQuery;
+    private readonly IConflictResolutionService _conflictResolution;
+    private readonly IConflictDialogService _conflictDialog;
     private readonly IProcessingCommandService? _processingCommands;
     private readonly IProcessingDiagnosticsService? _processingDiagnostics;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
@@ -43,6 +47,9 @@ public sealed partial class InboxViewModel : ObservableObject
         InboxInspectorViewModel inspector,
         IIngestService ingest,
         IIngestRecoveryService recovery,
+        IConflictQueryService conflictQuery,
+        IConflictResolutionService conflictResolution,
+        IConflictDialogService conflictDialog,
         IProcessingCommandService? processingCommands = null,
         IProcessingDiagnosticsService? processingDiagnostics = null)
     {
@@ -54,6 +61,9 @@ public sealed partial class InboxViewModel : ObservableObject
         Inspector = inspector;
         _ingest = ingest;
         _recovery = recovery;
+        _conflictQuery = conflictQuery;
+        _conflictResolution = conflictResolution;
+        _conflictDialog = conflictDialog;
         _processingCommands = processingCommands;
         _processingDiagnostics = processingDiagnostics;
         StateFilters =
@@ -211,12 +221,38 @@ public sealed partial class InboxViewModel : ObservableObject
                 selected.Id,
                 cancellationToken);
             OperationMessage = IngestMessage(result);
+            if (result.Outcome == IngestOutcome.ConflictBlocked)
+            {
+                await ShowConflictAsync(selected.Id, cancellationToken);
+                return;
+            }
+
             if (result.Outcome == IngestOutcome.Completed)
             {
                 await SelectAsync(null, cancellationToken);
             }
 
             await ReloadCardsAsync(cancellationToken);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanResolveConflict))]
+    private async Task ResolveConflictAsync(CancellationToken cancellationToken)
+    {
+        InboxCardViewModel? selected = SelectedItem;
+        if (selected is null || IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            await ShowConflictAsync(selected.Id, cancellationToken);
         }
         finally
         {
@@ -427,6 +463,10 @@ public sealed partial class InboxViewModel : ObservableObject
         && (Inspector.AllowedActions.HasFlag(InboxAction.Retry)
             || Inspector.AllowedActions.HasFlag(InboxAction.RetryCleanup));
 
+    private bool CanResolveConflict() => !IsBusy
+        && SelectedItem is not null
+        && Inspector.AllowedActions.HasFlag(InboxAction.ResolveConflict);
+
     private bool CanStartProcessing() => !IsBusy
         && _processingCommands is not null
         && ProcessingAvailable
@@ -451,10 +491,41 @@ public sealed partial class InboxViewModel : ObservableObject
         IngestCommand.NotifyCanExecuteChanged();
         ClearMissingCommand.NotifyCanExecuteChanged();
         RetryCommand.NotifyCanExecuteChanged();
+        ResolveConflictCommand.NotifyCanExecuteChanged();
         StartProcessingCommand.NotifyCanExecuteChanged();
         CancelProcessingCommand.NotifyCanExecuteChanged();
         StopProcessingCommand.NotifyCanExecuteChanged();
         RetryProcessingCommand.NotifyCanExecuteChanged();
+    }
+
+    private async Task ShowConflictAsync(
+        Guid inboxItemId,
+        CancellationToken cancellationToken)
+    {
+        ConflictCaseDto? conflict = await _conflictQuery.GetOpenAsync(
+            inboxItemId,
+            cancellationToken);
+        if (conflict is null)
+        {
+            OperationMessage = "冲突记录已变化，请刷新后重试。";
+            await ReloadCardsAsync(cancellationToken);
+            return;
+        }
+
+        ConflictDialogResult? decision = await _conflictDialog.ShowAsync(
+            conflict,
+            cancellationToken);
+        if (decision is not null)
+        {
+            IngestResult result = await _conflictResolution.ResolveAsync(
+                conflict.Id,
+                decision.Resolution,
+                decision.SelectedMatchId,
+                cancellationToken);
+            OperationMessage = IngestMessage(result);
+        }
+
+        await ReloadCardsAsync(cancellationToken);
     }
 
     private async Task RunProcessingAsync(
@@ -506,6 +577,8 @@ public sealed partial class InboxViewModel : ObservableObject
         {
             IngestOutcome.Completed => "入库完成。",
             IngestOutcome.ConflictBlocked => "检测到冲突，源文件已保留。",
+            IngestOutcome.Skipped => "已跳过本次冲突，源文件保持不变。",
+            IngestOutcome.ConflictChanged => "冲突内容已变化，请重新确认。",
             IngestOutcome.RequiresProcessing => "需要先完成前置处理。",
             IngestOutcome.SourceMissing => "源文件已不存在。",
             IngestOutcome.SourceChanged => "源文件已变化，请重新刷新。",

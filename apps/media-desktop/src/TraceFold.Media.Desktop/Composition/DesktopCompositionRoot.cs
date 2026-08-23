@@ -4,6 +4,7 @@ using Microsoft.UI.Dispatching;
 using Serilog;
 using TraceFold.Media.Application;
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Desktop.Services;
 using TraceFold.Media.Desktop.Shell;
@@ -30,6 +31,7 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<IFolderPicker, WindowsFolderPicker>();
                 services.AddSingleton<IDebounceScheduler, ProductionDebounceScheduler>();
                 services.AddSingleton<IMetadataEditorRegistry, MetadataEditorRegistry>();
+                services.AddSingleton<IConflictDialogService, WindowsConflictDialogService>();
                 services.AddSingleton<IUiDispatcher>(_ => new DispatcherQueueAdapter(
                     DispatcherQueue.GetForCurrentThread()
                     ?? throw new InvalidOperationException(

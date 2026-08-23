@@ -66,6 +66,10 @@ public sealed partial class InboxInspectorViewModel(
     public partial Visibility RetryProcessingVisibility { get; private set; } =
         Visibility.Collapsed;
 
+    [ObservableProperty]
+    public partial Visibility ResolveConflictVisibility { get; private set; } =
+        Visibility.Collapsed;
+
     public MetadataEditorViewModel Metadata { get; } = metadata;
 
     public async Task LoadAsync(
@@ -106,6 +110,7 @@ public sealed partial class InboxInspectorViewModel(
         CancelProcessingVisibility = Visibility.Collapsed;
         StopProcessingVisibility = Visibility.Collapsed;
         RetryProcessingVisibility = Visibility.Collapsed;
+        ResolveConflictVisibility = Visibility.Collapsed;
     }
 
     private void ApplyProcessing(InboxDetailsDto details)
@@ -144,6 +149,9 @@ public sealed partial class InboxInspectorViewModel(
         RetryProcessingVisibility = ActionVisibility(
             details.AllowedActions,
             InboxAction.RetryProcessing);
+        ResolveConflictVisibility = ActionVisibility(
+            details.AllowedActions,
+            InboxAction.ResolveConflict);
     }
 
     private static Visibility ActionVisibility(

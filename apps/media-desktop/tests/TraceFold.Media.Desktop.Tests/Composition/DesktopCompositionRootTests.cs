@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Desktop.Composition;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Infrastructure.Workers;
 using Xunit;
 
@@ -32,6 +33,8 @@ public sealed class DesktopCompositionRootTests
             Assert.Single(
                 host.Services.GetServices<IHostedService>(),
                 service => service is ProcessingQueueWorker);
+            Assert.IsType<WindowsConflictDialogService>(
+                host.Services.GetRequiredService<IConflictDialogService>());
         }
         finally
         {

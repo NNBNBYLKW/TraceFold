@@ -35,6 +35,7 @@ public sealed class MediaWorkspaceStructureTests
             "InboxCancelProcessingButton",
             "InboxStopProcessingButton",
             "InboxRetryProcessingButton",
+            "ResolveInboxConflictButton",
             "InboxProcessingProgress",
             "InboxProcessingStep"
         })
@@ -46,6 +47,32 @@ public sealed class MediaWorkspaceStructureTests
         }
 
         Assert.Contains("MediaPlayerElement", previewXaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Conflict_dialog_exposes_explicit_decisions_and_comparison_controls()
+    {
+        string xaml = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "ConflictComparisonDialog.xaml"),
+            TestContext.Current.CancellationToken);
+
+        foreach (string id in new[]
+        {
+            "ConflictComparisonDialog",
+            "ConflictIncomingPreview",
+            "ConflictMatchList",
+            "ConflictSkipButton",
+            "ConflictKeepBothButton",
+            "ConflictReplaceButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                xaml,
+                StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("CloseButtonText=\"跳过\"", xaml, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -4,7 +4,9 @@ using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Domain.Ingest;
 using TraceFold.Media.Domain.Processing;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Desktop.Services;
 using Xunit;
@@ -161,12 +163,74 @@ public sealed class InboxViewModelTests
         Assert.Equal(string.Empty, viewModel.Inspector.ProcessingStatusText);
     }
 
+    [Fact]
+    public async Task Closing_automatic_conflict_dialog_does_not_resolve_case()
+    {
+        var query = new ConflictFlowInboxQuery(blocked: false);
+        ConflictCaseDto conflict = ConflictCase(query.Id);
+        var dialog = new RecordingConflictDialogService { NextResult = null };
+        var resolution = new RecordingConflictResolutionService();
+        var ingest = new ConflictIngestService(query.Block, conflict.Id);
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            ingest,
+            conflicts: new FixedConflictQueryService(conflict),
+            conflictResolution: resolution,
+            conflictDialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+
+        await viewModel.IngestCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, dialog.ShowCount);
+        Assert.Equal(0, resolution.CallCount);
+        Assert.Equal(InboxItemState.ConflictBlocked, viewModel.Inspector.State);
+    }
+
+    [Fact]
+    public async Task Reopen_command_resolves_selected_single_target_and_refreshes_details()
+    {
+        var query = new ConflictFlowInboxQuery(blocked: true);
+        ConflictCaseDto conflict = ConflictCase(query.Id);
+        Guid matchId = Assert.Single(conflict.Matches).Id;
+        var dialog = new RecordingConflictDialogService
+        {
+            NextResult = new ConflictDialogResult(
+                ConflictResolution.Replace,
+                matchId)
+        };
+        var resolution = new RecordingConflictResolutionService();
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            conflicts: new FixedConflictQueryService(conflict),
+            conflictResolution: resolution,
+            conflictDialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+        int detailsBefore = query.GetDetailsCallCount;
+
+        await viewModel.ResolveConflictCommand.ExecuteAsync(null);
+
+        Assert.Equal((conflict.Id, ConflictResolution.Replace, (Guid?)matchId),
+            resolution.LastCall);
+        Assert.True(query.GetDetailsCallCount > detailsBefore);
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
         IIngestService? ingest = null,
         IProcessingCommandService? processingCommands = null,
-        IProcessingDiagnosticsService? diagnostics = null) =>
+        IProcessingDiagnosticsService? diagnostics = null,
+        IConflictQueryService? conflicts = null,
+        IConflictResolutionService? conflictResolution = null,
+        IConflictDialogService? conflictDialog = null) =>
         new(
             query,
             new CompletedScanner(),
@@ -176,8 +240,57 @@ public sealed class InboxViewModelTests
             new InboxInspectorViewModel(metadata),
             ingest ?? new RecordingIngestService(() => true),
             new NoOpRecoveryService(),
+            conflicts ?? new FixedConflictQueryService(null),
+            conflictResolution ?? new RecordingConflictResolutionService(),
+            conflictDialog ?? new RecordingConflictDialogService(),
             processingCommands ?? new RecordingProcessingCommandService(),
             diagnostics);
+
+    private static ConflictCaseDto ConflictCase(Guid inboxItemId)
+    {
+        Guid matchId = Guid.Parse("55555555-5555-5555-5555-555555555555");
+        var metadata = new ConflictMetadataSnapshot(null, [], null, []);
+        var technical = new ConflictTechnicalMetadata("jpg", 100, 100, null);
+        var incoming = new ConflictMediaDto(
+            inboxItemId,
+            true,
+            false,
+            null,
+            "photo.jpg",
+            "photo.jpg",
+            MediaKind.Image,
+            3,
+            DateTimeOffset.UtcNow,
+            new string('A', 64),
+            ConflictReason.None,
+            metadata,
+            technical,
+            null);
+        var match = new ConflictMediaDto(
+            matchId,
+            false,
+            true,
+            Guid.NewGuid(),
+            "photo.jpg",
+            "旧图片",
+            MediaKind.Image,
+            3,
+            DateTimeOffset.UtcNow,
+            new string('B', 64),
+            ConflictReason.Name,
+            metadata,
+            technical,
+            null);
+        return new ConflictCaseDto(
+            Guid.Parse("44444444-4444-4444-4444-444444444444"),
+            inboxItemId,
+            incoming,
+            [match],
+            null,
+            null,
+            matchId,
+            true);
+    }
 
     private static MetadataEditorViewModel CreateMetadata() =>
         new(
@@ -290,6 +403,132 @@ public sealed class InboxViewModelTests
                 null,
                 "ingest.completed"));
         }
+    }
+
+    private sealed class ConflictIngestService(Action block, Guid caseId)
+        : IIngestService
+    {
+        public Task<IngestResult> IngestAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            block();
+            return Task.FromResult(new IngestResult(
+                IngestOutcome.ConflictBlocked,
+                null,
+                null,
+                caseId,
+                "ingest.conflict"));
+        }
+    }
+
+    private sealed class FixedConflictQueryService(ConflictCaseDto? conflict)
+        : IConflictQueryService
+    {
+        public Task<ConflictCaseDto?> GetOpenAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(conflict);
+    }
+
+    private sealed class RecordingConflictResolutionService
+        : IConflictResolutionService
+    {
+        public int CallCount { get; private set; }
+
+        public (Guid CaseId, ConflictResolution Resolution, Guid? MatchId)? LastCall
+            { get; private set; }
+
+        public Task<IngestResult> ResolveAsync(
+            Guid conflictCaseId,
+            ConflictResolution resolution,
+            Guid? selectedMatchId,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            LastCall = (conflictCaseId, resolution, selectedMatchId);
+            return Task.FromResult(new IngestResult(
+                resolution == ConflictResolution.Skip
+                    ? IngestOutcome.Skipped
+                    : IngestOutcome.Completed,
+                Guid.NewGuid(),
+                resolution == ConflictResolution.Skip ? null : Guid.NewGuid(),
+                conflictCaseId,
+                "ok"));
+        }
+    }
+
+    private sealed class RecordingConflictDialogService
+        : IConflictDialogService
+    {
+        public ConflictDialogResult? NextResult { get; set; }
+
+        public int ShowCount { get; private set; }
+
+        public Task<ConflictDialogResult?> ShowAsync(
+            ConflictCaseDto conflict,
+            CancellationToken cancellationToken)
+        {
+            ShowCount++;
+            return Task.FromResult(NextResult);
+        }
+    }
+
+    private sealed class ConflictFlowInboxQuery : IInboxQueryService
+    {
+        private InboxItemState state;
+
+        public ConflictFlowInboxQuery(bool blocked)
+        {
+            state = blocked
+                ? InboxItemState.ConflictBlocked
+                : InboxItemState.ReadyToTag;
+        }
+
+        public Guid Id { get; } = Guid.NewGuid();
+
+        public int GetDetailsCallCount { get; private set; }
+
+        public void Block() => state = InboxItemState.ConflictBlocked;
+
+        public Task<IReadOnlyList<InboxCardDto>> SearchAsync(
+            InboxQuery query,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<InboxCardDto>>([Card()]);
+
+        public Task<InboxDetailsDto?> GetDetailsAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            GetDetailsCallCount++;
+            InboxCardDto card = Card();
+            var owner = new MetadataOwner(MetadataOwnerKind.InboxItem, Id);
+            return Task.FromResult<InboxDetailsDto?>(new InboxDetailsDto(
+                card,
+                [],
+                null,
+                new MetadataDocument(owner, null, [], null, [], 0),
+                state == InboxItemState.ConflictBlocked
+                    ? InboxAction.Preview | InboxAction.ResolveConflict
+                    : InboxAction.Preview | InboxAction.EditMetadata
+                        | InboxAction.Ingest,
+                null,
+                null,
+                false));
+        }
+
+        public Task ClearMissingAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+
+        private InboxCardDto Card() => new(
+            Id,
+            "photo.jpg",
+            "photo.jpg",
+            MediaKind.Image,
+            state,
+            state.ToString(),
+            state == InboxItemState.ReadyToTag);
     }
 
     private sealed class SingleItemInboxQuery : IInboxQueryService
