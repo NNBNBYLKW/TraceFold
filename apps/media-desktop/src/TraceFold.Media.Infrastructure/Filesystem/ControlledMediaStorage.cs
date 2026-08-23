@@ -12,7 +12,10 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
     {
         cancellationToken.ThrowIfCancellationRequested();
         string target = ResolveTarget(folders, targetFilename);
-        RejectReparsePoint(folders.LibraryDirectory, target, includeCandidate: false);
+        ControlledReparseGuard.RejectPath(
+            folders.LibraryDirectory,
+            target,
+            includeCandidate: false);
         return Task.FromResult(File.Exists(target));
     }
 
@@ -28,15 +31,18 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         string source = ControlledPathGuard.RequireDirectChild(
             folders.InboxDirectory,
             sourcePath);
-        RejectReparsePoint(folders.InboxDirectory, source, includeCandidate: true);
+        ControlledReparseGuard.RejectPath(
+            folders.InboxDirectory,
+            source,
+            includeCandidate: true);
 
         string operationDirectory = ResolveOperationDirectory(folders, operationId);
-        RejectReparsePoint(
+        ControlledReparseGuard.RejectPath(
             folders.WorkDirectory,
             operationDirectory,
             includeCandidate: false);
         Directory.CreateDirectory(operationDirectory);
-        RejectReparsePoint(
+        ControlledReparseGuard.RejectPath(
             folders.WorkDirectory,
             operationDirectory,
             includeCandidate: true);
@@ -94,15 +100,24 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
                 "The staged payload does not belong to the requested operation.");
         }
 
-        RejectReparsePoint(folders.WorkDirectory, stagedPath, includeCandidate: true);
+        ControlledReparseGuard.RejectPath(
+            folders.WorkDirectory,
+            stagedPath,
+            includeCandidate: true);
         string target = ResolveTarget(folders, targetFilename);
         string temporary = ControlledPathGuard.RequireDirectChild(
             folders.LibraryDirectory,
             Path.Combine(
                 folders.LibraryDirectory,
                 $".tracefold-{operationId:N}.tmp"));
-        RejectReparsePoint(folders.LibraryDirectory, target, includeCandidate: false);
-        RejectReparsePoint(folders.LibraryDirectory, temporary, includeCandidate: false);
+        ControlledReparseGuard.RejectPath(
+            folders.LibraryDirectory,
+            target,
+            includeCandidate: false);
+        ControlledReparseGuard.RejectPath(
+            folders.LibraryDirectory,
+            temporary,
+            includeCandidate: false);
         if (File.Exists(target))
         {
             throw new StorageConflictException("The formal target already exists.");
@@ -169,7 +184,10 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
             return new SourceDeleteResult(SourceDeleteOutcome.SourceMissing);
         }
 
-        RejectReparsePoint(folders.InboxDirectory, source, includeCandidate: true);
+        ControlledReparseGuard.RejectPath(
+            folders.InboxDirectory,
+            source,
+            includeCandidate: true);
         if (new FileInfo(source).Length != expectedSize)
         {
             return new SourceDeleteResult(SourceDeleteOutcome.SourceChanged);
@@ -180,7 +198,7 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
             Path.Combine(
                 folders.InboxDirectory,
                 $".tracefold-delete-{Guid.NewGuid():N}.tmp"));
-        RejectReparsePoint(
+        ControlledReparseGuard.RejectPath(
             folders.InboxDirectory,
             quarantine,
             includeCandidate: false);
@@ -199,7 +217,7 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
 
         try
         {
-            RejectReparsePoint(
+            ControlledReparseGuard.RejectPath(
                 folders.InboxDirectory,
                 quarantine,
                 includeCandidate: true);
@@ -256,7 +274,10 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
             return false;
         }
 
-        RejectReparsePoint(folders.LibraryDirectory, target, includeCandidate: true);
+        ControlledReparseGuard.RejectPath(
+            folders.LibraryDirectory,
+            target,
+            includeCandidate: true);
         if (new FileInfo(target).Length != committed.Size)
         {
             return false;
@@ -281,13 +302,15 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
                 $".tracefold-{operationId:N}.tmp"));
         if (Directory.Exists(operationDirectory))
         {
-            RejectReparseTree(folders.WorkDirectory, operationDirectory);
+            ControlledReparseGuard.RejectTree(
+                folders.WorkDirectory,
+                operationDirectory);
             Directory.Delete(operationDirectory, recursive: true);
         }
 
         if (File.Exists(temporary))
         {
-            RejectReparsePoint(
+            ControlledReparseGuard.RejectPath(
                 folders.LibraryDirectory,
                 temporary,
                 includeCandidate: true);
@@ -395,67 +418,4 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         }
     }
 
-    private static void RejectReparsePoint(
-        string root,
-        string candidate,
-        bool includeCandidate)
-    {
-        string canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        string canonicalCandidate = Path.GetFullPath(candidate);
-        string stop = includeCandidate
-            ? canonicalCandidate
-            : Path.GetDirectoryName(canonicalCandidate) ?? canonicalRoot;
-        string? current = stop;
-        while (current is not null)
-        {
-            if (File.Exists(current) || Directory.Exists(current))
-            {
-                FileAttributes attributes = File.GetAttributes(current);
-                if (attributes.HasFlag(FileAttributes.ReparsePoint))
-                {
-                    throw new ControlledPathException(
-                        "A controlled storage path contains a reparse point.");
-                }
-            }
-
-            if (StringComparer.OrdinalIgnoreCase.Equals(
-                    Path.TrimEndingDirectorySeparator(current),
-                    canonicalRoot))
-            {
-                return;
-            }
-
-            current = Path.GetDirectoryName(current);
-        }
-
-        throw new ControlledPathException(
-            "The controlled storage path does not descend from its root.");
-    }
-
-    private static void RejectReparseTree(string root, string operationDirectory)
-    {
-        RejectReparsePoint(root, operationDirectory, includeCandidate: true);
-        var pending = new Stack<string>();
-        pending.Push(operationDirectory);
-        while (pending.TryPop(out string? directory))
-        {
-            foreach (string path in Directory.EnumerateFileSystemEntries(
-                         directory,
-                         "*",
-                         SearchOption.TopDirectoryOnly))
-            {
-                FileAttributes attributes = File.GetAttributes(path);
-                if (attributes.HasFlag(FileAttributes.ReparsePoint))
-                {
-                    throw new ControlledPathException(
-                        "A temporary operation directory contains a reparse point.");
-                }
-
-                if (attributes.HasFlag(FileAttributes.Directory))
-                {
-                    pending.Push(path);
-                }
-            }
-        }
-    }
 }
