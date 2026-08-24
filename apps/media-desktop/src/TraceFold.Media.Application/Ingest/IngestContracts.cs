@@ -165,6 +165,13 @@ public interface IIngestExecutionService
         IngestExecutionPlan plan,
         LibraryFolders folders,
         CancellationToken cancellationToken);
+
+    Task<IngestResult> ResumeAsync(
+        IngestOperationRecord operation,
+        LibraryFolders folders,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest executor does not support persisted-operation recovery.");
 }
 
 public sealed record RecoveryResult(bool Succeeded, string Message);
@@ -367,6 +374,16 @@ public interface IIngestStore
         Guid operationId,
         CancellationToken cancellationToken) =>
         Task.FromResult(false);
+
+    Task<bool> OperationDatabaseHasNewVersionAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) => Task.FromResult(false);
+
+    Task ResumeRecoveryAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support resuming blocked recovery.");
 
     Task AbandonForRetryAsync(
         Guid operationId,

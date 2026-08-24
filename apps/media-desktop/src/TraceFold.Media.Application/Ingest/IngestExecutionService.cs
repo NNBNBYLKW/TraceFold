@@ -38,50 +38,126 @@ public sealed class IngestExecutionService(
         }
     }
 
+    public async Task<IngestResult> ResumeAsync(
+        IngestOperationRecord operation,
+        LibraryFolders folders,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(folders);
+        if (operation.Stage is not
+            (IngestOperationStage.Created or IngestOperationStage.Staged))
+        {
+            throw new InvalidOperationException(
+                "Only a created or staged ingest operation can resume execution.");
+        }
+
+        await commitGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await ExecuteCoreAsync(
+                RehydratePreparation(operation, folders),
+                RehydratePlan(operation, folders),
+                folders,
+                cancellationToken,
+                operation);
+        }
+        finally
+        {
+            commitGate.Release();
+        }
+    }
+
     private async Task<IngestResult> ExecuteCoreAsync(
         IngestPreparation preparation,
         IngestExecutionPlan plan,
         LibraryFolders folders,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IngestOperationRecord? persistedOperation = null)
     {
-        IngestOperationRecord operation = await store.CreateAsync(
-            preparation,
-            plan,
-            cancellationToken);
-        await faultInjector.ReachAsync(
-            IngestFaultPoint.AfterOperationCreated,
-            operation.Id,
-            cancellationToken);
-        StagedFile staged;
-        try
-        {
-            staged = await storage.StageAsync(
-                operation.Id,
-                folders,
-                preparation.Input,
-                cancellationToken);
-            await store.MarkStagedAsync(
-                operation.Id,
-                staged,
-                cancellationToken);
-            operation = operation with
-            {
-                Stage = IngestOperationStage.Staged,
-                StagedPath = staged.FullPath
-            };
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception error)
-        {
-            return await FailOrdinaryAsync(
-                operation,
+        IngestOperationRecord operation = persistedOperation
+            ?? await store.CreateAsync(
+                preparation,
                 plan,
-                "ingest.stage_failed",
-                error,
                 cancellationToken);
+        if (persistedOperation is null)
+        {
+            await faultInjector.ReachAsync(
+                IngestFaultPoint.AfterOperationCreated,
+                operation.Id,
+                cancellationToken);
+        }
+
+        StagedFile staged;
+        if (operation.Stage == IngestOperationStage.Staged)
+        {
+            staged = new StagedFile(
+                operation.StagedPath
+                    ?? throw new InvalidOperationException(
+                        "A staged ingest operation has no persisted payload path."),
+                operation.SourceSize,
+                operation.SourceSha256);
+        }
+        else
+        {
+            try
+            {
+                if (persistedOperation is null)
+                {
+                    staged = await storage.StageAsync(
+                        operation.Id,
+                        folders,
+                        preparation.Input,
+                        cancellationToken);
+                }
+                else
+                {
+                    IngestStorageEvidence evidence =
+                        await storage.InspectOperationAsync(
+                            folders,
+                            operation,
+                            cancellationToken);
+                    staged = evidence.Staged.Kind switch
+                    {
+                        FileIdentityKind.ExpectedStaged => new StagedFile(
+                            evidence.Staged.FullPath
+                                ?? throw new InvalidOperationException(
+                                    "Verified staged evidence has no path."),
+                            operation.SourceSize,
+                            operation.SourceSha256),
+                        FileIdentityKind.Absent => await storage.StageAsync(
+                            operation.Id,
+                            folders,
+                            preparation.Input,
+                            cancellationToken),
+                        _ => throw new StorageIntegrityException(
+                            "The persisted staging evidence is ambiguous.")
+                    };
+                }
+
+                await store.MarkStagedAsync(
+                    operation.Id,
+                    staged,
+                    cancellationToken);
+                operation = operation with
+                {
+                    Stage = IngestOperationStage.Staged,
+                    StagedPath = staged.FullPath
+                };
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                return await FailOrdinaryAsync(
+                    operation,
+                    plan,
+                    "ingest.stage_failed",
+                    error,
+                    cancellationToken);
+            }
         }
         await faultInjector.ReachAsync(
             IngestFaultPoint.AfterStaged,
@@ -425,4 +501,95 @@ public sealed class IngestExecutionService(
         Guid? assetId = null,
         Guid? conflictCaseId = null) =>
         new(outcome, operationId, assetId, conflictCaseId, message);
+
+    private static IngestPreparation RehydratePreparation(
+        IngestOperationRecord operation,
+        LibraryFolders folders) =>
+        new(
+            operation.InboxItemId,
+            default,
+            operation.SourcePath,
+            operation.SourceSize,
+            operation.SourceLastWriteTimeUtc,
+            operation.SourceSha256,
+            operation.TargetFilename,
+            null,
+            [],
+            null,
+            [],
+            0,
+            RehydrateInput(operation, folders));
+
+    private static IngestExecutionPlan RehydratePlan(
+        IngestOperationRecord operation,
+        LibraryFolders folders) => operation.Disposition switch
+    {
+        IngestDisposition.Create => IngestExecutionPlan.Create(
+            operation.TargetFilename),
+        IngestDisposition.KeepBoth => IngestExecutionPlan.KeepBoth(
+            operation.ConflictCaseId
+                ?? throw new InvalidOperationException(
+                    "A persisted Keep Both operation has no conflict id."),
+            operation.TargetFilename),
+        IngestDisposition.ReplaceRegistered =>
+            IngestExecutionPlan.ReplaceRegistered(
+                operation.ConflictCaseId
+                    ?? throw new InvalidOperationException(
+                        "A persisted replacement has no conflict id."),
+                operation.ReplacementAssetId
+                    ?? throw new InvalidOperationException(
+                        "A registered replacement has no asset id."),
+                operation.ReplacementAssetMetadataVersion
+                    ?? throw new InvalidOperationException(
+                        "A registered replacement has no metadata version."),
+                RehydrateTarget(operation, folders)),
+        IngestDisposition.ReplaceUnregistered =>
+            IngestExecutionPlan.ReplaceUnregistered(
+                operation.ConflictCaseId
+                    ?? throw new InvalidOperationException(
+                        "A persisted replacement has no conflict id."),
+                RehydrateTarget(operation, folders)),
+        _ => throw new ArgumentOutOfRangeException(nameof(operation))
+    };
+
+    private static LibraryFileSnapshot RehydrateTarget(
+        IngestOperationRecord operation,
+        LibraryFolders folders) =>
+        new(
+            Path.Combine(
+                folders.LibraryDirectory,
+                operation.ExpectedTargetRelativePath
+                    ?? throw new InvalidOperationException(
+                        "A persisted replacement has no target path.")),
+            operation.ExpectedTargetRelativePath,
+            operation.ExpectedTargetSize
+                ?? throw new InvalidOperationException(
+                    "A persisted replacement has no target size."),
+            operation.ExpectedTargetLastWriteTimeUtc
+                ?? throw new InvalidOperationException(
+                    "A persisted replacement has no target timestamp."),
+            operation.ExpectedTargetSha256
+                ?? throw new InvalidOperationException(
+                    "A persisted replacement has no target hash."));
+
+    private static PreparedIngestInput RehydrateInput(
+        IngestOperationRecord operation,
+        LibraryFolders folders)
+    {
+        string source = Path.GetFullPath(operation.SourcePath);
+        string inbox = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(folders.InboxDirectory));
+        IngestCleanupKind kind = StringComparer.OrdinalIgnoreCase.Equals(
+            Path.GetDirectoryName(source),
+            inbox)
+                ? IngestCleanupKind.InboxSource
+                : IngestCleanupKind.ProcessingOutput;
+        return new PreparedIngestInput(
+            kind,
+            source,
+            operation.SourceSize,
+            operation.SourceLastWriteTimeUtc,
+            operation.SourceSha256,
+            []);
+    }
 }

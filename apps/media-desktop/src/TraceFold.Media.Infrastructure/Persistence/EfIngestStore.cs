@@ -428,6 +428,98 @@ public sealed class EfIngestStore(
                 cancellationToken);
     }
 
+    public async Task<bool> OperationDatabaseHasNewVersionAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestOperationRow operation = await context.IngestOperations
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == operationId, cancellationToken);
+        if (operation.AssetId is not Guid assetId)
+        {
+            return false;
+        }
+
+        MediaAssetRow? asset = await context.MediaAssets
+            .AsNoTracking()
+            .Include(row => row.Authors)
+            .Include(row => row.Tags)
+            .SingleOrDefaultAsync(row => row.Id == assetId, cancellationToken);
+        if (asset is null)
+        {
+            return false;
+        }
+
+        MetadataSnapshot? snapshot = JsonSerializer.Deserialize<MetadataSnapshot>(
+            operation.MetadataSnapshotJson);
+        if (snapshot is null)
+        {
+            return false;
+        }
+
+        long expectedMetadataVersion = operation.Disposition
+            == IngestDisposition.ReplaceRegistered
+                ? checked((operation.ReplacementAssetMetadataVersion ?? -2) + 1)
+                : snapshot.MetadataVersion;
+        return (operation.Disposition != IngestDisposition.ReplaceRegistered
+                || operation.ReplacementAssetId == asset.Id)
+            && StringComparer.OrdinalIgnoreCase.Equals(
+                asset.RelativePath,
+                operation.TargetFilename)
+            && StringComparer.OrdinalIgnoreCase.Equals(
+                asset.ActualFilename,
+                operation.TargetFilename)
+            && asset.Size == operation.SourceSize
+            && StringComparer.OrdinalIgnoreCase.Equals(
+                asset.Sha256,
+                operation.SourceSha256)
+            && asset.DisplayName == snapshot.DisplayName
+            && asset.SeriesId == snapshot.SeriesId
+            && asset.MetadataVersion == expectedMetadataVersion
+            && asset.Authors
+                .OrderBy(link => link.Ordinal)
+                .Select(link => link.AuthorId)
+                .SequenceEqual(snapshot.AuthorIds)
+            && asset.Tags
+                .OrderBy(link => link.Ordinal)
+                .Select(link => link.TagId)
+                .SequenceEqual(snapshot.TagIds);
+    }
+
+    public async Task ResumeRecoveryAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestOperationRow operation = await context.IngestOperations
+            .Include(row => row.InboxItem)
+            .SingleAsync(row => row.Id == operationId, cancellationToken);
+        if (operation.Stage != IngestOperationStage.RecoveryBlocked
+            || operation.RecoveryBlockedFromStage is not IngestOperationStage resumed)
+        {
+            throw new InvalidOperationException(
+                "Only a recovery-blocked operation can resume.");
+        }
+
+        operation.Stage = resumed;
+        operation.RecoveryBlockedFromStage = null;
+        operation.ErrorCode = null;
+        operation.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        operation.InboxItem.State = resumed switch
+        {
+            IngestOperationStage.CleanupPending => InboxItemState.CleanupPending,
+            IngestOperationStage.DatabaseCommitted => InboxItemState.Completed,
+            _ => InboxItemState.Ingesting
+        };
+        operation.InboxItem.ErrorCode = null;
+        operation.InboxItem.IsRetryable = false;
+        operation.InboxItem.UpdatedAtUtc = operation.UpdatedAtUtc;
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task AbandonForRetryAsync(
         Guid operationId,
         CancellationToken cancellationToken)
