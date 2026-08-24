@@ -1,7 +1,7 @@
 # TraceFold 原生媒体桌面端 Stage 5A 批量待入库设计
 
 - 日期：2026-08-24
-- 状态：设计已确认，等待书面规格审阅
+- 状态：设计与书面规格已确认，等待实施
 - 上位规格：`docs/superpowers/specs/2026-08-21-native-media-desktop-design.md`
 - 前置阶段：`docs/superpowers/specs/2026-08-23-native-media-desktop-stage4-design.md`
 - 前置验收：`docs/media-desktop-stage4-acceptance.md`
