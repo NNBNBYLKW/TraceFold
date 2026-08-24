@@ -46,4 +46,28 @@ public sealed class MediaCardViewModelTests
         Assert.Equal(Microsoft.UI.Xaml.Visibility.Visible,
             viewModel.ProcessingVisibility);
     }
+
+    [Fact]
+    public void Inbox_card_creates_an_immutable_selection_entry()
+    {
+        Guid id = Guid.NewGuid();
+        var card = new InboxCardDto(
+            id,
+            "photo.jpg",
+            "photo.jpg",
+            MediaKind.Image,
+            InboxItemState.ReadyToTag,
+            "待入库",
+            true,
+            MetadataVersion: 7,
+            AllowedActions: InboxAction.Preview | InboxAction.EditMetadata);
+        var viewModel = new InboxCardViewModel(card);
+
+        InboxSelectionEntry selection = viewModel.SelectionEntry(3);
+
+        Assert.Equal(id, selection.InboxItemId);
+        Assert.Equal(7, selection.ExpectedMetadataVersion);
+        Assert.Equal(3, selection.Ordinal);
+        Assert.Equal(card.AllowedActions, viewModel.AllowedActions);
+    }
 }

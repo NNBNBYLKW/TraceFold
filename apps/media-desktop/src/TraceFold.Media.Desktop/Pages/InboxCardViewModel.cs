@@ -25,6 +25,10 @@ public sealed class InboxCardViewModel
 
     public Guid Id => Card.Id;
 
+    public long MetadataVersion => Card.MetadataVersion;
+
+    public InboxAction AllowedActions => Card.AllowedActions;
+
     public string AutomationId => $"InboxCard_{Id:N}";
 
     public string ActualFilename => Card.ActualFilename;
@@ -63,4 +67,7 @@ public sealed class InboxCardViewModel
     public string FallbackGlyph => Card.MediaKind == MediaKind.Image
         ? "\uEB9F"
         : "\uE714";
+
+    public InboxSelectionEntry SelectionEntry(int ordinal) =>
+        new(Id, MetadataVersion, ordinal);
 }

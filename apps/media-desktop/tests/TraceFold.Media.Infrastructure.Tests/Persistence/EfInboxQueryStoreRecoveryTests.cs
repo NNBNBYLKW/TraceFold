@@ -109,6 +109,27 @@ public sealed class EfInboxQueryStoreRecoveryTests
         Assert.Null(details.Recovery);
     }
 
+    [Fact]
+    public async Task Conflict_card_projects_the_same_actions_and_metadata_version_as_details()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        Guid itemId = await database.SeedInboxItemAsync(
+            InboxItemState.ConflictBlocked,
+            metadataVersion: 7);
+        var store = new EfInboxQueryStore(database.CreateContextFactory());
+
+        InboxCardDto card = Assert.Single(await store.SearchAsync(
+            new InboxQuery(null, null), TestContext.Current.CancellationToken));
+        InboxDetailsDto details = Assert.IsType<InboxDetailsDto>(
+            await store.GetDetailsAsync(
+                itemId, TestContext.Current.CancellationToken));
+
+        Assert.Equal(7, card.MetadataVersion);
+        Assert.Equal(details.AllowedActions, card.AllowedActions);
+        Assert.True(card.AllowedActions.HasFlag(InboxAction.ResolveConflict));
+    }
+
     private static async Task<(
         Guid ItemId,
         IngestOperationRecord Operation,

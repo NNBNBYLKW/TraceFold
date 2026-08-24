@@ -2,6 +2,8 @@ using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Infrastructure.Persistence;
 
 namespace TraceFold.Media.Infrastructure.Tests.Support;
@@ -71,6 +73,38 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         await using var context = new MediaDesktopDbContext(_options);
         IMigrator migrator = context.GetService<IMigrator>();
         await migrator.MigrateAsync(targetMigration);
+    }
+
+    public async Task<Guid> SeedInboxItemAsync(
+        InboxItemState state,
+        long metadataVersion,
+        MediaKind mediaKind = MediaKind.Image,
+        string? displayName = null)
+    {
+        Guid id = Guid.NewGuid();
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-24T00:00:00Z");
+        string filename = mediaKind == MediaKind.Image
+            ? $"{id:N}.jpg"
+            : $"{id:N}.mp4";
+        string? capability = state == InboxItemState.RequiresProcessing
+            ? "merge-mp4-m4a"
+            : null;
+        await using var context = new MediaDesktopDbContext(_options);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO inbox_items
+                (id, state, media_kind, actual_filename, grouping_rule,
+                 required_capability, is_retryable, created_at_utc, updated_at_utc)
+            VALUES
+                ({id}, {state.ToString().ToLowerInvariant()},
+                 {mediaKind.ToString().ToLowerInvariant()}, {filename}, {"direct"},
+                 {capability}, {false}, {now}, {now})
+            """);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO metadata_drafts
+                (inbox_item_id, display_name, series_id, version, updated_at_utc)
+            VALUES ({id}, {displayName}, {(Guid?)null}, {metadataVersion}, {now})
+            """);
+        return id;
     }
 
     public async Task InsertStage1SettingsAsync(

@@ -102,7 +102,7 @@ public sealed class EfInboxQueryStore(
                 .ToArray(),
             preview,
             metadata,
-            AllowedActions(
+            InboxActionPolicy.For(
                 item.State,
                 item.IsRetryable,
                 item.RequiredCapability),
@@ -129,7 +129,12 @@ public sealed class EfInboxQueryStore(
             row.State,
             StatusText(row.State),
             row.State == InboxItemState.ReadyToTag,
-            ToProcessing(row));
+            ToProcessing(row),
+            row.MetadataDraft?.Version ?? 0,
+            InboxActionPolicy.For(
+                row.State,
+                row.IsRetryable,
+                row.RequiredCapability));
 
     private static ProcessingSummaryDto? ToProcessing(InboxItemRow row)
     {
@@ -169,54 +174,6 @@ public sealed class EfInboxQueryStore(
                 operation.CleanupAttemptCount,
                 operation.NextCleanupAttemptAtUtc);
     }
-
-    private static InboxAction AllowedActions(
-        InboxItemState state,
-        bool isRetryable,
-        string? requiredCapability) =>
-        state switch
-        {
-            InboxItemState.WaitingForStability => InboxAction.Preview,
-            InboxItemState.ReadyToTag => InboxAction.Preview
-                | InboxAction.EditMetadata
-                | InboxAction.Ingest
-                | InboxAction.OpenFolder,
-            InboxItemState.RequiresProcessing => InboxAction.Preview
-                | InboxAction.EditMetadata
-                | InboxAction.OpenFolder
-                | InboxAction.StartProcessing,
-            InboxItemState.ProcessingQueued => InboxAction.Preview
-                | InboxAction.EditMetadata
-                | InboxAction.OpenFolder
-                | InboxAction.CancelProcessing,
-            InboxItemState.Processing => InboxAction.Preview
-                | InboxAction.EditMetadata
-                | InboxAction.OpenFolder
-                | InboxAction.StopProcessing,
-            InboxItemState.ProcessingInterrupted => InboxAction.Preview
-                | InboxAction.EditMetadata
-                | InboxAction.OpenFolder
-                | InboxAction.RetryProcessing,
-            InboxItemState.ConflictBlocked => InboxAction.Preview
-                | InboxAction.EditMetadata
-                | InboxAction.OpenFolder,
-            InboxItemState.RecoveryBlocked => InboxAction.Preview
-                | InboxAction.RecheckRecovery
-                | InboxAction.OpenFolder,
-            InboxItemState.CleanupPending => InboxAction.Preview
-                | InboxAction.RetryCleanup
-                | InboxAction.OpenFolder,
-            InboxItemState.Failed when isRetryable
-                && !string.IsNullOrWhiteSpace(requiredCapability) => InboxAction.Preview
-                | InboxAction.EditMetadata
-                | InboxAction.RetryProcessing
-                | InboxAction.OpenFolder,
-            InboxItemState.Failed when isRetryable => InboxAction.Preview
-                | InboxAction.Retry
-                | InboxAction.OpenFolder,
-            InboxItemState.SourceMissing => InboxAction.ClearMissing,
-            _ => InboxAction.None
-        };
 
     private static int StatePriority(InboxItemState state) =>
         state switch
