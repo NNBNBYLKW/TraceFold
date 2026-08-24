@@ -7,8 +7,12 @@ namespace TraceFold.Media.Application.Ingest;
 public sealed class IngestCleanupService(
     IIngestStore store,
     IControlledMediaStorage storage,
-    ILogger<IngestCleanupService>? logger = null) : IIngestCleanupService
+    ILogger<IngestCleanupService>? logger = null,
+    IIngestFaultInjector? faultInjector = null) : IIngestCleanupService
 {
+    private readonly IIngestFaultInjector faultInjector =
+        faultInjector ?? new NoOpIngestFaultInjector();
+
     public async Task<CleanupResult> CleanupAsync(
         IngestOperationRecord operation,
         LibraryFolders folders,
@@ -61,6 +65,10 @@ public sealed class IngestCleanupService(
                 await store.MarkCleanupEntryCompletedAsync(
                     operation.Id,
                     entry.Id,
+                    cancellationToken);
+                await faultInjector.ReachAsync(
+                    IngestFaultPoint.AfterCleanupEntry,
+                    operation.Id,
                     cancellationToken);
             }
         }

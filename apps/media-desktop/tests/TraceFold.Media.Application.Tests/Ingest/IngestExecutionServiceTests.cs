@@ -203,6 +203,7 @@ public sealed class IngestExecutionServiceTests
             store,
             storage,
             new CompletedCleanup(),
+            new NoOpIngestFaultInjector(),
             NullLogger<IngestExecutionService>.Instance);
 
     private static IngestPreparation Preparation(string displayName)

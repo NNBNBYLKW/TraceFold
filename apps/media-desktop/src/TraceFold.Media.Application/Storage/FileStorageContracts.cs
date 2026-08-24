@@ -24,6 +24,37 @@ public sealed record ReplacementBackup(
     long Size,
     string Sha256);
 
+public enum FileIdentityKind
+{
+    Absent,
+    ExpectedSource,
+    ExpectedStaged,
+    ExpectedOld,
+    ExpectedNew,
+    ExpectedBackup,
+    Unknown
+}
+
+public sealed record ObservedFileIdentity(
+    FileIdentityKind Kind,
+    string? FullPath,
+    long? Size,
+    string? Sha256)
+{
+    public bool MatchesExpected => Kind is
+        FileIdentityKind.ExpectedSource or
+        FileIdentityKind.ExpectedStaged or
+        FileIdentityKind.ExpectedOld or
+        FileIdentityKind.ExpectedNew or
+        FileIdentityKind.ExpectedBackup;
+}
+
+public sealed record IngestStorageEvidence(
+    ObservedFileIdentity Source,
+    ObservedFileIdentity Staged,
+    ObservedFileIdentity Target,
+    ObservedFileIdentity Backup);
+
 public enum SourceDeleteOutcome
 {
     Deleted,
@@ -63,6 +94,13 @@ public interface IFileHasher
 
 public interface IControlledMediaStorage
 {
+    Task<IngestStorageEvidence> InspectOperationAsync(
+        LibraryFolders folders,
+        IngestOperationRecord operation,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support ingest evidence inspection.");
+
     Task<LibraryFileSnapshot?> InspectTargetAsync(
         LibraryFolders folders,
         string targetFilename,

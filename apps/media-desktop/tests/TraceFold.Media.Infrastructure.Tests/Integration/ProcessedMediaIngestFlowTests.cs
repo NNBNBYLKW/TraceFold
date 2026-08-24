@@ -216,6 +216,7 @@ public sealed class ProcessedMediaIngestFlowTests
                     ingestStore,
                     storage,
                     cleanup,
+                    new NoOpIngestFaultInjector(),
                     NullLogger<IngestExecutionService>.Instance),
                 new MediaOperationCoordinator(),
                 NullLogger<IngestService>.Instance);
@@ -246,6 +247,7 @@ public sealed class ProcessedMediaIngestFlowTests
                 ingestStore,
                 storage,
                 cleanup,
+                new NoOpIngestFaultInjector(),
                 NullLogger<IngestExecutionService>.Instance);
             var resolution = new ConflictResolutionService(
                 conflictStore,

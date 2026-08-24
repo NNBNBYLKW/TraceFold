@@ -9,6 +9,7 @@ public sealed class IngestExecutionService(
     IIngestStore store,
     IControlledMediaStorage storage,
     IIngestCleanupService cleanup,
+    IIngestFaultInjector faultInjector,
     ILogger<IngestExecutionService> logger) : IIngestExecutionService
 {
     private readonly SemaphoreSlim commitGate = new(1, 1);
@@ -47,6 +48,10 @@ public sealed class IngestExecutionService(
             preparation,
             plan,
             cancellationToken);
+        await faultInjector.ReachAsync(
+            IngestFaultPoint.AfterOperationCreated,
+            operation.Id,
+            cancellationToken);
         StagedFile staged;
         try
         {
@@ -78,6 +83,10 @@ public sealed class IngestExecutionService(
                 error,
                 cancellationToken);
         }
+        await faultInjector.ReachAsync(
+            IngestFaultPoint.AfterStaged,
+            operation.Id,
+            cancellationToken);
 
         ReplacementBackup? backup = null;
         if (plan.Target is not null)
@@ -121,6 +130,11 @@ public sealed class IngestExecutionService(
                     operation.Id,
                     conflictCaseId: plan.ConflictCaseId);
             }
+
+            await faultInjector.ReachAsync(
+                IngestFaultPoint.AfterBackupCreated,
+                operation.Id,
+                cancellationToken);
         }
 
         CommittedFile committed;
@@ -188,6 +202,16 @@ public sealed class IngestExecutionService(
                 error,
                 cancellationToken);
         }
+
+        await faultInjector.ReachAsync(
+            IngestFaultPoint.AfterFileCommitted,
+            operation.Id,
+            cancellationToken);
+
+        await faultInjector.ReachAsync(
+            IngestFaultPoint.BeforeDatabaseCommit,
+            operation.Id,
+            cancellationToken);
 
         Guid assetId;
         try
@@ -263,6 +287,16 @@ public sealed class IngestExecutionService(
                 conflictCaseId: plan.ConflictCaseId);
         }
 
+        await faultInjector.ReachAsync(
+            IngestFaultPoint.AfterDatabaseCommit,
+            operation.Id,
+            cancellationToken);
+
+        await faultInjector.ReachAsync(
+            IngestFaultPoint.BeforeCleanup,
+            operation.Id,
+            cancellationToken);
+
         if (!await storage.VerifyCommittedAsync(
                 folders,
                 committed,
@@ -283,6 +317,10 @@ public sealed class IngestExecutionService(
         CleanupResult cleanupResult = await cleanup.CleanupAsync(
             operation,
             folders,
+            cancellationToken);
+        await faultInjector.ReachAsync(
+            IngestFaultPoint.AfterCleanup,
+            operation.Id,
             cancellationToken);
         if (!cleanupResult.Completed)
         {

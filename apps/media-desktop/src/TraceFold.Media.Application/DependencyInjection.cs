@@ -56,6 +56,7 @@ public static class DependencyInjection
         services.AddSingleton<IProcessingDiagnosticsService,
             ProcessingDiagnosticsService>();
         services.AddSingleton<IIngestInputResolver, IngestInputResolver>();
+        services.AddSingleton<IIngestFaultInjector, NoOpIngestFaultInjector>();
         services.AddSingleton<IIngestCleanupService, IngestCleanupService>();
         services.AddSingleton<IConflictDetectionService,
             ConflictDetectionService>();
