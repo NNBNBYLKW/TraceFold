@@ -12,7 +12,8 @@ using TraceFold.Media.Domain.Metadata;
 namespace TraceFold.Media.Infrastructure.Persistence;
 
 public sealed class EfIngestStore(
-    IDbContextFactory<MediaDesktopDbContext> contextFactory) : IIngestStore
+    IDbContextFactory<MediaDesktopDbContext> contextFactory)
+    : IIngestStore, IIngestCleanupWorkStore
 {
     public async Task<IngestCandidate?> LoadCandidateAsync(
         Guid inboxItemId,
@@ -782,6 +783,8 @@ public sealed class EfIngestStore(
         }
 
         entry.CompletedAtUtc = DateTimeOffset.UtcNow;
+        entry.LastAttemptAtUtc = entry.CompletedAtUtc;
+        entry.LastErrorCode = null;
         await context.SaveChangesAsync(cancellationToken);
     }
 
@@ -832,6 +835,118 @@ public sealed class EfIngestStore(
         operation.InboxItem.ErrorCode = errorCode;
         operation.InboxItem.IsRetryable = isRetryable;
         operation.InboxItem.UpdatedAtUtc = operation.UpdatedAtUtc;
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<IngestOperationRecord>> LoadDueCleanupAsync(
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestOperationRow[] candidates = await context.IngestOperations
+            .AsNoTracking()
+            .Where(row => row.Stage == IngestOperationStage.CleanupPending
+                && row.NextCleanupAttemptAtUtc != null)
+            .ToArrayAsync(cancellationToken);
+        return candidates
+            .Where(row => row.NextCleanupAttemptAtUtc <= now)
+            .OrderBy(row => row.NextCleanupAttemptAtUtc)
+            .ThenBy(row => row.CreatedAtUtc)
+            .Select(ToRecord)
+            .ToArray();
+    }
+
+    public async Task<DateTimeOffset?> FindNextCleanupDueAsync(
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        DateTimeOffset?[] dueTimes = await context.IngestOperations
+            .AsNoTracking()
+            .Where(row => row.Stage == IngestOperationStage.CleanupPending
+                && row.NextCleanupAttemptAtUtc != null)
+            .Select(row => row.NextCleanupAttemptAtUtc)
+            .ToArrayAsync(cancellationToken);
+        return dueTimes.Length == 0
+            ? null
+            : dueTimes.Min();
+    }
+
+    public async Task ScheduleCleanupRetryAsync(
+        Guid operationId,
+        string errorCode,
+        int failureCount,
+        DateTimeOffset? nextAttemptAtUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(errorCode);
+        if (failureCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(failureCount));
+        }
+
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestOperationRow operation = await context.IngestOperations
+            .Include(row => row.InboxItem)
+            .SingleAsync(row => row.Id == operationId, cancellationToken);
+        if (operation.Stage is not
+            (IngestOperationStage.DatabaseCommitted
+                or IngestOperationStage.CleanupPending))
+        {
+            throw new InvalidOperationException(
+                "Only a committed ingest operation can schedule cleanup.");
+        }
+
+        operation.Stage = IngestOperationStage.CleanupPending;
+        operation.CleanupAttemptCount = failureCount;
+        operation.NextCleanupAttemptAtUtc = nextAttemptAtUtc;
+        operation.ErrorCode = errorCode;
+        operation.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        operation.InboxItem.State = InboxItemState.CleanupPending;
+        operation.InboxItem.ErrorCode = errorCode;
+        operation.InboxItem.IsRetryable = true;
+        operation.InboxItem.UpdatedAtUtc = operation.UpdatedAtUtc;
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task ResetCleanupRetryAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestOperationRow operation = await context.IngestOperations
+            .SingleAsync(row => row.Id == operationId, cancellationToken);
+        if (operation.Stage != IngestOperationStage.CleanupPending)
+        {
+            throw new InvalidOperationException(
+                "Only cleanup-pending work can reset its due time.");
+        }
+
+        operation.NextCleanupAttemptAtUtc = null;
+        operation.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task ReactivateCleanupForStartupAsync(
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        IngestOperationRow[] exhausted = await context.IngestOperations
+            .Where(row => row.Stage == IngestOperationStage.CleanupPending
+                && row.CleanupAttemptCount >= 5
+                && row.NextCleanupAttemptAtUtc == null)
+            .ToArrayAsync(cancellationToken);
+        foreach (IngestOperationRow operation in exhausted)
+        {
+            operation.NextCleanupAttemptAtUtc = now;
+            operation.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+
         await context.SaveChangesAsync(cancellationToken);
     }
 

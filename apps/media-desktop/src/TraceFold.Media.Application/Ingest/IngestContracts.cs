@@ -450,6 +450,38 @@ public interface IIngestCleanupService
         CancellationToken cancellationToken);
 }
 
+public interface IIngestCleanupSignal
+{
+    void Signal();
+
+    Task WaitAsync(CancellationToken cancellationToken);
+}
+
+public interface IIngestCleanupWorkStore
+{
+    Task<IReadOnlyList<IngestOperationRecord>> LoadDueCleanupAsync(
+        DateTimeOffset now,
+        CancellationToken cancellationToken);
+
+    Task<DateTimeOffset?> FindNextCleanupDueAsync(
+        CancellationToken cancellationToken);
+
+    Task ScheduleCleanupRetryAsync(
+        Guid operationId,
+        string errorCode,
+        int failureCount,
+        DateTimeOffset? nextAttemptAtUtc,
+        CancellationToken cancellationToken);
+
+    Task ResetCleanupRetryAsync(
+        Guid operationId,
+        CancellationToken cancellationToken);
+
+    Task ReactivateCleanupForStartupAsync(
+        DateTimeOffset now,
+        CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
 public interface IIngestRecoveryService
 {
     Task ReconcileAsync(CancellationToken cancellationToken);
@@ -457,6 +489,11 @@ public interface IIngestRecoveryService
     Task<RecoveryResult> RetryAsync(
         Guid inboxItemId,
         CancellationToken cancellationToken);
+
+    Task<RecoveryResult> RetryCleanupAsync(
+        Guid inboxItemId,
+        CancellationToken cancellationToken) =>
+        RetryAsync(inboxItemId, cancellationToken);
 }
 
 public sealed class MediaOperationRejectedException : InvalidOperationException

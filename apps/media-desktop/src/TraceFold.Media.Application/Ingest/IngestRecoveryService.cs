@@ -11,7 +11,9 @@ public sealed class IngestRecoveryService(
     IControlledMediaStorage storage,
     IIngestExecutionService executor,
     ILogger<IngestRecoveryService> logger,
-    IIngestCleanupService? cleanup = null) : IIngestRecoveryService
+    IIngestCleanupService? cleanup = null,
+    IIngestCleanupWorkStore? cleanupWorkStore = null,
+    IIngestCleanupSignal? cleanupSignal = null) : IIngestRecoveryService
 {
     private readonly IIngestCleanupService cleanupService =
         cleanup ?? new IngestCleanupService(store, storage);
@@ -28,7 +30,9 @@ public sealed class IngestRecoveryService(
             await store.LoadIncompleteAsync(cancellationToken);
         foreach (IngestOperationRecord operation in incomplete)
         {
-            if (operation.Stage == IngestOperationStage.RecoveryBlocked)
+            if (operation.Stage is
+                IngestOperationStage.RecoveryBlocked
+                or IngestOperationStage.CleanupPending)
             {
                 continue;
             }
@@ -81,7 +85,9 @@ public sealed class IngestRecoveryService(
         if (folders is null
             || operation is null
             || operation.Stage is
-                IngestOperationStage.Completed or IngestOperationStage.Failed)
+                IngestOperationStage.Completed
+                or IngestOperationStage.Failed
+                or IngestOperationStage.CleanupPending)
         {
             return new RecoveryResult(false, "recovery.not_retryable");
         }
@@ -94,6 +100,35 @@ public sealed class IngestRecoveryService(
         return progressed
             ? new RecoveryResult(true, "recovery.reconciled")
             : new RecoveryResult(false, "recovery.identity_ambiguous");
+    }
+
+    public async Task<RecoveryResult> RetryCleanupAsync(
+        Guid inboxItemId,
+        CancellationToken cancellationToken)
+    {
+        LibraryFolders? folders = await settingsStore.LoadAsync(cancellationToken);
+        IngestOperationRecord? operation = await store.FindActiveAsync(
+            inboxItemId,
+            cancellationToken);
+        if (folders is null
+            || operation?.Stage != IngestOperationStage.CleanupPending)
+        {
+            return new RecoveryResult(false, "recovery.cleanup_not_retryable");
+        }
+
+        if (cleanupWorkStore is not null)
+        {
+            await cleanupWorkStore.ResetCleanupRetryAsync(
+                operation.Id,
+                cancellationToken);
+        }
+
+        await cleanupService.CleanupAsync(
+            operation with { NextCleanupAttemptAtUtc = null },
+            folders,
+            cancellationToken);
+        cleanupSignal?.Signal();
+        return new RecoveryResult(true, "recovery.cleanup_retried");
     }
 
     private async Task<bool> ReconcileOneAsync(

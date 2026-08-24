@@ -180,6 +180,82 @@ public sealed class IngestPersistenceTests
     }
 
     [Fact]
+    public async Task Cleanup_retry_due_time_and_startup_reactivation_are_persisted()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        Guid itemId = await CreateReadyInboxWithMetadataAsync(database);
+        var store = new EfIngestStore(database.CreateContextFactory());
+        IngestCandidate candidate = (await store.LoadCandidateAsync(
+            itemId,
+            TestContext.Current.CancellationToken))!;
+        string hash = new string('A', 64);
+        IngestOperationRecord operation = await store.CreateAsync(
+            Preparation(candidate, hash),
+            IngestExecutionPlan.Create(candidate.ActualFilename),
+            TestContext.Current.CancellationToken);
+        var committed = new CommittedFile(
+            "C:/library/photo.jpg", "photo.jpg", 3, hash);
+        await store.MarkStagedAsync(
+            operation.Id,
+            new StagedFile("C:/work/payload", 3, hash),
+            TestContext.Current.CancellationToken);
+        await store.MarkFileCommittedAsync(
+            operation.Id,
+            committed,
+            TestContext.Current.CancellationToken);
+        await store.CommitAssetAsync(
+            operation.Id,
+            committed,
+            TestContext.Current.CancellationToken);
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-24T09:00:00Z");
+        DateTimeOffset firstDue = now.AddSeconds(30);
+        await store.ScheduleCleanupRetryAsync(
+            operation.Id,
+            "ingest.cleanup_failed",
+            1,
+            firstDue,
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(await store.LoadDueCleanupAsync(
+            now,
+            TestContext.Current.CancellationToken));
+        Assert.Equal(firstDue, await store.FindNextCleanupDueAsync(
+            TestContext.Current.CancellationToken));
+        IngestOperationRecord due = Assert.Single(await store.LoadDueCleanupAsync(
+            firstDue,
+            TestContext.Current.CancellationToken));
+        Assert.Equal(1, due.CleanupAttemptCount);
+        await store.ResetCleanupRetryAsync(
+            operation.Id,
+            TestContext.Current.CancellationToken);
+        Assert.Null(await store.FindNextCleanupDueAsync(
+            TestContext.Current.CancellationToken));
+        await store.ScheduleCleanupRetryAsync(
+            operation.Id,
+            "ingest.cleanup_failed",
+            5,
+            null,
+            TestContext.Current.CancellationToken);
+        Assert.Empty(await store.LoadDueCleanupAsync(
+            now.AddDays(1),
+            TestContext.Current.CancellationToken));
+
+        DateTimeOffset restart = now.AddDays(2);
+        await new EfIngestStore(database.CreateContextFactory())
+            .ReactivateCleanupForStartupAsync(
+                restart,
+                TestContext.Current.CancellationToken);
+
+        IngestOperationRecord reactivated = Assert.Single(
+            await store.LoadDueCleanupAsync(
+                restart,
+                TestContext.Current.CancellationToken));
+        Assert.Equal(5, reactivated.CleanupAttemptCount);
+        Assert.Equal(restart, reactivated.NextCleanupAttemptAtUtc);
+    }
+
+    [Fact]
     public async Task Create_persists_ordered_cleanup_manifest_and_entry_completion()
     {
         await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();

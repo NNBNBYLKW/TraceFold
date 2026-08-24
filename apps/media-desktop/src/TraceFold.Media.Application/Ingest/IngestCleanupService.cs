@@ -8,7 +8,10 @@ public sealed class IngestCleanupService(
     IIngestStore store,
     IControlledMediaStorage storage,
     ILogger<IngestCleanupService>? logger = null,
-    IIngestFaultInjector? faultInjector = null) : IIngestCleanupService
+    IIngestFaultInjector? faultInjector = null,
+    IIngestCleanupWorkStore? workStore = null,
+    TimeProvider? timeProvider = null,
+    IIngestCleanupSignal? signal = null) : IIngestCleanupService
 {
     private readonly IIngestFaultInjector faultInjector =
         faultInjector ?? new NoOpIngestFaultInjector();
@@ -47,7 +50,7 @@ public sealed class IngestCleanupService(
                     operation.Id,
                     entry.Id);
                 return await PendingAsync(
-                    operation.Id,
+                    operation,
                     "ingest.cleanup_failed",
                     cancellationToken);
             }
@@ -55,7 +58,7 @@ public sealed class IngestCleanupService(
             if (result.Outcome == SourceDeleteOutcome.SourceChanged)
             {
                 return await PendingAsync(
-                    operation.Id,
+                    operation,
                     "ingest.cleanup_source_changed",
                     cancellationToken);
             }
@@ -93,21 +96,40 @@ public sealed class IngestCleanupService(
                 "IngestTemporaryCleanupFailed OperationId={OperationId}",
                 operation.Id);
             return await PendingAsync(
-                operation.Id,
+                operation,
                 "ingest.cleanup_failed",
                 cancellationToken);
         }
     }
 
     private async Task<CleanupResult> PendingAsync(
-        Guid operationId,
+        IngestOperationRecord operation,
         string errorCode,
         CancellationToken cancellationToken)
     {
-        await store.MarkCleanupPendingAsync(
-            operationId,
-            errorCode,
-            cancellationToken);
+        if (workStore is null)
+        {
+            await store.MarkCleanupPendingAsync(
+                operation.Id,
+                errorCode,
+                cancellationToken);
+        }
+        else
+        {
+            int failureCount = checked(operation.CleanupAttemptCount + 1);
+            TimeSpan? delay = CleanupRetrySchedule.DelayAfterFailure(failureCount);
+            DateTimeOffset? nextAttemptAtUtc = delay is null
+                ? null
+                : (timeProvider ?? TimeProvider.System).GetUtcNow() + delay.Value;
+            await workStore.ScheduleCleanupRetryAsync(
+                operation.Id,
+                errorCode,
+                failureCount,
+                nextAttemptAtUtc,
+                cancellationToken);
+            signal?.Signal();
+        }
+
         return new CleanupResult(false, errorCode);
     }
 

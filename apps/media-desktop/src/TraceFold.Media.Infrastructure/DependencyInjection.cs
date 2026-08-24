@@ -42,7 +42,11 @@ public static class DependencyInjection
         services.AddSingleton<IInboxFileCatalog, LocalInboxFileCatalog>();
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
         services.AddSingleton<IInboxQueryStore, EfInboxQueryStore>();
-        services.AddSingleton<IIngestStore, EfIngestStore>();
+        services.AddSingleton<EfIngestStore>();
+        services.AddSingleton<IIngestStore>(provider =>
+            provider.GetRequiredService<EfIngestStore>());
+        services.AddSingleton<IIngestCleanupWorkStore>(provider =>
+            provider.GetRequiredService<EfIngestStore>());
         services.AddSingleton<IConflictCaseStore, EfConflictCaseStore>();
         services.AddSingleton<IProcessingStore, EfProcessingStore>();
         services.AddSingleton<EfTaxonomyStore>();
@@ -68,6 +72,7 @@ public static class DependencyInjection
         services.AddHostedService<CandidateStabilityWorker>();
         services.AddHostedService<AutomaticInboxScanWorker>();
         services.AddHostedService<ProcessingQueueWorker>();
+        services.AddHostedService<IngestCleanupWorker>();
         services.AddSingleton<IDatabaseInitializer, DatabaseInitializer>();
         return services;
     }

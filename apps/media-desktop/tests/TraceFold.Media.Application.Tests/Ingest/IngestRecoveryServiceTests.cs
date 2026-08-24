@@ -132,6 +132,29 @@ public sealed class IngestRecoveryServiceTests
         Assert.Equal(1, fixture.Store.ResumeRecoveryCount);
     }
 
+    [Fact]
+    public async Task Manual_cleanup_retry_ignores_future_due_time_and_never_resumes_execution()
+    {
+        IngestOperationRecord operation = Operation(
+            IngestOperationStage.CleanupPending) with
+        {
+            CleanupAttemptCount = 3,
+            NextCleanupAttemptAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        var fixture = new RecoveryFixture(
+            operation,
+            Evidence(target: FileIdentityKind.ExpectedNew));
+
+        RecoveryResult result = await fixture.Service.RetryCleanupAsync(
+            operation.InboxItemId,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, fixture.Store.ResetCleanupCount);
+        Assert.Equal(1, fixture.Cleanup.Calls);
+        Assert.Equal(0, fixture.Executor.ResumeCalls);
+    }
+
     private static IngestRecoveryService CreateService(
         RecoveryStore store,
         RecoveryStorage storage,
@@ -143,7 +166,8 @@ public sealed class IngestRecoveryServiceTests
             storage,
             executor,
             NullLogger<IngestRecoveryService>.Instance,
-            cleanup);
+            cleanup,
+            store);
 
     private sealed class RecoveryFixture
     {
@@ -169,7 +193,7 @@ public sealed class IngestRecoveryServiceTests
     }
 
     private sealed class RecoveryStore(IEnumerable<IngestOperationRecord> supplied)
-        : IIngestStore
+        : IIngestStore, IIngestCleanupWorkStore
     {
         private readonly Dictionary<Guid, IngestOperationRecord> operations =
             supplied.ToDictionary(operation => operation.Id);
@@ -178,6 +202,7 @@ public sealed class IngestRecoveryServiceTests
         public int AssetCommitCount { get; private set; }
         public int ResumeRecoveryCount { get; private set; }
         public bool DatabaseHasNewVersion { get; set; }
+        public int ResetCleanupCount { get; private set; }
 
         public IngestOperationRecord Get(Guid operationId) => operations[operationId];
 
@@ -302,6 +327,18 @@ public sealed class IngestRecoveryServiceTests
         public Task MarkFileCommittedAsync(Guid operationId, CommittedFile committed, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task MarkCleanupPendingAsync(Guid operationId, string errorCode, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task FailAsync(Guid operationId, string errorCode, bool isRetryable, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<IngestOperationRecord>> LoadDueCleanupAsync(DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<DateTimeOffset?> FindNextCleanupDueAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task ScheduleCleanupRetryAsync(Guid operationId, string errorCode, int failureCount, DateTimeOffset? nextAttemptAtUtc, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task ResetCleanupRetryAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            operations[operationId] = operations[operationId] with
+            {
+                NextCleanupAttemptAtUtc = null
+            };
+            ResetCleanupCount++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecoveryStorage(
