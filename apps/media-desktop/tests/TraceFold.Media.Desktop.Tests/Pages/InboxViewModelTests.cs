@@ -4,7 +4,9 @@ using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Domain.Ingest;
 using TraceFold.Media.Domain.Processing;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Desktop.Services;
 using Xunit;
@@ -161,23 +163,234 @@ public sealed class InboxViewModelTests
         Assert.Equal(string.Empty, viewModel.Inspector.ProcessingStatusText);
     }
 
+    [Fact]
+    public async Task Recovery_actions_use_distinct_commands()
+    {
+        var query = new SingleItemInboxQuery(
+            InboxItemState.RecoveryBlocked,
+            InboxAction.Preview | InboxAction.RecheckRecovery | InboxAction.OpenFolder,
+            recovery: Recovery(IngestOperationStage.RecoveryBlocked));
+        var recovery = new RecordingRecoveryService();
+        var reveal = new RecordingRecoveryRevealService();
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            recovery: recovery,
+            recoveryReveal: reveal);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(viewModel.RecheckRecoveryCommand.CanExecute(null));
+        Assert.False(viewModel.RetryCleanupCommand.CanExecute(null));
+        Assert.False(viewModel.RetryCommand.CanExecute(null));
+        await viewModel.RecheckRecoveryCommand.ExecuteAsync(null);
+        await viewModel.OpenRecoveryLocationCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, recovery.RecheckCalls);
+        Assert.Equal(0, recovery.CleanupCalls);
+        Assert.Equal(1, reveal.CallCount);
+
+        query.SetState(
+            InboxItemState.CleanupPending,
+            InboxAction.Preview | InboxAction.RetryCleanup | InboxAction.OpenFolder,
+            recovery: Recovery(IngestOperationStage.CleanupPending));
+        await viewModel.ApplyFiltersAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(viewModel.RecheckRecoveryCommand.CanExecute(null));
+        Assert.True(viewModel.RetryCleanupCommand.CanExecute(null));
+        await viewModel.RetryCleanupCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, recovery.RecheckCalls);
+        Assert.Equal(1, recovery.CleanupCalls);
+    }
+
+    [Fact]
+    public async Task Activity_notification_refreshes_selected_recovery_details()
+    {
+        var activity = new RecordingActivityNotifier();
+        var query = new SingleItemInboxQuery(
+            InboxItemState.RecoveryBlocked,
+            InboxAction.Preview | InboxAction.RecheckRecovery,
+            recovery: Recovery(IngestOperationStage.RecoveryBlocked));
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            activity: activity);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+
+        query.SetState(
+            InboxItemState.CleanupPending,
+            InboxAction.Preview | InboxAction.RetryCleanup,
+            recovery: Recovery(IngestOperationStage.CleanupPending));
+        activity.Publish(InboxActivityKind.ItemChanged);
+
+        await WaitUntilAsync(
+            () => viewModel.Inspector.State == InboxItemState.CleanupPending,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("入库完成，清理需要手动重试。",
+            viewModel.Inspector.RecoveryStatusText);
+    }
+
+    [Fact]
+    public async Task Closing_automatic_conflict_dialog_does_not_resolve_case()
+    {
+        var query = new ConflictFlowInboxQuery(blocked: false);
+        ConflictCaseDto conflict = ConflictCase(query.Id);
+        var dialog = new RecordingConflictDialogService { NextResult = null };
+        var resolution = new RecordingConflictResolutionService();
+        var ingest = new ConflictIngestService(query.Block, conflict.Id);
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            ingest,
+            conflicts: new FixedConflictQueryService(conflict),
+            conflictResolution: resolution,
+            conflictDialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+
+        await viewModel.IngestCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, dialog.ShowCount);
+        Assert.Equal(0, resolution.CallCount);
+        Assert.Equal(InboxItemState.ConflictBlocked, viewModel.Inspector.State);
+    }
+
+    [Fact]
+    public async Task Reopen_command_resolves_selected_single_target_and_refreshes_details()
+    {
+        var query = new ConflictFlowInboxQuery(blocked: true);
+        ConflictCaseDto conflict = ConflictCase(query.Id);
+        Guid matchId = Assert.Single(conflict.Matches).Id;
+        var dialog = new RecordingConflictDialogService
+        {
+            NextResult = new ConflictDialogResult(
+                ConflictResolution.Replace,
+                matchId)
+        };
+        var resolution = new RecordingConflictResolutionService();
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            conflicts: new FixedConflictQueryService(conflict),
+            conflictResolution: resolution,
+            conflictDialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            Assert.Single(viewModel.Items),
+            TestContext.Current.CancellationToken);
+        int detailsBefore = query.GetDetailsCallCount;
+
+        await viewModel.ResolveConflictCommand.ExecuteAsync(null);
+
+        Assert.Equal((conflict.Id, ConflictResolution.Replace, (Guid?)matchId),
+            resolution.LastCall);
+        Assert.True(query.GetDetailsCallCount > detailsBefore);
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
         IIngestService? ingest = null,
         IProcessingCommandService? processingCommands = null,
-        IProcessingDiagnosticsService? diagnostics = null) =>
+        IProcessingDiagnosticsService? diagnostics = null,
+        IConflictQueryService? conflicts = null,
+        IConflictResolutionService? conflictResolution = null,
+        IConflictDialogService? conflictDialog = null,
+        IIngestRecoveryService? recovery = null,
+        IRecoveryRevealService? recoveryReveal = null,
+        IInboxActivityNotifier? activity = null) =>
         new(
             query,
             new CompletedScanner(),
-            new RecordingActivityNotifier(),
+            activity ?? new RecordingActivityNotifier(),
             new ImmediateDispatcher(),
             new MissingPreviewResolver(),
             new InboxInspectorViewModel(metadata),
             ingest ?? new RecordingIngestService(() => true),
-            new NoOpRecoveryService(),
+            recovery ?? new NoOpRecoveryService(),
+            conflicts ?? new FixedConflictQueryService(null),
+            conflictResolution ?? new RecordingConflictResolutionService(),
+            conflictDialog ?? new RecordingConflictDialogService(),
             processingCommands ?? new RecordingProcessingCommandService(),
-            diagnostics);
+            diagnostics,
+            recoveryReveal);
+
+    private static RecoverySummaryDto Recovery(IngestOperationStage stage) =>
+        new(
+            Guid.NewGuid(),
+            stage,
+            stage == IngestOperationStage.RecoveryBlocked
+                ? IngestOperationStage.FileCommitted
+                : null,
+            null,
+            0,
+            null);
+
+    private static async Task WaitUntilAsync(
+        Func<bool> condition,
+        CancellationToken cancellationToken)
+    {
+        for (int attempt = 0; attempt < 50 && !condition(); attempt++)
+        {
+            await Task.Delay(10, cancellationToken);
+        }
+
+        Assert.True(condition());
+    }
+
+    private static ConflictCaseDto ConflictCase(Guid inboxItemId)
+    {
+        Guid matchId = Guid.Parse("55555555-5555-5555-5555-555555555555");
+        var metadata = new ConflictMetadataSnapshot(null, [], null, []);
+        var technical = new ConflictTechnicalMetadata("jpg", 100, 100, null);
+        var incoming = new ConflictMediaDto(
+            inboxItemId,
+            true,
+            false,
+            null,
+            "photo.jpg",
+            "photo.jpg",
+            MediaKind.Image,
+            3,
+            DateTimeOffset.UtcNow,
+            new string('A', 64),
+            ConflictReason.None,
+            metadata,
+            technical,
+            null);
+        var match = new ConflictMediaDto(
+            matchId,
+            false,
+            true,
+            Guid.NewGuid(),
+            "photo.jpg",
+            "旧图片",
+            MediaKind.Image,
+            3,
+            DateTimeOffset.UtcNow,
+            new string('B', 64),
+            ConflictReason.Name,
+            metadata,
+            technical,
+            null);
+        return new ConflictCaseDto(
+            Guid.Parse("44444444-4444-4444-4444-444444444444"),
+            inboxItemId,
+            incoming,
+            [match],
+            null,
+            null,
+            matchId,
+            true);
+    }
 
     private static MetadataEditorViewModel CreateMetadata() =>
         new(
@@ -287,8 +500,135 @@ public sealed class InboxViewModelTests
                 IngestOutcome.Completed,
                 Guid.NewGuid(),
                 Guid.NewGuid(),
+                null,
                 "ingest.completed"));
         }
+    }
+
+    private sealed class ConflictIngestService(Action block, Guid caseId)
+        : IIngestService
+    {
+        public Task<IngestResult> IngestAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            block();
+            return Task.FromResult(new IngestResult(
+                IngestOutcome.ConflictBlocked,
+                null,
+                null,
+                caseId,
+                "ingest.conflict"));
+        }
+    }
+
+    private sealed class FixedConflictQueryService(ConflictCaseDto? conflict)
+        : IConflictQueryService
+    {
+        public Task<ConflictCaseDto?> GetOpenAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(conflict);
+    }
+
+    private sealed class RecordingConflictResolutionService
+        : IConflictResolutionService
+    {
+        public int CallCount { get; private set; }
+
+        public (Guid CaseId, ConflictResolution Resolution, Guid? MatchId)? LastCall
+            { get; private set; }
+
+        public Task<IngestResult> ResolveAsync(
+            Guid conflictCaseId,
+            ConflictResolution resolution,
+            Guid? selectedMatchId,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            LastCall = (conflictCaseId, resolution, selectedMatchId);
+            return Task.FromResult(new IngestResult(
+                resolution == ConflictResolution.Skip
+                    ? IngestOutcome.Skipped
+                    : IngestOutcome.Completed,
+                Guid.NewGuid(),
+                resolution == ConflictResolution.Skip ? null : Guid.NewGuid(),
+                conflictCaseId,
+                "ok"));
+        }
+    }
+
+    private sealed class RecordingConflictDialogService
+        : IConflictDialogService
+    {
+        public ConflictDialogResult? NextResult { get; set; }
+
+        public int ShowCount { get; private set; }
+
+        public Task<ConflictDialogResult?> ShowAsync(
+            ConflictCaseDto conflict,
+            CancellationToken cancellationToken)
+        {
+            ShowCount++;
+            return Task.FromResult(NextResult);
+        }
+    }
+
+    private sealed class ConflictFlowInboxQuery : IInboxQueryService
+    {
+        private InboxItemState state;
+
+        public ConflictFlowInboxQuery(bool blocked)
+        {
+            state = blocked
+                ? InboxItemState.ConflictBlocked
+                : InboxItemState.ReadyToTag;
+        }
+
+        public Guid Id { get; } = Guid.NewGuid();
+
+        public int GetDetailsCallCount { get; private set; }
+
+        public void Block() => state = InboxItemState.ConflictBlocked;
+
+        public Task<IReadOnlyList<InboxCardDto>> SearchAsync(
+            InboxQuery query,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<InboxCardDto>>([Card()]);
+
+        public Task<InboxDetailsDto?> GetDetailsAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            GetDetailsCallCount++;
+            InboxCardDto card = Card();
+            var owner = new MetadataOwner(MetadataOwnerKind.InboxItem, Id);
+            return Task.FromResult<InboxDetailsDto?>(new InboxDetailsDto(
+                card,
+                [],
+                null,
+                new MetadataDocument(owner, null, [], null, [], 0),
+                state == InboxItemState.ConflictBlocked
+                    ? InboxAction.Preview | InboxAction.ResolveConflict
+                    : InboxAction.Preview | InboxAction.EditMetadata
+                        | InboxAction.Ingest,
+                null,
+                null,
+                false));
+        }
+
+        public Task ClearMissingAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+
+        private InboxCardDto Card() => new(
+            Id,
+            "photo.jpg",
+            "photo.jpg",
+            MediaKind.Image,
+            state,
+            state.ToString(),
+            state == InboxItemState.ReadyToTag);
     }
 
     private sealed class SingleItemInboxQuery : IInboxQueryService
@@ -299,23 +639,26 @@ public sealed class InboxViewModelTests
         public SingleItemInboxQuery(
             InboxItemState state,
             InboxAction allowedActions,
-            ProcessingSummaryDto? processing = null)
+            ProcessingSummaryDto? processing = null,
+            RecoverySummaryDto? recovery = null)
         {
-            details = CreateDetails(state, allowedActions, processing);
+            details = CreateDetails(state, allowedActions, processing, recovery);
         }
 
         public void SetState(
             InboxItemState state,
             InboxAction allowedActions,
-            ProcessingSummaryDto? processing = null)
+            ProcessingSummaryDto? processing = null,
+            RecoverySummaryDto? recovery = null)
         {
-            details = CreateDetails(state, allowedActions, processing);
+            details = CreateDetails(state, allowedActions, processing, recovery);
         }
 
         private InboxDetailsDto CreateDetails(
             InboxItemState state,
             InboxAction allowedActions,
-            ProcessingSummaryDto? processing)
+            ProcessingSummaryDto? processing,
+            RecoverySummaryDto? recovery)
         {
             var card = new InboxCardDto(
                 id,
@@ -336,7 +679,8 @@ public sealed class InboxViewModelTests
                 null,
                 "mp4_m4a_merge",
                 false,
-                processing);
+                processing,
+                recovery);
         }
 
         public Task<IReadOnlyList<InboxCardDto>> SearchAsync(
@@ -433,6 +777,45 @@ public sealed class InboxViewModelTests
             Guid inboxItemId,
             CancellationToken cancellationToken) =>
             Task.FromResult(new RecoveryResult(true, "ok"));
+    }
+
+    private sealed class RecordingRecoveryService : IIngestRecoveryService
+    {
+        public int RecheckCalls { get; private set; }
+
+        public int CleanupCalls { get; private set; }
+
+        public Task ReconcileAsync(CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<RecoveryResult> RetryAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            RecheckCalls++;
+            return Task.FromResult(new RecoveryResult(true, "ok"));
+        }
+
+        public Task<RecoveryResult> RetryCleanupAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            CleanupCalls++;
+            return Task.FromResult(new RecoveryResult(true, "ok"));
+        }
+    }
+
+    private sealed class RecordingRecoveryRevealService : IRecoveryRevealService
+    {
+        public int CallCount { get; private set; }
+
+        public Task<bool> RevealAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class ImmediateDispatcher : IUiDispatcher

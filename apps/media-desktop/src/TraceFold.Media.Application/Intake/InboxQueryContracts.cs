@@ -2,6 +2,7 @@ using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Processing;
+using TraceFold.Media.Domain.Ingest;
 
 namespace TraceFold.Media.Application.Intake;
 
@@ -25,6 +26,14 @@ public sealed record ProcessingSummaryDto(
     int ProgressPercent,
     string? ErrorCode,
     bool IsRetryable);
+
+public sealed record RecoverySummaryDto(
+    Guid OperationId,
+    IngestOperationStage Stage,
+    IngestOperationStage? BlockedFromStage,
+    string? ErrorCode,
+    int CleanupAttemptCount,
+    DateTimeOffset? NextCleanupAttemptAtUtc);
 
 public static class ProcessingPresentationMapper
 {
@@ -53,7 +62,8 @@ public sealed record InboxDetailsDto(
     string? ErrorCode,
     string? RequiredCapability,
     bool IsRetryable,
-    ProcessingSummaryDto? Processing = null);
+    ProcessingSummaryDto? Processing = null,
+    RecoverySummaryDto? Recovery = null);
 
 public interface IInboxQueryStore
 {

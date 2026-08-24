@@ -7,6 +7,7 @@ using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Services;
 
 namespace TraceFold.Media.Desktop.Pages;
@@ -27,8 +28,12 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IMediaPreviewResolver _previewResolver;
     private readonly IIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
+    private readonly IConflictQueryService _conflictQuery;
+    private readonly IConflictResolutionService _conflictResolution;
+    private readonly IConflictDialogService _conflictDialog;
     private readonly IProcessingCommandService? _processingCommands;
     private readonly IProcessingDiagnosticsService? _processingDiagnostics;
+    private readonly IRecoveryRevealService? _recoveryReveal;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private bool _hasLoaded;
@@ -43,8 +48,12 @@ public sealed partial class InboxViewModel : ObservableObject
         InboxInspectorViewModel inspector,
         IIngestService ingest,
         IIngestRecoveryService recovery,
+        IConflictQueryService conflictQuery,
+        IConflictResolutionService conflictResolution,
+        IConflictDialogService conflictDialog,
         IProcessingCommandService? processingCommands = null,
-        IProcessingDiagnosticsService? processingDiagnostics = null)
+        IProcessingDiagnosticsService? processingDiagnostics = null,
+        IRecoveryRevealService? recoveryReveal = null)
     {
         _query = query;
         _scanner = scanner;
@@ -54,8 +63,12 @@ public sealed partial class InboxViewModel : ObservableObject
         Inspector = inspector;
         _ingest = ingest;
         _recovery = recovery;
+        _conflictQuery = conflictQuery;
+        _conflictResolution = conflictResolution;
+        _conflictDialog = conflictDialog;
         _processingCommands = processingCommands;
         _processingDiagnostics = processingDiagnostics;
+        _recoveryReveal = recoveryReveal;
         StateFilters =
         [
             new("全部状态", null),
@@ -211,12 +224,38 @@ public sealed partial class InboxViewModel : ObservableObject
                 selected.Id,
                 cancellationToken);
             OperationMessage = IngestMessage(result);
+            if (result.Outcome == IngestOutcome.ConflictBlocked)
+            {
+                await ShowConflictAsync(selected.Id, cancellationToken);
+                return;
+            }
+
             if (result.Outcome == IngestOutcome.Completed)
             {
                 await SelectAsync(null, cancellationToken);
             }
 
             await ReloadCardsAsync(cancellationToken);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanResolveConflict))]
+    private async Task ResolveConflictAsync(CancellationToken cancellationToken)
+    {
+        InboxCardViewModel? selected = SelectedItem;
+        if (selected is null || IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            await ShowConflictAsync(selected.Id, cancellationToken);
         }
         finally
         {
@@ -271,6 +310,37 @@ public sealed partial class InboxViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRecheckRecovery))]
+    private Task RecheckRecoveryAsync(CancellationToken cancellationToken) =>
+        RunRecoveryAsync(
+            (itemId, token) => _recovery.RetryAsync(itemId, token),
+            "已完成恢复核对。",
+            cancellationToken);
+
+    [RelayCommand(CanExecute = nameof(CanRetryCleanup))]
+    private Task RetryCleanupAsync(CancellationToken cancellationToken) =>
+        RunRecoveryAsync(
+            (itemId, token) => _recovery.RetryCleanupAsync(itemId, token),
+            "已完成清理重试。",
+            cancellationToken);
+
+    [RelayCommand(CanExecute = nameof(CanOpenRecoveryLocation))]
+    private async Task OpenRecoveryLocationAsync(CancellationToken cancellationToken)
+    {
+        InboxCardViewModel? selected = SelectedItem;
+        if (selected is null || IsBusy || _recoveryReveal is null)
+        {
+            return;
+        }
+
+        bool revealed = await _recoveryReveal.RevealAsync(
+            selected.Id,
+            cancellationToken);
+        OperationMessage = revealed
+            ? "已打开文件位置。"
+            : "没有可安全打开的恢复文件位置。";
     }
 
     [RelayCommand(CanExecute = nameof(CanStartProcessing))]
@@ -424,8 +494,22 @@ public sealed partial class InboxViewModel : ObservableObject
         && Inspector.AllowedActions.HasFlag(InboxAction.ClearMissing);
 
     private bool CanRetry() => !IsBusy
-        && (Inspector.AllowedActions.HasFlag(InboxAction.Retry)
-            || Inspector.AllowedActions.HasFlag(InboxAction.RetryCleanup));
+        && Inspector.AllowedActions.HasFlag(InboxAction.Retry);
+
+    private bool CanRecheckRecovery() => !IsBusy
+        && Inspector.AllowedActions.HasFlag(InboxAction.RecheckRecovery);
+
+    private bool CanRetryCleanup() => !IsBusy
+        && Inspector.AllowedActions.HasFlag(InboxAction.RetryCleanup);
+
+    private bool CanOpenRecoveryLocation() => !IsBusy
+        && _recoveryReveal is not null
+        && Inspector.RecoveryVisibility == Microsoft.UI.Xaml.Visibility.Visible
+        && Inspector.AllowedActions.HasFlag(InboxAction.OpenFolder);
+
+    private bool CanResolveConflict() => !IsBusy
+        && SelectedItem is not null
+        && Inspector.AllowedActions.HasFlag(InboxAction.ResolveConflict);
 
     private bool CanStartProcessing() => !IsBusy
         && _processingCommands is not null
@@ -451,10 +535,44 @@ public sealed partial class InboxViewModel : ObservableObject
         IngestCommand.NotifyCanExecuteChanged();
         ClearMissingCommand.NotifyCanExecuteChanged();
         RetryCommand.NotifyCanExecuteChanged();
+        RecheckRecoveryCommand.NotifyCanExecuteChanged();
+        RetryCleanupCommand.NotifyCanExecuteChanged();
+        OpenRecoveryLocationCommand.NotifyCanExecuteChanged();
+        ResolveConflictCommand.NotifyCanExecuteChanged();
         StartProcessingCommand.NotifyCanExecuteChanged();
         CancelProcessingCommand.NotifyCanExecuteChanged();
         StopProcessingCommand.NotifyCanExecuteChanged();
         RetryProcessingCommand.NotifyCanExecuteChanged();
+    }
+
+    private async Task ShowConflictAsync(
+        Guid inboxItemId,
+        CancellationToken cancellationToken)
+    {
+        ConflictCaseDto? conflict = await _conflictQuery.GetOpenAsync(
+            inboxItemId,
+            cancellationToken);
+        if (conflict is null)
+        {
+            OperationMessage = "冲突记录已变化，请刷新后重试。";
+            await ReloadCardsAsync(cancellationToken);
+            return;
+        }
+
+        ConflictDialogResult? decision = await _conflictDialog.ShowAsync(
+            conflict,
+            cancellationToken);
+        if (decision is not null)
+        {
+            IngestResult result = await _conflictResolution.ResolveAsync(
+                conflict.Id,
+                decision.Resolution,
+                decision.SelectedMatchId,
+                cancellationToken);
+            OperationMessage = IngestMessage(result);
+        }
+
+        await ReloadCardsAsync(cancellationToken);
     }
 
     private async Task RunProcessingAsync(
@@ -486,6 +604,36 @@ public sealed partial class InboxViewModel : ObservableObject
         }
     }
 
+    private async Task RunRecoveryAsync(
+        Func<Guid, CancellationToken, Task<RecoveryResult>> command,
+        string successMessage,
+        CancellationToken cancellationToken)
+    {
+        InboxCardViewModel? selected = SelectedItem;
+        if (selected is null || IsBusy)
+        {
+            return;
+        }
+
+        Guid inboxItemId = selected.Id;
+        IsBusy = true;
+        try
+        {
+            RecoveryResult result = await command(inboxItemId, cancellationToken);
+            await ReloadCardsAsync(cancellationToken);
+            InboxCardViewModel? refreshed = Items.FirstOrDefault(
+                item => item.Id == inboxItemId);
+            await SelectAsync(refreshed, cancellationToken);
+            OperationMessage = result.Succeeded
+                ? successMessage
+                : "当前项目无法安全重试。";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     private static string ProcessingMessage(ProcessingCommandResult result) =>
         !string.IsNullOrWhiteSpace(result.Message)
             ? result.Message
@@ -506,6 +654,8 @@ public sealed partial class InboxViewModel : ObservableObject
         {
             IngestOutcome.Completed => "入库完成。",
             IngestOutcome.ConflictBlocked => "检测到冲突，源文件已保留。",
+            IngestOutcome.Skipped => "已跳过本次冲突，源文件保持不变。",
+            IngestOutcome.ConflictChanged => "冲突内容已变化，请重新确认。",
             IngestOutcome.RequiresProcessing => "需要先完成前置处理。",
             IngestOutcome.SourceMissing => "源文件已不存在。",
             IngestOutcome.SourceChanged => "源文件已变化，请重新刷新。",

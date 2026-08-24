@@ -96,7 +96,7 @@ public sealed class Stage2MigrationTests
     public async Task Formal_sha256_is_unique()
     {
         await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
-        await database.MigrateAsync();
+        await database.MigrateAsync("20260823120000_Stage3ProcessingPipeline");
         string sha256 = new('A', 64);
         await database.ExecuteSqlAsync(MediaAssetSql(
             Guid.NewGuid(),

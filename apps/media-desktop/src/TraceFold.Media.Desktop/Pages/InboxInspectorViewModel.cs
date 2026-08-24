@@ -66,6 +66,29 @@ public sealed partial class InboxInspectorViewModel(
     public partial Visibility RetryProcessingVisibility { get; private set; } =
         Visibility.Collapsed;
 
+    [ObservableProperty]
+    public partial Visibility ResolveConflictVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial string RecoveryStatusText { get; private set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial Visibility RecoveryVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial Visibility RecheckRecoveryVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial Visibility RetryCleanupVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial Visibility OpenRecoveryLocationVisibility { get; private set; } =
+        Visibility.Collapsed;
+
     public MetadataEditorViewModel Metadata { get; } = metadata;
 
     public async Task LoadAsync(
@@ -85,6 +108,7 @@ public sealed partial class InboxInspectorViewModel(
         RequiredCapability = details.RequiredCapability;
         StatusMessage = StateMessage(details.Card.State);
         ApplyProcessing(details);
+        ApplyRecovery(details);
     }
 
     public void Reset()
@@ -106,6 +130,12 @@ public sealed partial class InboxInspectorViewModel(
         CancelProcessingVisibility = Visibility.Collapsed;
         StopProcessingVisibility = Visibility.Collapsed;
         RetryProcessingVisibility = Visibility.Collapsed;
+        ResolveConflictVisibility = Visibility.Collapsed;
+        RecoveryStatusText = string.Empty;
+        RecoveryVisibility = Visibility.Collapsed;
+        RecheckRecoveryVisibility = Visibility.Collapsed;
+        RetryCleanupVisibility = Visibility.Collapsed;
+        OpenRecoveryLocationVisibility = Visibility.Collapsed;
     }
 
     private void ApplyProcessing(InboxDetailsDto details)
@@ -144,6 +174,9 @@ public sealed partial class InboxInspectorViewModel(
         RetryProcessingVisibility = ActionVisibility(
             details.AllowedActions,
             InboxAction.RetryProcessing);
+        ResolveConflictVisibility = ActionVisibility(
+            details.AllowedActions,
+            InboxAction.ResolveConflict);
     }
 
     private static Visibility ActionVisibility(
@@ -152,6 +185,35 @@ public sealed partial class InboxInspectorViewModel(
         allowedActions.HasFlag(action)
             ? Visibility.Visible
             : Visibility.Collapsed;
+
+    private void ApplyRecovery(InboxDetailsDto details)
+    {
+        RecoverySummaryDto? recovery = details.Recovery;
+        RecoveryStatusText = recovery?.Stage switch
+        {
+            TraceFold.Media.Domain.Ingest.IngestOperationStage.RecoveryBlocked =>
+                "无法自动恢复，请重新检查。",
+            TraceFold.Media.Domain.Ingest.IngestOperationStage.CleanupPending
+                when recovery.NextCleanupAttemptAtUtc is not null =>
+                "入库完成，等待再次清理。",
+            TraceFold.Media.Domain.Ingest.IngestOperationStage.CleanupPending =>
+                "入库完成，清理需要手动重试。",
+            _ => string.Empty
+        };
+        RecoveryVisibility = recovery is null
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        RecheckRecoveryVisibility = ActionVisibility(
+            details.AllowedActions,
+            InboxAction.RecheckRecovery);
+        RetryCleanupVisibility = ActionVisibility(
+            details.AllowedActions,
+            InboxAction.RetryCleanup);
+        OpenRecoveryLocationVisibility = recovery is not null
+            && details.AllowedActions.HasFlag(InboxAction.OpenFolder)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+    }
 
     private static string StateMessage(InboxItemState state) =>
         state switch
@@ -172,6 +234,8 @@ public sealed partial class InboxInspectorViewModel(
                 "处理失败，源文件仍保留；可在确认后重试。",
             InboxItemState.CleanupPending =>
                 "正式文件已保存，源文件清理尚未完成。",
+            InboxItemState.RecoveryBlocked =>
+                "恢复证据不明确，文件保持不变。",
             _ => string.Empty
         };
 }

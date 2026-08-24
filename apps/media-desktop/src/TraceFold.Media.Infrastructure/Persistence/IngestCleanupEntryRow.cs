@@ -19,4 +19,8 @@ internal sealed class IngestCleanupEntryRow
     public required string Sha256 { get; set; }
 
     public DateTimeOffset? CompletedAtUtc { get; set; }
+
+    public DateTimeOffset? LastAttemptAtUtc { get; set; }
+
+    public string? LastErrorCode { get; set; }
 }

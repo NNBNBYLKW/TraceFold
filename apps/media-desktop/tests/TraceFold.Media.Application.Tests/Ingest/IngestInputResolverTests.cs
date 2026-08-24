@@ -26,6 +26,23 @@ public sealed class IngestInputResolverTests
     }
 
     [Fact]
+    public async Task Conflict_blocked_item_can_revalidate_its_unchanged_input()
+    {
+        using var fixture = InputFixture.Ordinary();
+        IngestCandidate blocked = fixture.Candidate with
+        {
+            State = InboxItemState.ConflictBlocked
+        };
+
+        PreparedIngestInput input = await fixture.Resolver.ResolveAsync(
+            blocked,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(blocked.Sources.Single().FullPath, input.FullPath);
+        Assert.Empty(fixture.Invalidation.ItemIds);
+    }
+
+    [Fact]
     public async Task Processed_ready_item_uses_output_and_keeps_both_originals_in_cleanup()
     {
         using var fixture = InputFixture.Processed();

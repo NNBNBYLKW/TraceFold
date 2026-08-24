@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using TraceFold.Media.Application.Ingest;
-using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Domain.Ingest;
@@ -10,102 +9,241 @@ namespace TraceFold.Media.Application.Tests.Ingest;
 
 public sealed class IngestRecoveryServiceTests
 {
+    private static readonly LibraryFolders Folders = new(
+        "C:/inbox",
+        "C:/library",
+        "C:/work");
+
     [Fact]
-    public async Task FileCommitted_with_matching_target_completes_database_commit()
+    public async Task File_committed_with_verified_target_commits_once_and_reconciles_idempotently()
     {
-        RecoveryFixture fixture = RecoveryFixture.FileCommitted(targetMatches: true);
+        IngestOperationRecord operation = Operation(IngestOperationStage.FileCommitted);
+        var fixture = new RecoveryFixture(
+            operation,
+            Evidence(
+                source: FileIdentityKind.ExpectedSource,
+                staged: FileIdentityKind.ExpectedStaged,
+                target: FileIdentityKind.ExpectedNew));
 
         await fixture.Service.ReconcileAsync(TestContext.Current.CancellationToken);
+        Guid firstAssetId = fixture.Store.Saved.AssetId!.Value;
+        await fixture.Service.ReconcileAsync(TestContext.Current.CancellationToken);
 
-        Assert.True(fixture.Store.AssetCommitted);
-        Assert.True(fixture.Storage.SourceDeleted);
-        Assert.Equal(IngestOperationStage.Completed, fixture.Store.Stage);
+        Assert.Equal(IngestOperationStage.Completed, fixture.Store.Saved.Stage);
+        Assert.Equal(firstAssetId, fixture.Store.Saved.AssetId);
+        Assert.Equal(1, fixture.Store.AssetCommitCount);
+        Assert.Equal(1, fixture.Cleanup.Calls);
     }
 
     [Fact]
-    public async Task Unknown_target_identity_preserves_source_and_reports_failure()
+    public async Task Unknown_target_identity_is_blocked_without_storage_mutation()
     {
-        RecoveryFixture fixture = RecoveryFixture.FileCommitted(targetMatches: false);
+        IngestOperationRecord operation = Operation(IngestOperationStage.FileCommitted);
+        var fixture = new RecoveryFixture(
+            operation,
+            Evidence(target: FileIdentityKind.Unknown));
 
         await fixture.Service.ReconcileAsync(TestContext.Current.CancellationToken);
 
-        Assert.False(fixture.Storage.SourceDeleted);
-        Assert.Equal(IngestOperationStage.Failed, fixture.Store.Stage);
-        Assert.Equal("recovery.target_identity_unknown", fixture.Store.ErrorCode);
+        Assert.Equal(IngestOperationStage.RecoveryBlocked, fixture.Store.Saved.Stage);
+        Assert.Equal(
+            IngestOperationStage.FileCommitted,
+            fixture.Store.Saved.RecoveryBlockedFromStage);
+        Assert.Equal("recovery.identity_ambiguous", fixture.Store.Saved.ErrorCode);
+        Assert.Equal(0, fixture.Storage.MutationCount);
+        Assert.Equal(0, fixture.Store.AssetCommitCount);
     }
+
+    [Fact]
+    public async Task Database_committed_without_operation_asset_id_is_blocked()
+    {
+        IngestOperationRecord operation = Operation(
+            IngestOperationStage.DatabaseCommitted) with
+        {
+            AssetId = null
+        };
+        var fixture = new RecoveryFixture(
+            operation,
+            Evidence(target: FileIdentityKind.ExpectedNew));
+        fixture.Store.DatabaseHasNewVersion = true;
+
+        await fixture.Service.ReconcileAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(IngestOperationStage.RecoveryBlocked, fixture.Store.Saved.Stage);
+        Assert.Equal("recovery.asset_identity_missing", fixture.Store.Saved.ErrorCode);
+        Assert.Equal(0, fixture.Storage.MutationCount);
+        Assert.Equal(0, fixture.Cleanup.Calls);
+    }
+
+    [Fact]
+    public async Task One_blocked_operation_does_not_prevent_a_safe_resume()
+    {
+        IngestOperationRecord blocked = Operation(
+            IngestOperationStage.FileCommitted,
+            Guid.NewGuid());
+        IngestOperationRecord resumable = Operation(
+            IngestOperationStage.Staged,
+            Guid.NewGuid());
+        var store = new RecoveryStore([blocked, resumable]);
+        var storage = new RecoveryStorage(new Dictionary<Guid, IngestStorageEvidence>
+        {
+            [blocked.Id] = Evidence(target: FileIdentityKind.Unknown),
+            [resumable.Id] = Evidence(
+                source: FileIdentityKind.ExpectedSource,
+                staged: FileIdentityKind.ExpectedStaged,
+                target: FileIdentityKind.Absent)
+        });
+        var executor = new RecoveryExecutor(store);
+        var cleanup = new RecoveryCleanup(store);
+        var service = CreateService(store, storage, executor, cleanup);
+
+        await service.ReconcileAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            IngestOperationStage.RecoveryBlocked,
+            store.Get(blocked.Id).Stage);
+        Assert.Equal(IngestOperationStage.Completed, store.Get(resumable.Id).Stage);
+        Assert.Equal(1, executor.ResumeCalls);
+    }
+
+    [Fact]
+    public async Task Retry_rechecks_blocked_evidence_before_resuming()
+    {
+        IngestOperationRecord operation = Operation(
+            IngestOperationStage.RecoveryBlocked) with
+        {
+            RecoveryBlockedFromStage = IngestOperationStage.Staged,
+            ErrorCode = "recovery.identity_ambiguous"
+        };
+        var fixture = new RecoveryFixture(
+            operation,
+            Evidence(
+                source: FileIdentityKind.ExpectedSource,
+                staged: FileIdentityKind.ExpectedStaged,
+                target: FileIdentityKind.Absent));
+
+        RecoveryResult result = await fixture.Service.RetryAsync(
+            operation.InboxItemId,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(IngestOperationStage.Completed, fixture.Store.Saved.Stage);
+        Assert.Equal(1, fixture.Executor.ResumeCalls);
+        Assert.Equal(1, fixture.Store.ResumeRecoveryCount);
+    }
+
+    [Fact]
+    public async Task Manual_cleanup_retry_ignores_future_due_time_and_never_resumes_execution()
+    {
+        IngestOperationRecord operation = Operation(
+            IngestOperationStage.CleanupPending) with
+        {
+            CleanupAttemptCount = 3,
+            NextCleanupAttemptAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        var fixture = new RecoveryFixture(
+            operation,
+            Evidence(target: FileIdentityKind.ExpectedNew));
+
+        RecoveryResult result = await fixture.Service.RetryCleanupAsync(
+            operation.InboxItemId,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, fixture.Store.ResetCleanupCount);
+        Assert.Equal(1, fixture.Cleanup.Calls);
+        Assert.Equal(0, fixture.Executor.ResumeCalls);
+    }
+
+    private static IngestRecoveryService CreateService(
+        RecoveryStore store,
+        RecoveryStorage storage,
+        RecoveryExecutor executor,
+        RecoveryCleanup cleanup) =>
+        new(
+            store,
+            new FixedSettingsStore(),
+            storage,
+            executor,
+            NullLogger<IngestRecoveryService>.Instance,
+            cleanup,
+            store);
 
     private sealed class RecoveryFixture
     {
-        private RecoveryFixture(
-            RecoveryStore store,
-            RecoveryStorage storage,
-            IngestRecoveryService service)
+        public RecoveryFixture(
+            IngestOperationRecord operation,
+            IngestStorageEvidence evidence)
         {
-            Store = store;
-            Storage = storage;
-            Service = service;
+            Store = new RecoveryStore([operation]);
+            Storage = new RecoveryStorage(new Dictionary<Guid, IngestStorageEvidence>
+            {
+                [operation.Id] = evidence
+            });
+            Executor = new RecoveryExecutor(Store);
+            Cleanup = new RecoveryCleanup(Store);
+            Service = CreateService(Store, Storage, Executor, Cleanup);
         }
 
         public RecoveryStore Store { get; }
-
         public RecoveryStorage Storage { get; }
-
+        public RecoveryExecutor Executor { get; }
+        public RecoveryCleanup Cleanup { get; }
         public IngestRecoveryService Service { get; }
-
-        public static RecoveryFixture FileCommitted(bool targetMatches)
-        {
-            var operation = new IngestOperationRecord(
-                Guid.NewGuid(),
-                Guid.NewGuid(),
-                IngestOperationStage.FileCommitted,
-                "C:/inbox/photo.jpg",
-                3,
-                DateTimeOffset.Parse("2026-08-22T10:00:00Z"),
-                new string('A', 64),
-                "photo.jpg",
-                "C:/work/payload",
-                null,
-                null);
-            var store = new RecoveryStore(operation);
-            var storage = new RecoveryStorage(store, targetMatches);
-            var service = new IngestRecoveryService(
-                store,
-                new FixedSettingsStore(
-                    new LibraryFolders("C:/inbox", "C:/library", "C:/work")),
-                storage,
-                new FixedHasher(),
-                NullLogger<IngestRecoveryService>.Instance);
-            return new RecoveryFixture(store, storage, service);
-        }
     }
 
-    private sealed class RecoveryStore(IngestOperationRecord operation) : IIngestStore
+    private sealed class RecoveryStore(IEnumerable<IngestOperationRecord> supplied)
+        : IIngestStore, IIngestCleanupWorkStore
     {
-        private IngestOperationRecord _operation = operation;
+        private readonly Dictionary<Guid, IngestOperationRecord> operations =
+            supplied.ToDictionary(operation => operation.Id);
 
-        public IngestOperationStage Stage => _operation.Stage;
+        public IngestOperationRecord Saved => Assert.Single(operations.Values);
+        public int AssetCommitCount { get; private set; }
+        public int ResumeRecoveryCount { get; private set; }
+        public bool DatabaseHasNewVersion { get; set; }
+        public int ResetCleanupCount { get; private set; }
 
-        public string? ErrorCode => _operation.ErrorCode;
-
-        public bool AssetCommitted { get; private set; }
+        public IngestOperationRecord Get(Guid operationId) => operations[operationId];
 
         public Task<IReadOnlyList<IngestOperationRecord>> LoadIncompleteAsync(
             CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<IngestOperationRecord>>([_operation]);
+            Task.FromResult<IReadOnlyList<IngestOperationRecord>>(
+                operations.Values
+                    .Where(operation => operation.Stage is not
+                        (IngestOperationStage.Completed or IngestOperationStage.Failed))
+                    .ToArray());
 
         public Task<IngestOperationRecord?> FindActiveAsync(
             Guid inboxItemId,
             CancellationToken cancellationToken) =>
-            Task.FromResult<IngestOperationRecord?>(_operation);
+            Task.FromResult<IngestOperationRecord?>(operations.Values
+                .SingleOrDefault(operation => operation.InboxItemId == inboxItemId));
+
+        public Task<bool> OperationDatabaseHasNewVersionAsync(
+            Guid operationId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(
+                DatabaseHasNewVersion
+                || operations[operationId].Stage is
+                    IngestOperationStage.DatabaseCommitted
+                    or IngestOperationStage.CleanupPending
+                    or IngestOperationStage.Completed);
 
         public Task<Guid> CommitAssetAsync(
             Guid operationId,
             CommittedFile committed,
             CancellationToken cancellationToken)
         {
-            AssetCommitted = true;
+            IngestOperationRecord operation = operations[operationId];
+            if (operation.AssetId is Guid existing)
+            {
+                return Task.FromResult(existing);
+            }
+
             Guid assetId = Guid.NewGuid();
-            _operation = _operation with
+            AssetCommitCount++;
+            operations[operationId] = operation with
             {
                 Stage = IngestOperationStage.DatabaseCommitted,
                 AssetId = assetId
@@ -113,140 +251,204 @@ public sealed class IngestRecoveryServiceTests
             return Task.FromResult(assetId);
         }
 
-        public Task CompleteAsync(
-            Guid operationId,
-            CancellationToken cancellationToken)
-        {
-            _operation = _operation with { Stage = IngestOperationStage.Completed };
-            return Task.CompletedTask;
-        }
-
-        public Task FailAsync(
+        public Task MarkRecoveryBlockedAsync(
             Guid operationId,
             string errorCode,
-            bool isRetryable,
             CancellationToken cancellationToken)
         {
-            _operation = _operation with
+            IngestOperationRecord operation = operations[operationId];
+            operations[operationId] = operation with
             {
-                Stage = IngestOperationStage.Failed,
+                Stage = IngestOperationStage.RecoveryBlocked,
+                RecoveryBlockedFromStage = operation.Stage,
                 ErrorCode = errorCode
             };
             return Task.CompletedTask;
         }
 
-        public Task<IngestCandidate?> LoadCandidateAsync(
-            Guid inboxItemId,
-            CancellationToken cancellationToken) =>
-            Task.FromResult<IngestCandidate?>(null);
-
-        public Task<ConflictCheck> CheckConflictsAsync(
-            string targetFilename,
-            string sourceSha256,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new ConflictCheck(null));
-
-        public Task BlockConflictAsync(
-            Guid inboxItemId,
-            ConflictKind kind,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<IngestOperationRecord> CreateAsync(
-            IngestPreparation preparation,
-            CancellationToken cancellationToken) => Task.FromResult(_operation);
-
-        public Task MarkStagedAsync(
+        public Task ResumeRecoveryAsync(
             Guid operationId,
-            StagedFile staged,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+            CancellationToken cancellationToken)
+        {
+            IngestOperationRecord operation = operations[operationId];
+            operations[operationId] = operation with
+            {
+                Stage = operation.RecoveryBlockedFromStage
+                    ?? throw new InvalidOperationException(),
+                RecoveryBlockedFromStage = null,
+                ErrorCode = null
+            };
+            ResumeRecoveryCount++;
+            return Task.CompletedTask;
+        }
+
+        public Task MarkBackupRestoredAsync(
+            Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            operations[operationId] = operations[operationId] with
+            {
+                BackupState = IngestBackupState.Restored
+            };
+            return Task.CompletedTask;
+        }
 
         public Task AbandonForRetryAsync(
             Guid operationId,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task MarkFileCommittedAsync(
-            Guid operationId,
-            CommittedFile committed,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task MarkCleanupPendingAsync(
-            Guid operationId,
-            string errorCode,
             CancellationToken cancellationToken)
         {
-            _operation = _operation with
+            operations[operationId] = operations[operationId] with
             {
-                Stage = IngestOperationStage.CleanupPending,
-                ErrorCode = errorCode
+                Stage = IngestOperationStage.Failed,
+                ErrorCode = "recovery.abandoned_for_retry"
             };
+            return Task.CompletedTask;
+        }
+
+        public Task CompleteAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            operations[operationId] = operations[operationId] with
+            {
+                Stage = IngestOperationStage.Completed
+            };
+            return Task.CompletedTask;
+        }
+
+        public void CompleteFromResume(Guid operationId) =>
+            operations[operationId] = operations[operationId] with
+            {
+                Stage = IngestOperationStage.Completed,
+                AssetId = operations[operationId].AssetId ?? Guid.NewGuid()
+            };
+
+        public Task<IngestCandidate?> LoadCandidateAsync(Guid inboxItemId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IngestOperationRecord> CreateAsync(IngestPreparation preparation, IngestExecutionPlan plan, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task MarkStagedAsync(Guid operationId, StagedFile staged, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task MarkFileCommittedAsync(Guid operationId, CommittedFile committed, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task MarkCleanupPendingAsync(Guid operationId, string errorCode, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task FailAsync(Guid operationId, string errorCode, bool isRetryable, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<IngestOperationRecord>> LoadDueCleanupAsync(DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<DateTimeOffset?> FindNextCleanupDueAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task ScheduleCleanupRetryAsync(Guid operationId, string errorCode, int failureCount, DateTimeOffset? nextAttemptAtUtc, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task ResetCleanupRetryAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            operations[operationId] = operations[operationId] with
+            {
+                NextCleanupAttemptAtUtc = null
+            };
+            ResetCleanupCount++;
             return Task.CompletedTask;
         }
     }
 
     private sealed class RecoveryStorage(
-        RecoveryStore store,
-        bool targetMatches) : IControlledMediaStorage
+        IReadOnlyDictionary<Guid, IngestStorageEvidence> evidence)
+        : IControlledMediaStorage
     {
-        public bool SourceDeleted { get; private set; }
+        public int MutationCount { get; private set; }
 
-        public Task<bool> VerifyCommittedAsync(
+        public Task<IngestStorageEvidence> InspectOperationAsync(
             LibraryFolders folders,
-            CommittedFile committed,
-            CancellationToken cancellationToken) => Task.FromResult(targetMatches);
+            IngestOperationRecord operation,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(evidence[operation.Id]);
 
-        public Task<SourceDeleteResult> DeleteSourceIfMatchesAsync(
-            LibraryFolders folders,
-            string sourcePath,
-            long expectedSize,
-            string expectedSha256,
-            CancellationToken cancellationToken)
+        public Task RestoreBackupAsync(Guid operationId, LibraryFolders folders, LibraryFileSnapshot target, ReplacementBackup backup, CancellationToken cancellationToken)
         {
-            Assert.True(store.AssetCommitted);
-            SourceDeleted = true;
-            return Task.FromResult(new SourceDeleteResult(SourceDeleteOutcome.Deleted));
+            MutationCount++;
+            return Task.CompletedTask;
         }
 
-        public Task CleanupTemporaryFilesAsync(
-            Guid operationId,
-            LibraryFolders folders,
-            CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<bool> TargetExistsAsync(
-            LibraryFolders folders,
-            string targetFilename,
-            CancellationToken cancellationToken) => Task.FromResult(false);
-
-        public Task<StagedFile> StageAsync(
-            Guid operationId,
-            LibraryFolders folders,
-            string sourcePath,
-            string expectedSha256,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
-
-        public Task<CommittedFile> CommitAsync(
-            Guid operationId,
-            LibraryFolders folders,
-            StagedFile staged,
-            string targetFilename,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TargetExistsAsync(LibraryFolders folders, string targetFilename, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<StagedFile> StageAsync(Guid operationId, LibraryFolders folders, string sourcePath, string expectedSha256, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<CommittedFile> CommitAsync(Guid operationId, LibraryFolders folders, StagedFile staged, string targetFilename, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<SourceDeleteResult> DeleteSourceIfMatchesAsync(LibraryFolders folders, string sourcePath, long expectedSize, string expectedSha256, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> VerifyCommittedAsync(LibraryFolders folders, CommittedFile committed, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task CleanupTemporaryFilesAsync(Guid operationId, LibraryFolders folders, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private sealed class FixedSettingsStore(LibraryFolders folders)
-        : IDirectorySettingsStore
+    private sealed class RecoveryExecutor(RecoveryStore store)
+        : IIngestExecutionService
     {
-        public Task<LibraryFolders?> LoadAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<LibraryFolders?>(folders);
+        public int ResumeCalls { get; private set; }
 
-        public Task SaveAsync(
-            LibraryFolders value,
-            CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IngestResult> ResumeAsync(
+            IngestOperationRecord operation,
+            LibraryFolders folders,
+            CancellationToken cancellationToken)
+        {
+            ResumeCalls++;
+            store.CompleteFromResume(operation.Id);
+            return Task.FromResult(new IngestResult(
+                IngestOutcome.Completed,
+                operation.Id,
+                store.Get(operation.Id).AssetId,
+                operation.ConflictCaseId,
+                "ingest.completed"));
+        }
+
+        public Task<IngestResult> ExecuteAsync(IngestPreparation preparation, IngestExecutionPlan plan, LibraryFolders folders, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class FixedHasher : IFileHasher
+    private sealed class RecoveryCleanup(RecoveryStore store) : IIngestCleanupService
     {
-        public Task<string> ComputeSha256Async(
-            string path,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new string('A', 64));
+        public int Calls { get; private set; }
+
+        public async Task<CleanupResult> CleanupAsync(
+            IngestOperationRecord operation,
+            LibraryFolders folders,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            await store.CompleteAsync(operation.Id, cancellationToken);
+            return new CleanupResult(true, null);
+        }
     }
+
+    private sealed class FixedSettingsStore : IDirectorySettingsStore
+    {
+        public Task<LibraryFolders?> LoadAsync(CancellationToken cancellationToken) => Task.FromResult<LibraryFolders?>(Folders);
+        public Task SaveAsync(LibraryFolders value, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private static IngestOperationRecord Operation(
+        IngestOperationStage stage,
+        Guid? operationId = null) =>
+        new(
+            operationId ?? Guid.NewGuid(),
+            Guid.NewGuid(),
+            stage,
+            IngestDisposition.Create,
+            null,
+            "C:/inbox/photo.jpg",
+            3,
+            DateTimeOffset.Parse("2026-08-22T10:00:00Z"),
+            new string('A', 64),
+            "photo.jpg",
+            "C:/work/.tracefold/ingest/payload",
+            stage >= IngestOperationStage.DatabaseCommitted ? Guid.NewGuid() : null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            IngestBackupState.NotRequired,
+            null,
+            null,
+            null,
+            null,
+            null,
+            0,
+            null);
+
+    private static IngestStorageEvidence Evidence(
+        FileIdentityKind source = FileIdentityKind.ExpectedSource,
+        FileIdentityKind staged = FileIdentityKind.ExpectedStaged,
+        FileIdentityKind target = FileIdentityKind.ExpectedNew,
+        FileIdentityKind backup = FileIdentityKind.Absent) =>
+        new(Identity(source), Identity(staged), Identity(target), Identity(backup));
+
+    private static ObservedFileIdentity Identity(FileIdentityKind kind) =>
+        new(kind, null, null, null);
 }

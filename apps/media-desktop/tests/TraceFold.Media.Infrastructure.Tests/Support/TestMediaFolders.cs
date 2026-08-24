@@ -34,5 +34,12 @@ internal sealed class TestMediaFolders : IDisposable
         return path;
     }
 
+    public string WriteLibrary(string filename, byte[] bytes)
+    {
+        string path = Path.Combine(Library, filename);
+        File.WriteAllBytes(path, bytes);
+        return path;
+    }
+
     public void Dispose() => _root.Dispose();
 }

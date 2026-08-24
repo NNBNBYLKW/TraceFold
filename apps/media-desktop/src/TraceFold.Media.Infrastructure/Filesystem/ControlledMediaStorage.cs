@@ -4,8 +4,65 @@ using TraceFold.Media.Application.Ingest;
 
 namespace TraceFold.Media.Infrastructure.Filesystem;
 
-public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMediaStorage
+public sealed partial class ControlledMediaStorage(IFileHasher hasher) : IControlledMediaStorage
 {
+    public async Task<IngestStorageEvidence> InspectOperationAsync(
+        LibraryFolders folders,
+        IngestOperationRecord operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(folders);
+        ArgumentNullException.ThrowIfNull(operation);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string expectedNewHash = RequireSha256(operation.SourceSha256);
+        (string sourceRoot, string sourcePath) = ResolveInspectionSource(
+            folders,
+            operation.SourcePath);
+        string stagedPath = ResolveInspectionStaged(folders, operation);
+        string targetPath = ResolveTarget(folders, operation.TargetFilename);
+        string backupPath = ResolveInspectionBackup(folders, operation);
+
+        ObservedFileIdentity source = await InspectIdentityAsync(
+            sourceRoot,
+            sourcePath,
+            (size, hash, _) =>
+                size == operation.SourceSize
+                && StringComparer.OrdinalIgnoreCase.Equals(hash, expectedNewHash)
+                    ? FileIdentityKind.ExpectedSource
+                    : FileIdentityKind.Unknown,
+            cancellationToken);
+        ObservedFileIdentity staged = await InspectIdentityAsync(
+            folders.WorkDirectory,
+            stagedPath,
+            (size, hash, _) =>
+                size == operation.SourceSize
+                && StringComparer.OrdinalIgnoreCase.Equals(hash, expectedNewHash)
+                    ? FileIdentityKind.ExpectedStaged
+                    : FileIdentityKind.Unknown,
+            cancellationToken);
+        ObservedFileIdentity target = await InspectIdentityAsync(
+            folders.LibraryDirectory,
+            targetPath,
+            (size, hash, lastWriteTimeUtc) => ClassifyTargetIdentity(
+                operation,
+                expectedNewHash,
+                size,
+                hash,
+                lastWriteTimeUtc),
+            cancellationToken);
+        ObservedFileIdentity backup = await InspectIdentityAsync(
+            folders.LibraryDirectory,
+            backupPath,
+            (size, hash, _) => ClassifyBackupIdentity(
+                operation,
+                size,
+                hash),
+            cancellationToken);
+
+        return new IngestStorageEvidence(source, staged, target, backup);
+    }
+
     public Task<bool> TargetExistsAsync(
         LibraryFolders folders,
         string targetFilename,
@@ -13,10 +70,11 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
     {
         cancellationToken.ThrowIfCancellationRequested();
         string target = ResolveTarget(folders, targetFilename);
+        bool entryExists = PathEntryExists(target);
         ControlledReparseGuard.RejectPath(
             folders.LibraryDirectory,
             target,
-            includeCandidate: false);
+            includeCandidate: entryExists);
         return Task.FromResult(File.Exists(target));
     }
 
@@ -309,6 +367,17 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
                     folders,
                     cleanupFile,
                     cancellationToken),
+            IngestCleanupKind.ReplacementBackup =>
+                DeleteBackupIfMatchesAsync(
+                    folders,
+                    new ReplacementBackup(
+                        cleanupFile.FullPath,
+                        Path.GetRelativePath(
+                            folders.LibraryDirectory,
+                            cleanupFile.FullPath),
+                        cleanupFile.Size,
+                        cleanupFile.Sha256),
+                    cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(cleanupFile))
         };
     }
@@ -373,7 +442,244 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
             File.Delete(temporary);
         }
 
+        string commitDirectory = ResolveCommitDirectory(folders, operationId);
+        if (Directory.Exists(commitDirectory))
+        {
+            ControlledReparseGuard.RejectTree(
+                folders.LibraryDirectory,
+                commitDirectory);
+            Directory.Delete(commitDirectory, recursive: true);
+        }
+
+        CleanupEmptyCommitParents(folders, operationId);
+
         return Task.CompletedTask;
+    }
+
+    private static bool PathEntryExists(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private async Task<ObservedFileIdentity> InspectIdentityAsync(
+        string root,
+        string path,
+        Func<long, string, DateTimeOffset, FileIdentityKind> classify,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!PathEntryExists(path))
+        {
+            return new ObservedFileIdentity(
+                FileIdentityKind.Absent,
+                path,
+                null,
+                null);
+        }
+
+        try
+        {
+            ControlledReparseGuard.RejectPath(
+                root,
+                path,
+                includeCandidate: true);
+        }
+        catch (ControlledPathException)
+        {
+            return new ObservedFileIdentity(
+                FileIdentityKind.Unknown,
+                path,
+                null,
+                null);
+        }
+
+        if (!File.Exists(path))
+        {
+            return new ObservedFileIdentity(
+                FileIdentityKind.Unknown,
+                path,
+                null,
+                null);
+        }
+
+        var before = new FileInfo(path);
+        long size = before.Length;
+        DateTimeOffset lastWriteTimeUtc = before.LastWriteTimeUtc;
+        string sha256 = RequireSha256(await hasher.ComputeSha256Async(
+            path,
+            cancellationToken));
+        var after = new FileInfo(path);
+        if (!after.Exists
+            || after.Length != size
+            || after.LastWriteTimeUtc != lastWriteTimeUtc.UtcDateTime)
+        {
+            return new ObservedFileIdentity(
+                FileIdentityKind.Unknown,
+                path,
+                after.Exists ? after.Length : null,
+                null);
+        }
+
+        return new ObservedFileIdentity(
+            classify(size, sha256, lastWriteTimeUtc),
+            path,
+            size,
+            sha256);
+    }
+
+    private static (string Root, string Path) ResolveInspectionSource(
+        LibraryFolders folders,
+        string sourcePath)
+    {
+        try
+        {
+            return (
+                folders.InboxDirectory,
+                ControlledPathGuard.RequireDirectChild(
+                    folders.InboxDirectory,
+                    sourcePath));
+        }
+        catch (ControlledPathException)
+        {
+            string processingRoot = ProcessingRoot(folders);
+            string output = ControlledPathGuard.RequireDescendant(
+                processingRoot,
+                sourcePath);
+            string? jobDirectory = Path.GetDirectoryName(output);
+            if (jobDirectory is null
+                || !StringComparer.OrdinalIgnoreCase.Equals(
+                    Path.GetDirectoryName(jobDirectory),
+                    processingRoot)
+                || !Guid.TryParseExact(
+                    Path.GetFileName(jobDirectory),
+                    "N",
+                    out _))
+            {
+                throw new ControlledPathException(
+                    "The persisted ingest source is outside a controlled input path.");
+            }
+
+            return (folders.WorkDirectory, output);
+        }
+    }
+
+    private static string ResolveInspectionStaged(
+        LibraryFolders folders,
+        IngestOperationRecord operation)
+    {
+        string operationDirectory = ResolveOperationDirectory(
+            folders,
+            operation.Id);
+        string expected = ControlledPathGuard.RequireDescendant(
+            folders.WorkDirectory,
+            Path.Combine(operationDirectory, "payload"));
+        if (operation.StagedPath is null)
+        {
+            return expected;
+        }
+
+        string supplied = ControlledPathGuard.RequireDescendant(
+            operationDirectory,
+            operation.StagedPath);
+        if (!StringComparer.OrdinalIgnoreCase.Equals(expected, supplied))
+        {
+            throw new ControlledPathException(
+                "The persisted staged path does not identify the operation payload.");
+        }
+
+        return supplied;
+    }
+
+    private static string ResolveInspectionBackup(
+        LibraryFolders folders,
+        IngestOperationRecord operation)
+    {
+        string targetFilename = operation.ExpectedTargetRelativePath
+            ?? operation.TargetFilename;
+        string expected = ResolveBackupPath(
+            folders,
+            operation.Id,
+            targetFilename);
+        if (operation.BackupRelativePath is null)
+        {
+            return expected;
+        }
+
+        if (Path.IsPathRooted(operation.BackupRelativePath))
+        {
+            throw new ControlledPathException(
+                "The persisted recovery backup path must be relative.");
+        }
+
+        string supplied = ControlledPathGuard.RequireDescendant(
+            folders.LibraryDirectory,
+            Path.Combine(
+                folders.LibraryDirectory,
+                operation.BackupRelativePath));
+        if (!StringComparer.OrdinalIgnoreCase.Equals(expected, supplied))
+        {
+            throw new ControlledPathException(
+                "The persisted recovery backup path does not belong to the operation.");
+        }
+
+        return supplied;
+    }
+
+    private static FileIdentityKind ClassifyTargetIdentity(
+        IngestOperationRecord operation,
+        string expectedNewHash,
+        long size,
+        string sha256,
+        DateTimeOffset lastWriteTimeUtc)
+    {
+        if (operation.ExpectedTargetSize is long oldSize
+            && operation.ExpectedTargetSha256 is string oldHash
+            && size == oldSize
+            && StringComparer.OrdinalIgnoreCase.Equals(
+                sha256,
+                RequireSha256(oldHash))
+            && (operation.ExpectedTargetLastWriteTimeUtc is null
+                || lastWriteTimeUtc.UtcDateTime
+                    == operation.ExpectedTargetLastWriteTimeUtc.Value.UtcDateTime))
+        {
+            return FileIdentityKind.ExpectedOld;
+        }
+
+        return size == operation.SourceSize
+            && StringComparer.OrdinalIgnoreCase.Equals(sha256, expectedNewHash)
+                ? FileIdentityKind.ExpectedNew
+                : FileIdentityKind.Unknown;
+    }
+
+    private static FileIdentityKind ClassifyBackupIdentity(
+        IngestOperationRecord operation,
+        long size,
+        string sha256)
+    {
+        long? expectedSize = operation.BackupSize
+            ?? operation.ExpectedTargetSize;
+        string? expectedHash = operation.BackupSha256
+            ?? operation.ExpectedTargetSha256;
+        return expectedSize is long requiredSize
+            && expectedHash is not null
+            && size == requiredSize
+            && StringComparer.OrdinalIgnoreCase.Equals(
+                sha256,
+                RequireSha256(expectedHash))
+                    ? FileIdentityKind.ExpectedBackup
+                    : FileIdentityKind.Unknown;
     }
 
     private static string ResolveTarget(
@@ -634,14 +940,27 @@ public sealed class ControlledMediaStorage(IFileHasher hasher) : IControlledMedi
         string expectedSha256,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(path) || new FileInfo(path).Length != expectedSize)
+        string expectedHash = RequireSha256(expectedSha256);
+        if (!File.Exists(path))
         {
             throw new StorageIntegrityException(
                 "The file size does not match the persisted storage record.");
         }
 
+        var before = new FileInfo(path);
+        if (before.Length != expectedSize)
+        {
+            throw new StorageIntegrityException(
+                "The file size does not match the persisted storage record.");
+        }
+
+        DateTime lastWriteTimeUtc = before.LastWriteTimeUtc;
         string hash = await hasher.ComputeSha256Async(path, cancellationToken);
-        if (!StringComparer.OrdinalIgnoreCase.Equals(hash, expectedSha256))
+        var after = new FileInfo(path);
+        if (!after.Exists
+            || after.Length != expectedSize
+            || after.LastWriteTimeUtc != lastWriteTimeUtc
+            || !StringComparer.OrdinalIgnoreCase.Equals(hash, expectedHash))
         {
             throw new StorageIntegrityException(
                 "The file hash does not match the persisted storage record.");

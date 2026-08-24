@@ -136,6 +136,12 @@ public sealed class Stage2LoggingPrivacyTests
 
     private sealed class StageFailingStorage : IControlledMediaStorage
     {
+        public Task<LibraryFileSnapshot?> InspectTargetAsync(
+            LibraryFolders folders,
+            string targetFilename,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<LibraryFileSnapshot?>(null);
+
         public Task<bool> TargetExistsAsync(
             LibraryFolders folders,
             string targetFilename,

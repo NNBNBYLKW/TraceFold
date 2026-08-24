@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 
@@ -7,9 +8,32 @@ namespace TraceFold.Media.Application.Ingest;
 public sealed class IngestCleanupService(
     IIngestStore store,
     IControlledMediaStorage storage,
-    ILogger<IngestCleanupService>? logger = null) : IIngestCleanupService
+    ILogger<IngestCleanupService>? logger = null,
+    IIngestFaultInjector? faultInjector = null,
+    IIngestCleanupWorkStore? workStore = null,
+    TimeProvider? timeProvider = null,
+    IIngestCleanupSignal? signal = null,
+    IInboxActivityNotifier? activity = null) : IIngestCleanupService
 {
+    private readonly IIngestFaultInjector faultInjector =
+        faultInjector ?? new NoOpIngestFaultInjector();
+
     public async Task<CleanupResult> CleanupAsync(
+        IngestOperationRecord operation,
+        LibraryFolders folders,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await CleanupCoreAsync(operation, folders, cancellationToken);
+        }
+        finally
+        {
+            activity?.Publish(InboxActivityKind.ItemChanged);
+        }
+    }
+
+    private async Task<CleanupResult> CleanupCoreAsync(
         IngestOperationRecord operation,
         LibraryFolders folders,
         CancellationToken cancellationToken)
@@ -35,15 +59,15 @@ public sealed class IngestCleanupService(
             {
                 throw;
             }
-            catch (Exception error)
+            catch (Exception)
             {
                 logger?.LogError(
-                    error,
-                    "IngestCleanupEntryFailed OperationId={OperationId} EntryId={EntryId}",
+                    "IngestCleanupEntryFailed OperationId={OperationId} EntryId={EntryId} ErrorCode={ErrorCode}",
                     operation.Id,
-                    entry.Id);
+                    entry.Id,
+                    "ingest.cleanup_failed");
                 return await PendingAsync(
-                    operation.Id,
+                    operation,
                     "ingest.cleanup_failed",
                     cancellationToken);
             }
@@ -51,7 +75,7 @@ public sealed class IngestCleanupService(
             if (result.Outcome == SourceDeleteOutcome.SourceChanged)
             {
                 return await PendingAsync(
-                    operation.Id,
+                    operation,
                     "ingest.cleanup_source_changed",
                     cancellationToken);
             }
@@ -61,6 +85,10 @@ public sealed class IngestCleanupService(
                 await store.MarkCleanupEntryCompletedAsync(
                     operation.Id,
                     entry.Id,
+                    cancellationToken);
+                await faultInjector.ReachAsync(
+                    IngestFaultPoint.AfterCleanupEntry,
+                    operation.Id,
                     cancellationToken);
             }
         }
@@ -78,28 +106,47 @@ public sealed class IngestCleanupService(
         {
             throw;
         }
-        catch (Exception error)
+        catch (Exception)
         {
             logger?.LogError(
-                error,
-                "IngestTemporaryCleanupFailed OperationId={OperationId}",
-                operation.Id);
-            return await PendingAsync(
+                "IngestTemporaryCleanupFailed OperationId={OperationId} ErrorCode={ErrorCode}",
                 operation.Id,
+                "ingest.cleanup_failed");
+            return await PendingAsync(
+                operation,
                 "ingest.cleanup_failed",
                 cancellationToken);
         }
     }
 
     private async Task<CleanupResult> PendingAsync(
-        Guid operationId,
+        IngestOperationRecord operation,
         string errorCode,
         CancellationToken cancellationToken)
     {
-        await store.MarkCleanupPendingAsync(
-            operationId,
-            errorCode,
-            cancellationToken);
+        if (workStore is null)
+        {
+            await store.MarkCleanupPendingAsync(
+                operation.Id,
+                errorCode,
+                cancellationToken);
+        }
+        else
+        {
+            int failureCount = checked(operation.CleanupAttemptCount + 1);
+            TimeSpan? delay = CleanupRetrySchedule.DelayAfterFailure(failureCount);
+            DateTimeOffset? nextAttemptAtUtc = delay is null
+                ? null
+                : (timeProvider ?? TimeProvider.System).GetUtcNow() + delay.Value;
+            await workStore.ScheduleCleanupRetryAsync(
+                operation.Id,
+                errorCode,
+                failureCount,
+                nextAttemptAtUtc,
+                cancellationToken);
+            signal?.Signal();
+        }
+
         return new CleanupResult(false, errorCode);
     }
 

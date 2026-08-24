@@ -37,7 +37,10 @@ public sealed class InboxItem
             InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
             InboxAction.RetryProcessing,
         InboxItemState.ConflictBlocked =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder,
+            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
+            InboxAction.ResolveConflict,
+        InboxItemState.RecoveryBlocked =>
+            InboxAction.Preview | InboxAction.OpenFolder | InboxAction.RecheckRecovery,
         InboxItemState.CleanupPending =>
             InboxAction.Preview | InboxAction.RetryCleanup | InboxAction.OpenFolder,
         InboxItemState.Failed when IsRetryable && RequiredCapability is not null =>
@@ -140,6 +143,37 @@ public sealed class InboxItem
         IsRetryable = false;
     }
 
+    public void ReturnConflictToReady()
+    {
+        TransitionTo(InboxItemState.ReadyToTag, InboxItemState.ConflictBlocked);
+        ClearStatusDetails();
+    }
+
+    public void BeginResolvedIngest()
+    {
+        TransitionTo(InboxItemState.Ingesting, InboxItemState.ConflictBlocked);
+        ClearStatusDetails();
+    }
+
+    public void BlockRecovery(string errorCode)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(errorCode);
+        if (State == InboxItemState.Failed && RequiredCapability is not null)
+        {
+            throw new InvalidOperationException(
+                "A processing failure cannot become an ingest recovery block.");
+        }
+
+        TransitionTo(
+            InboxItemState.RecoveryBlocked,
+            InboxItemState.Ingesting,
+            InboxItemState.CleanupPending,
+            InboxItemState.Failed);
+        RequiredCapability = null;
+        ErrorCode = errorCode;
+        IsRetryable = false;
+    }
+
     public void MarkCleanupPending()
     {
         TransitionTo(InboxItemState.CleanupPending, InboxItemState.Ingesting);
@@ -200,6 +234,7 @@ public sealed class InboxItem
             InboxItemState.Processing,
             InboxItemState.ProcessingInterrupted,
             InboxItemState.ConflictBlocked,
+            InboxItemState.RecoveryBlocked,
             InboxItemState.Failed,
             InboxItemState.SourceMissing);
         ClearStatusDetails();

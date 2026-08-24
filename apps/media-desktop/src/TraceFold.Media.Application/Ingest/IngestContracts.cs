@@ -7,17 +7,6 @@ using TraceFold.Media.Domain.Metadata;
 
 namespace TraceFold.Media.Application.Ingest;
 
-public enum ConflictKind
-{
-    Name,
-    RegisteredContent
-}
-
-public sealed record ConflictCheck(ConflictKind? Kind)
-{
-    public bool HasConflict => Kind.HasValue;
-}
-
 public enum IngestOutcome
 {
     Completed,
@@ -29,14 +18,161 @@ public enum IngestOutcome
     CleanupPending,
     InProgress,
     ShuttingDown,
-    Failed
+    Failed,
+    Skipped,
+    ConflictChanged
 }
 
 public sealed record IngestResult(
     IngestOutcome Outcome,
     Guid? OperationId,
     Guid? AssetId,
+    Guid? ConflictCaseId,
     string Message);
+
+public sealed record ConflictRevalidationResult(
+    bool IsValid,
+    string? ErrorCode,
+    IReadOnlyList<ConflictMatchRecord> CurrentMatches)
+{
+    public static ConflictRevalidationResult Valid(
+        IReadOnlyList<ConflictMatchRecord> matches) =>
+        new(true, null, matches);
+
+    public static ConflictRevalidationResult Invalid(string errorCode) =>
+        new(false, errorCode, []);
+}
+
+public enum IngestDisposition
+{
+    Create,
+    KeepBoth,
+    ReplaceRegistered,
+    ReplaceUnregistered
+}
+
+public sealed record IngestExecutionPlan
+{
+    private IngestExecutionPlan(
+        Guid? conflictCaseId,
+        IngestDisposition disposition,
+        string requestedTargetFilename,
+        Guid? replacementAssetId,
+        long? replacementMetadataVersion,
+        LibraryFileSnapshot? target)
+    {
+        ConflictCaseId = conflictCaseId;
+        Disposition = disposition;
+        RequestedTargetFilename = requestedTargetFilename;
+        ReplacementAssetId = replacementAssetId;
+        ReplacementMetadataVersion = replacementMetadataVersion;
+        Target = target;
+    }
+
+    public Guid? ConflictCaseId { get; }
+
+    public IngestDisposition Disposition { get; }
+
+    public string RequestedTargetFilename { get; }
+
+    public Guid? ReplacementAssetId { get; }
+
+    public long? ReplacementMetadataVersion { get; }
+
+    public LibraryFileSnapshot? Target { get; }
+
+    public static IngestExecutionPlan Create(string requestedTargetFilename) =>
+        new(
+            null,
+            IngestDisposition.Create,
+            RequireFilename(requestedTargetFilename),
+            null,
+            null,
+            null);
+
+    public static IngestExecutionPlan KeepBoth(
+        Guid conflictCaseId,
+        string requestedTargetFilename) =>
+        new(
+            RequireId(conflictCaseId),
+            IngestDisposition.KeepBoth,
+            RequireFilename(requestedTargetFilename),
+            null,
+            null,
+            null);
+
+    public static IngestExecutionPlan ReplaceRegistered(
+        Guid conflictCaseId,
+        Guid replacementAssetId,
+        long replacementMetadataVersion,
+        LibraryFileSnapshot target)
+    {
+        if (replacementMetadataVersion < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(replacementMetadataVersion));
+        }
+
+        LibraryFileSnapshot requiredTarget = RequireTarget(target);
+        return new IngestExecutionPlan(
+            RequireId(conflictCaseId),
+            IngestDisposition.ReplaceRegistered,
+            RequireFilename(requiredTarget.RelativePath),
+            RequireId(replacementAssetId),
+            replacementMetadataVersion,
+            requiredTarget);
+    }
+
+    public static IngestExecutionPlan ReplaceUnregistered(
+        Guid conflictCaseId,
+        LibraryFileSnapshot target)
+    {
+        LibraryFileSnapshot requiredTarget = RequireTarget(target);
+        return new IngestExecutionPlan(
+            RequireId(conflictCaseId),
+            IngestDisposition.ReplaceUnregistered,
+            RequireFilename(requiredTarget.RelativePath),
+            null,
+            null,
+            requiredTarget);
+    }
+
+    private static Guid RequireId(Guid value) =>
+        value == Guid.Empty
+            ? throw new ArgumentException("A persisted id is required.")
+            : value;
+
+    private static LibraryFileSnapshot RequireTarget(LibraryFileSnapshot? target) =>
+        target ?? throw new ArgumentException("A replacement target is required.");
+
+    private static string RequireFilename(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || Path.IsPathRooted(value)
+            || !StringComparer.Ordinal.Equals(Path.GetFileName(value), value)
+            || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new ArgumentException("A safe target filename is required.");
+        }
+
+        return value;
+    }
+}
+
+public interface IIngestExecutionService
+{
+    Task<IngestResult> ExecuteAsync(
+        IngestPreparation preparation,
+        IngestExecutionPlan plan,
+        LibraryFolders folders,
+        CancellationToken cancellationToken);
+
+    Task<IngestResult> ResumeAsync(
+        IngestOperationRecord operation,
+        LibraryFolders folders,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest executor does not support persisted-operation recovery.");
+}
 
 public sealed record RecoveryResult(bool Succeeded, string Message);
 
@@ -60,7 +196,8 @@ public sealed record IngestCandidate(
 public enum IngestCleanupKind
 {
     InboxSource,
-    ProcessingOutput
+    ProcessingOutput,
+    ReplacementBackup
 }
 
 public sealed record IngestCleanupFile(
@@ -169,6 +306,8 @@ public sealed record IngestOperationRecord(
     Guid Id,
     Guid InboxItemId,
     IngestOperationStage Stage,
+    IngestDisposition Disposition,
+    Guid? ConflictCaseId,
     string SourcePath,
     long SourceSize,
     DateTimeOffset SourceLastWriteTimeUtc,
@@ -176,7 +315,20 @@ public sealed record IngestOperationRecord(
     string TargetFilename,
     string? StagedPath,
     Guid? AssetId,
-    string? ErrorCode);
+    Guid? ReplacementAssetId,
+    long? ReplacementAssetMetadataVersion,
+    string? ExpectedTargetRelativePath,
+    long? ExpectedTargetSize,
+    DateTimeOffset? ExpectedTargetLastWriteTimeUtc,
+    string? ExpectedTargetSha256,
+    IngestBackupState BackupState,
+    string? BackupRelativePath,
+    long? BackupSize,
+    string? BackupSha256,
+    IngestOperationStage? RecoveryBlockedFromStage,
+    string? ErrorCode,
+    int CleanupAttemptCount,
+    DateTimeOffset? NextCleanupAttemptAtUtc);
 
 public interface IIngestStore
 {
@@ -188,24 +340,50 @@ public interface IIngestStore
         Guid inboxItemId,
         CancellationToken cancellationToken);
 
-    Task<ConflictCheck> CheckConflictsAsync(
-        string targetFilename,
-        string sourceSha256,
-        CancellationToken cancellationToken);
-
-    Task BlockConflictAsync(
-        Guid inboxItemId,
-        ConflictKind kind,
-        CancellationToken cancellationToken);
-
     Task<IngestOperationRecord> CreateAsync(
         IngestPreparation preparation,
+        IngestExecutionPlan plan,
         CancellationToken cancellationToken);
 
     Task MarkStagedAsync(
         Guid operationId,
         StagedFile staged,
         CancellationToken cancellationToken);
+
+    Task MarkBackupCreatedAsync(
+        Guid operationId,
+        ReplacementBackup backup,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support replacement backups.");
+
+    Task MarkBackupRestoredAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support replacement restore.");
+
+    Task MarkRecoveryBlockedAsync(
+        Guid operationId,
+        string errorCode,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support blocked recovery.");
+
+    Task<bool> ReplacementDatabaseMatchesExpectedAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(false);
+
+    Task<bool> OperationDatabaseHasNewVersionAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) => Task.FromResult(false);
+
+    Task ResumeRecoveryAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This ingest store does not support resuming blocked recovery.");
 
     Task AbandonForRetryAsync(
         Guid operationId,
@@ -272,6 +450,38 @@ public interface IIngestCleanupService
         CancellationToken cancellationToken);
 }
 
+public interface IIngestCleanupSignal
+{
+    void Signal();
+
+    Task WaitAsync(CancellationToken cancellationToken);
+}
+
+public interface IIngestCleanupWorkStore
+{
+    Task<IReadOnlyList<IngestOperationRecord>> LoadDueCleanupAsync(
+        DateTimeOffset now,
+        CancellationToken cancellationToken);
+
+    Task<DateTimeOffset?> FindNextCleanupDueAsync(
+        CancellationToken cancellationToken);
+
+    Task ScheduleCleanupRetryAsync(
+        Guid operationId,
+        string errorCode,
+        int failureCount,
+        DateTimeOffset? nextAttemptAtUtc,
+        CancellationToken cancellationToken);
+
+    Task ResetCleanupRetryAsync(
+        Guid operationId,
+        CancellationToken cancellationToken);
+
+    Task ReactivateCleanupForStartupAsync(
+        DateTimeOffset now,
+        CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
 public interface IIngestRecoveryService
 {
     Task ReconcileAsync(CancellationToken cancellationToken);
@@ -279,6 +489,11 @@ public interface IIngestRecoveryService
     Task<RecoveryResult> RetryAsync(
         Guid inboxItemId,
         CancellationToken cancellationToken);
+
+    Task<RecoveryResult> RetryCleanupAsync(
+        Guid inboxItemId,
+        CancellationToken cancellationToken) =>
+        RetryAsync(inboxItemId, cancellationToken);
 }
 
 public sealed class MediaOperationRejectedException : InvalidOperationException

@@ -14,5 +14,7 @@ public enum InboxAction
     StartProcessing = 128,
     CancelProcessing = 256,
     StopProcessing = 512,
-    RetryProcessing = 1024
+    RetryProcessing = 1024,
+    ResolveConflict = 2048,
+    RecheckRecovery = 4096
 }

@@ -138,6 +138,56 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         return names;
     }
 
+    public async Task<IReadOnlySet<string>> ReadColumnNamesAsync(string table)
+    {
+        string trustedTable = table switch
+        {
+            "ingest_operations" => "ingest_operations",
+            "ingest_cleanup_entries" => "ingest_cleanup_entries",
+            "conflict_cases" => "conflict_cases",
+            "conflict_matches" => "conflict_matches",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(table),
+                table,
+                "The test table is not approved for schema inspection.")
+        };
+
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({trustedTable})";
+        await using DbDataReader reader = await command.ExecuteReaderAsync();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        while (await reader.ReadAsync())
+        {
+            names.Add(reader.GetString(1));
+        }
+
+        return names;
+    }
+
+    public async Task<T> ScalarAsync<T>(string sql)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        object? value = await command.ExecuteScalarAsync();
+        if (value is null or DBNull)
+        {
+            throw new InvalidOperationException("The scalar query returned no value.");
+        }
+
+        if (value is T typed)
+        {
+            return typed;
+        }
+
+        return (T)Convert.ChangeType(value, typeof(T));
+    }
+
     public async Task ExecuteSqlAsync(params string[] statements)
     {
         await using var context = new MediaDesktopDbContext(_options);
@@ -250,7 +300,7 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
             FROM ingest_operations o
             JOIN inbox_items i ON i.id = o.inbox_item_id
             JOIN source_files s ON s.inbox_item_id = i.id AND s.is_primary = 1
-            LEFT JOIN media_assets a ON a.sha256 = o.source_sha256
+            LEFT JOIN media_assets a ON a.id = o.asset_id
             """;
         await using DbDataReader reader = await command.ExecuteReaderAsync();
         if (!await reader.ReadAsync())

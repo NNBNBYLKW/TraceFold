@@ -15,7 +15,8 @@ public sealed class IngestInputResolver(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(candidate);
-        if (candidate.State != InboxItemState.ReadyToTag
+        if (candidate.State is not
+                (InboxItemState.ReadyToTag or InboxItemState.ConflictBlocked)
             || candidate.Sources.Count == 0
             || candidate.Sources.Any(source => !source.IsPresent))
         {

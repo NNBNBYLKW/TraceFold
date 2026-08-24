@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Ingest;
@@ -33,6 +34,10 @@ public sealed class MediaDesktopDbContext(
 
     internal DbSet<IngestOperationRow> IngestOperations => Set<IngestOperationRow>();
 
+    internal DbSet<ConflictCaseRow> ConflictCases => Set<ConflictCaseRow>();
+
+    internal DbSet<ConflictMatchRow> ConflictMatches => Set<ConflictMatchRow>();
+
     internal DbSet<ProcessingPlanRow> ProcessingPlans => Set<ProcessingPlanRow>();
 
     internal DbSet<ProcessingPlanInputRow> ProcessingPlanInputs =>
@@ -58,6 +63,8 @@ public sealed class MediaDesktopDbContext(
         ConfigureMediaAssetAuthor(modelBuilder.Entity<MediaAssetAuthorRow>());
         ConfigureMediaAssetTag(modelBuilder.Entity<MediaAssetTagRow>());
         ConfigureIngestOperation(modelBuilder.Entity<IngestOperationRow>());
+        ConfigureConflictCase(modelBuilder.Entity<ConflictCaseRow>());
+        ConfigureConflictMatch(modelBuilder.Entity<ConflictMatchRow>());
         ConfigureProcessingPlan(modelBuilder.Entity<ProcessingPlanRow>());
         ConfigureProcessingPlanInput(modelBuilder.Entity<ProcessingPlanInputRow>());
         ConfigureProcessingJob(modelBuilder.Entity<ProcessingJobRow>());
@@ -194,7 +201,7 @@ public sealed class MediaDesktopDbContext(
         row.Property(item => item.DisplayName).HasMaxLength(1024);
         row.Property(item => item.Sha256).IsRequired().HasMaxLength(64);
         row.HasIndex(item => item.NormalizedRelativePath).IsUnique();
-        row.HasIndex(item => item.Sha256).IsUnique();
+        row.HasIndex(item => item.Sha256).IsUnique(false);
         row.HasOne(item => item.Series)
             .WithMany()
             .HasForeignKey(item => item.SeriesId)
@@ -241,18 +248,109 @@ public sealed class MediaDesktopDbContext(
                 value => value.ToString().ToLowerInvariant(),
                 value => Enum.Parse<IngestOperationStage>(value, true))
             .HasMaxLength(64);
+        row.Property(item => item.Disposition)
+            .HasConversion(
+                value => value.ToString().ToLowerInvariant(),
+                value => Enum.Parse<IngestDisposition>(value, true))
+            .HasMaxLength(64)
+            .HasDefaultValue(IngestDisposition.Create);
         row.Property(item => item.SourcePath).IsRequired().HasMaxLength(4096);
         row.Property(item => item.SourceSha256).IsRequired().HasMaxLength(64);
         row.Property(item => item.TargetFilename).IsRequired().HasMaxLength(1024);
         row.Property(item => item.StagedPath).HasMaxLength(4096);
+        row.Property(item => item.ExpectedTargetRelativePath).HasMaxLength(4096);
+        row.Property(item => item.ExpectedTargetSha256).HasMaxLength(64);
+        row.Property(item => item.BackupState)
+            .HasConversion(
+                value => value.ToString().ToLowerInvariant(),
+                value => Enum.Parse<IngestBackupState>(value, true))
+            .HasMaxLength(64)
+            .HasDefaultValue(IngestBackupState.NotRequired);
+        row.Property(item => item.BackupRelativePath).HasMaxLength(4096);
+        row.Property(item => item.BackupSha256).HasMaxLength(64);
+        row.Property(item => item.RecoveryBlockedFromStage)
+            .HasConversion(
+                value => value.HasValue
+                    ? value.Value.ToString().ToLowerInvariant()
+                    : null,
+                value => string.IsNullOrWhiteSpace(value)
+                    ? null
+                    : Enum.Parse<IngestOperationStage>(value, true))
+            .HasMaxLength(64);
         row.Property(item => item.TargetTemporaryPath).HasMaxLength(4096);
         row.Property(item => item.MetadataSnapshotJson).IsRequired();
         row.Property(item => item.ErrorCode).HasMaxLength(128);
+        row.Property(item => item.CleanupAttemptCount).HasDefaultValue(0);
         row.HasIndex(item => item.ActiveInboxItemId).IsUnique();
+        row.HasIndex(item => item.ConflictCaseId).IsUnique();
+        row.HasIndex(item => item.NextCleanupAttemptAtUtc);
         row.HasOne(item => item.InboxItem)
             .WithMany(item => item.IngestOperations)
             .HasForeignKey(item => item.InboxItemId)
             .OnDelete(DeleteBehavior.Restrict);
+        row.HasOne<MediaAssetRow>()
+            .WithMany()
+            .HasForeignKey(item => item.AssetId)
+            .OnDelete(DeleteBehavior.Restrict);
+        row.HasOne<MediaAssetRow>()
+            .WithMany()
+            .HasForeignKey(item => item.ReplacementAssetId)
+            .OnDelete(DeleteBehavior.Restrict);
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureConflictCase(EntityTypeBuilder<ConflictCaseRow> row)
+    {
+        row.ToTable("conflict_cases");
+        row.HasKey(item => item.Id);
+        row.Property(item => item.Status)
+            .HasConversion(
+                value => value.ToString().ToLowerInvariant(),
+                value => Enum.Parse<ConflictCaseStatus>(value, true))
+            .HasMaxLength(64);
+        row.Property(item => item.InputPath).IsRequired().HasMaxLength(4096);
+        row.Property(item => item.InputSha256).IsRequired().HasMaxLength(64);
+        row.Property(item => item.TargetFilename).IsRequired().HasMaxLength(1024);
+        row.Property(item => item.Resolution)
+            .HasConversion(
+                value => value.HasValue
+                    ? value.Value.ToString().ToLowerInvariant()
+                    : null,
+                value => string.IsNullOrWhiteSpace(value)
+                    ? null
+                    : Enum.Parse<ConflictResolution>(value, true))
+            .HasMaxLength(64);
+        row.Property(item => item.InvalidationReason).HasMaxLength(128);
+        row.HasIndex(item => item.ActiveInboxItemId).IsUnique();
+        row.HasIndex(item => item.InputSha256);
+        row.HasIndex(item => item.OperationId).IsUnique();
+        row.HasOne(item => item.InboxItem)
+            .WithMany()
+            .HasForeignKey(item => item.InboxItemId)
+            .OnDelete(DeleteBehavior.Restrict);
+        row.HasMany(item => item.Matches)
+            .WithOne(item => item.ConflictCase)
+            .HasForeignKey(item => item.ConflictCaseId)
+            .OnDelete(DeleteBehavior.Cascade);
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureConflictMatch(EntityTypeBuilder<ConflictMatchRow> row)
+    {
+        row.ToTable("conflict_matches");
+        row.HasKey(item => item.Id);
+        row.Property(item => item.Reason).HasConversion<int>();
+        row.Property(item => item.RelativePath).IsRequired().HasMaxLength(4096);
+        row.Property(item => item.ActualFilename).IsRequired().HasMaxLength(1024);
+        row.Property(item => item.DisplayName).HasMaxLength(1024);
+        row.Property(item => item.MediaKind)
+            .HasConversion(
+                value => value.ToString().ToLowerInvariant(),
+                value => Enum.Parse<MediaKind>(value, true))
+            .HasMaxLength(32);
+        row.Property(item => item.Sha256).IsRequired().HasMaxLength(64);
+        row.Property(item => item.MetadataSnapshotJson).IsRequired();
+        row.Property(item => item.TechnicalSnapshotJson).IsRequired();
         UseSnakeCaseColumns(row);
     }
 
@@ -335,6 +433,7 @@ public sealed class MediaDesktopDbContext(
         row.Property(item => item.CleanupKind).IsRequired().HasMaxLength(128);
         row.Property(item => item.ControlledPath).IsRequired().HasMaxLength(4096);
         row.Property(item => item.Sha256).IsRequired().HasMaxLength(64);
+        row.Property(item => item.LastErrorCode).HasMaxLength(128);
         row.HasIndex(item => new { item.OperationId, item.Ordinal }).IsUnique();
         row.HasOne(item => item.Operation)
             .WithMany(item => item.CleanupEntries)

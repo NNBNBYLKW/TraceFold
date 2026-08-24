@@ -11,6 +11,50 @@ public sealed record CommittedFile(
     long Size,
     string Sha256);
 
+public sealed record LibraryFileSnapshot(
+    string FullPath,
+    string RelativePath,
+    long Size,
+    DateTimeOffset LastWriteTimeUtc,
+    string Sha256);
+
+public sealed record ReplacementBackup(
+    string FullPath,
+    string RelativePath,
+    long Size,
+    string Sha256);
+
+public enum FileIdentityKind
+{
+    Absent,
+    ExpectedSource,
+    ExpectedStaged,
+    ExpectedOld,
+    ExpectedNew,
+    ExpectedBackup,
+    Unknown
+}
+
+public sealed record ObservedFileIdentity(
+    FileIdentityKind Kind,
+    string? FullPath,
+    long? Size,
+    string? Sha256)
+{
+    public bool MatchesExpected => Kind is
+        FileIdentityKind.ExpectedSource or
+        FileIdentityKind.ExpectedStaged or
+        FileIdentityKind.ExpectedOld or
+        FileIdentityKind.ExpectedNew or
+        FileIdentityKind.ExpectedBackup;
+}
+
+public sealed record IngestStorageEvidence(
+    ObservedFileIdentity Source,
+    ObservedFileIdentity Staged,
+    ObservedFileIdentity Target,
+    ObservedFileIdentity Backup);
+
 public enum SourceDeleteOutcome
 {
     Deleted,
@@ -50,6 +94,20 @@ public interface IFileHasher
 
 public interface IControlledMediaStorage
 {
+    Task<IngestStorageEvidence> InspectOperationAsync(
+        LibraryFolders folders,
+        IngestOperationRecord operation,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support ingest evidence inspection.");
+
+    Task<LibraryFileSnapshot?> InspectTargetAsync(
+        LibraryFolders folders,
+        string targetFilename,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support conflict inspection.");
+
     Task<bool> TargetExistsAsync(
         LibraryFolders folders,
         string targetFilename,
@@ -81,6 +139,48 @@ public interface IControlledMediaStorage
         string targetFilename,
         CancellationToken cancellationToken);
 
+    Task<CommittedFile> CommitUniqueAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        StagedFile staged,
+        string requestedFilename,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support unique conflict commits.");
+
+    Task<ReplacementBackup> BackupTargetAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        LibraryFileSnapshot expected,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement backups.");
+
+    Task<CommittedFile> CommitReplacementAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        StagedFile staged,
+        LibraryFileSnapshot expectedTarget,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement commits.");
+
+    Task RestoreBackupAsync(
+        Guid operationId,
+        LibraryFolders folders,
+        LibraryFileSnapshot target,
+        ReplacementBackup backup,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement restore.");
+
+    Task<SourceDeleteResult> DeleteBackupIfMatchesAsync(
+        LibraryFolders folders,
+        ReplacementBackup backup,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This storage adapter does not support replacement backup cleanup.");
+
     Task<SourceDeleteResult> DeleteSourceIfMatchesAsync(
         LibraryFolders folders,
         string sourcePath,
@@ -91,13 +191,25 @@ public interface IControlledMediaStorage
     Task<SourceDeleteResult> DeleteCleanupFileIfMatchesAsync(
         LibraryFolders folders,
         IngestCleanupFile cleanupFile,
-        CancellationToken cancellationToken) =>
-        DeleteSourceIfMatchesAsync(
-            folders,
-            cleanupFile.FullPath,
-            cleanupFile.Size,
-            cleanupFile.Sha256,
-            cancellationToken);
+        CancellationToken cancellationToken) => cleanupFile.Kind switch
+        {
+            IngestCleanupKind.ReplacementBackup => DeleteBackupIfMatchesAsync(
+                folders,
+                new ReplacementBackup(
+                    cleanupFile.FullPath,
+                    Path.GetRelativePath(
+                        folders.LibraryDirectory,
+                        cleanupFile.FullPath),
+                    cleanupFile.Size,
+                    cleanupFile.Sha256),
+                cancellationToken),
+            _ => DeleteSourceIfMatchesAsync(
+                folders,
+                cleanupFile.FullPath,
+                cleanupFile.Size,
+                cleanupFile.Sha256,
+                cancellationToken)
+        };
 
     Task<bool> VerifyCommittedAsync(
         LibraryFolders folders,
