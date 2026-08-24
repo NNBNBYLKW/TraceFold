@@ -27,6 +27,7 @@ public static class DependencyInjection
         services.AddSingleton<InboxQueryService>();
         services.AddSingleton<IInboxQueryService>(provider =>
             provider.GetRequiredService<InboxQueryService>());
+        services.AddSingleton<IInboxBatchSummaryService, InboxBatchSummaryService>();
         services.AddSingleton<IScanPreferencesService>(provider =>
             provider.GetRequiredService<ScanPreferencesService>());
         services.AddSingleton<MetadataEditorService>();
@@ -50,6 +51,7 @@ public static class DependencyInjection
             ProcessingExecutionController>();
         services.AddSingleton<ProcessingProgressBuffer>();
         services.AddSingleton<IProcessingCommandService, ProcessingCommandService>();
+        services.AddSingleton<IBatchProcessingService, BatchProcessingService>();
         services.AddSingleton<IProcessingInvalidationService,
             ProcessingInvalidationService>();
         services.AddSingleton<IProcessingJobExecutor, ProcessingJobExecutor>();
