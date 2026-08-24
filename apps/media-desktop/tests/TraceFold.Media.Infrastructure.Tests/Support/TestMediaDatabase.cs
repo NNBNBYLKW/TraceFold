@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Domain.Inbox;
+using TraceFold.Media.Domain.Metadata;
 using TraceFold.Media.Infrastructure.Persistence;
 
 namespace TraceFold.Media.Infrastructure.Tests.Support;
@@ -105,6 +106,142 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
             VALUES ({id}, {displayName}, {(Guid?)null}, {metadataVersion}, {now})
             """);
         return id;
+    }
+
+    public async Task<Guid[]> SeedEditableInboxItemsAsync(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        var ids = new Guid[count];
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-24T00:00:00Z");
+        await using var context = new MediaDesktopDbContext(_options);
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        for (int index = 0; index < count; index++)
+        {
+            Guid id = Guid.NewGuid();
+            ids[index] = id;
+            string filename = $"{id:N}.jpg";
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_items
+                    (id, state, media_kind, actual_filename, grouping_rule,
+                     required_capability, is_retryable, created_at_utc, updated_at_utc)
+                VALUES
+                    ({id}, {"readytotag"}, {"image"}, {filename}, {"direct"},
+                     {(string?)null}, {false}, {now}, {now})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO metadata_drafts
+                    (inbox_item_id, display_name, series_id, version, updated_at_utc)
+                VALUES ({id}, {(string?)null}, {(Guid?)null}, {0}, {now})
+                """);
+        }
+
+        await transaction.CommitAsync();
+        return ids;
+    }
+
+    public async Task<IReadOnlyList<long>> LoadMetadataVersionsAsync(
+        IReadOnlyList<Guid> inboxItemIds)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        var versions = new List<long>(inboxItemIds.Count);
+        foreach (Guid id in inboxItemIds)
+        {
+            await using DbCommand command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT version FROM metadata_drafts WHERE upper(inbox_item_id) = upper($id)";
+            DbParameter parameter = command.CreateParameter();
+            parameter.ParameterName = "$id";
+            parameter.Value = id.ToString();
+            command.Parameters.Add(parameter);
+            object? value = await command.ExecuteScalarAsync();
+            versions.Add(Convert.ToInt64(value));
+        }
+
+        return versions;
+    }
+
+    public async Task<Guid> SeedTaxonomyAsync(
+        TaxonomyKind kind,
+        string displayName)
+    {
+        Guid id = Guid.NewGuid();
+        TaxonomyName name = TaxonomyName.Create(displayName);
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-24T00:00:00Z");
+        await using var context = new MediaDesktopDbContext(_options);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO taxonomy_terms
+                (id, kind, display_name, normalized_name, created_at_utc, updated_at_utc)
+            VALUES
+                ({id}, {kind.ToString().ToLowerInvariant()}, {name.Display},
+                 {name.Normalized}, {now}, {now})
+            """);
+        return id;
+    }
+
+    public async Task<int> CountTaxonomyTermsAsync(
+        TaxonomyKind kind,
+        string displayName)
+    {
+        TaxonomyName name = TaxonomyName.Create(displayName);
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM taxonomy_terms
+            WHERE kind = $kind AND normalized_name = $normalized
+            """;
+        AddParameter(command, "$kind", kind.ToString().ToLowerInvariant());
+        AddParameter(command, "$normalized", name.Normalized);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    public async Task<int> CountDraftsWithAuthorAsync(string displayName)
+    {
+        TaxonomyName name = TaxonomyName.Create(displayName);
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(DISTINCT links.inbox_item_id)
+            FROM inbox_draft_authors links
+            JOIN taxonomy_terms terms ON terms.id = links.author_id
+            WHERE terms.kind = 'author' AND terms.normalized_name = $normalized
+            """;
+        AddParameter(command, "$normalized", name.Normalized);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    public async Task CreateMetadataUpdateFailureTriggerAsync(Guid inboxItemId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            CREATE TRIGGER test_fail_batch_metadata
+            BEFORE UPDATE ON metadata_drafts
+            WHEN upper(NEW.inbox_item_id) = upper('{inboxItemId:D}')
+            BEGIN
+                SELECT RAISE(ABORT, 'test batch failure');
+            END
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static void AddParameter(
+        DbCommand command,
+        string name,
+        object value)
+    {
+        DbParameter parameter = command.CreateParameter();
+        parameter.ParameterName = name;
+        parameter.Value = value;
+        command.Parameters.Add(parameter);
     }
 
     public async Task InsertStage1SettingsAsync(
