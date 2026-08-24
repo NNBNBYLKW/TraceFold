@@ -71,6 +71,7 @@ public static class DependencyInjection
         services.AddSingleton<IngestService>();
         services.AddSingleton<IIngestService>(provider =>
             provider.GetRequiredService<IngestService>());
+        services.AddSingleton<IBatchIngestService, BatchIngestService>();
         services.AddSingleton<IngestRecoveryService>();
         services.AddSingleton<IIngestRecoveryService>(provider =>
             provider.GetRequiredService<IngestRecoveryService>());
