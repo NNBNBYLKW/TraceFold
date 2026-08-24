@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TraceFold.Media.Application;
@@ -30,6 +31,14 @@ public sealed record Stage4PackageProbeResult(
     string? ToolPath,
     string? ErrorCode);
 
+public sealed record Stage4CrashProbeResult(
+    bool Succeeded,
+    bool CrashRecoveryPassed,
+    string FaultPoint,
+    Guid? AssetId,
+    string? TargetSha256,
+    string? ErrorCode);
+
 public static class Stage4PackageProbe
 {
     private const string PhotoFixture = "photo.jpg";
@@ -44,15 +53,7 @@ public static class Stage4PackageProbe
     {
         ArgumentNullException.ThrowIfNull(supplied);
         Stage4PackageProbeOptionResult validation =
-            Stage4PackageProbeOptions.Parse(
-            [
-                Stage4PackageProbeOptions.RootArgument,
-                supplied.Root,
-                Stage4PackageProbeOptions.TokenArgument,
-                supplied.TokenText,
-                Stage4PackageProbeOptions.ModeArgument,
-                supplied.Mode
-            ]);
+            Stage4PackageProbeOptions.Parse(supplied.ToArguments());
         if (validation.State != Stage4PackageProbeOptionState.Ready
             || validation.Options is null)
         {
@@ -60,6 +61,26 @@ public static class Stage4PackageProbe
         }
 
         Stage4PackageProbeOptions options = validation.Options;
+        if (StringComparer.Ordinal.Equals(
+                options.Mode,
+                Stage4PackageProbeOptions.CrashSeedMode))
+        {
+            return await RunCrashSeedAsync(
+                options,
+                mediaToolRootOverride,
+                cancellationToken);
+        }
+
+        if (StringComparer.Ordinal.Equals(
+                options.Mode,
+                Stage4PackageProbeOptions.CrashResumeMode))
+        {
+            return await RunCrashResumeAsync(
+                options,
+                mediaToolRootOverride,
+                cancellationToken);
+        }
+
         string data = Path.Combine(options.Root, "data");
         string inbox = Path.Combine(options.Root, "inbox");
         string library = Path.Combine(options.Root, "library");
@@ -349,16 +370,329 @@ public static class Stage4PackageProbe
         }
     }
 
+    private static async Task<int> RunCrashSeedAsync(
+        Stage4PackageProbeOptions options,
+        string? mediaToolRootOverride,
+        CancellationToken cancellationToken)
+    {
+        IngestFaultPoint faultPoint = options.FaultPoint
+            ?? throw new InvalidOperationException(
+                "A diagnostic crash seed requires a fault point.");
+        string data = Path.Combine(options.Root, "data");
+        string inbox = Path.Combine(options.Root, "inbox");
+        string library = Path.Combine(options.Root, "library");
+        string work = Path.Combine(options.Root, "work");
+        Directory.CreateDirectory(data);
+        Directory.CreateDirectory(inbox);
+        Directory.CreateDirectory(library);
+        Directory.CreateDirectory(work);
+        string[] ownedDirectories = [data, inbox, library, work];
+        ValidateOwnedProbeTree(options, ownedDirectories);
+
+        string fixtures = Path.Combine(
+            options.Root,
+            Stage4PackageProbeOptions.FixturesDirectoryName);
+        string manifestPath = Path.Combine(
+            options.Root,
+            Stage4PackageProbeOptions.CrashManifestFilename);
+        var clock = new ProbeTimeProvider(
+            DateTimeOffset.Parse("2026-08-24T13:00:00Z"));
+        IHost? host = null;
+        try
+        {
+            host = BuildHost(data, mediaToolRootOverride, clock);
+            await StartHostAsync(
+                host,
+                new LibraryFolders(inbox, library, work),
+                saveFolders: true,
+                cancellationToken);
+            Guid assetId = await SeedAssetAsync(
+                host,
+                fixtures,
+                PhotoFixture,
+                inbox,
+                "registered.jpg",
+                clock,
+                cancellationToken);
+            string target = Path.Combine(library, "registered.jpg");
+            string originalHash = await FileSha256Async(
+                target,
+                cancellationToken);
+
+            await StopHostAsync(host);
+            host.Dispose();
+            host = null;
+
+            string source = Path.Combine(inbox, "registered.jpg");
+            File.Copy(Path.Combine(fixtures, PhotoFixture), source);
+            await File.AppendAllTextAsync(
+                source,
+                options.TokenText,
+                cancellationToken);
+            string incomingHash = await FileSha256Async(
+                source,
+                cancellationToken);
+            Stage4CrashProbeManifest manifest =
+                Stage4CrashProbeManifest.Create(
+                    options.TokenText,
+                    faultPoint,
+                    assetId,
+                    "registered.jpg",
+                    originalHash,
+                    incomingHash);
+            manifest.WriteTo(manifestPath);
+
+            var diagnostic = new DiagnosticIngestFaultInjector(
+                faultPoint,
+                manifest,
+                manifestPath);
+            host = BuildHost(
+                data,
+                mediaToolRootOverride,
+                clock,
+                diagnostic);
+            await StartHostAsync(
+                host,
+                new LibraryFolders(inbox, library, work),
+                saveFolders: false,
+                cancellationToken);
+            await ObserveAsync(host, clock, cancellationToken);
+            InboxCardDto card = await FindCardAsync(
+                host,
+                "registered.jpg",
+                cancellationToken);
+            IngestResult blocked = await host.Services
+                .GetRequiredService<IIngestService>()
+                .IngestAsync(card.Id, cancellationToken);
+            _ = await ResolveAsync(
+                host,
+                blocked,
+                ConflictResolution.Replace,
+                match => match.AssetId == assetId,
+                cancellationToken);
+
+            await WriteCrashResultAsync(
+                options,
+                new Stage4CrashProbeResult(
+                    false,
+                    false,
+                    faultPoint.ToString(),
+                    assetId,
+                    null,
+                    "probe.diagnostic_crash_not_reached"),
+                cancellationToken);
+            return 1;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return 1;
+        }
+        finally
+        {
+            if (host is not null)
+            {
+                await StopHostAsync(host);
+                host.Dispose();
+            }
+        }
+    }
+
+    private static async Task<int> RunCrashResumeAsync(
+        Stage4PackageProbeOptions options,
+        string? mediaToolRootOverride,
+        CancellationToken cancellationToken)
+    {
+        Stage4CrashProbeManifest manifest = options.CrashManifest
+            ?? throw new InvalidOperationException(
+                "A diagnostic crash resume requires a persisted manifest.");
+        string data = Path.Combine(options.Root, "data");
+        string inbox = Path.Combine(options.Root, "inbox");
+        string library = Path.Combine(options.Root, "library");
+        string work = Path.Combine(options.Root, "work");
+        var clock = new ProbeTimeProvider(
+            DateTimeOffset.Parse("2026-08-24T13:30:00Z"));
+        IHost? host = null;
+        try
+        {
+            host = BuildHost(data, mediaToolRootOverride, clock);
+            await StartHostAsync(
+                host,
+                new LibraryFolders(inbox, library, work),
+                saveFolders: false,
+                cancellationToken);
+
+            ILibraryQueryService libraryQuery = host.Services
+                .GetRequiredService<ILibraryQueryService>();
+            IReadOnlyList<LibraryAssetDto> assets = await libraryQuery
+                .SearchAsync(null, cancellationToken);
+            LibraryAssetDto asset = assets.Single(candidate =>
+                candidate.Id == manifest.AssetId
+                && candidate.ActualFilename.Equals(
+                    manifest.TargetFilename,
+                    StringComparison.OrdinalIgnoreCase));
+            LibraryAssetDetailsDto details = (await libraryQuery.GetDetailsAsync(
+                asset.Id,
+                cancellationToken))!;
+            string target = Path.Combine(library, manifest.TargetFilename);
+            string targetHash = await FileSha256Async(target, cancellationToken);
+            IReadOnlyList<IngestOperationRecord> incomplete = await host.Services
+                .GetRequiredService<IIngestStore>()
+                .LoadIncompleteAsync(cancellationToken);
+            string[] formalFiles = Directory.GetFiles(
+                    library,
+                    "*",
+                    SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .Where(name => name is not null)
+                .Cast<string>()
+                .ToArray();
+
+            Require(
+                assets.Count == 1
+                && details.Card.Id == manifest.AssetId
+                && StringComparer.Ordinal.Equals(
+                    details.Sha256,
+                    manifest.IncomingSha256)
+                && StringComparer.Ordinal.Equals(
+                    targetHash,
+                    manifest.IncomingSha256)
+                && formalFiles.SequenceEqual(
+                    [manifest.TargetFilename],
+                    StringComparer.OrdinalIgnoreCase)
+                && !File.Exists(Path.Combine(inbox, manifest.TargetFilename))
+                && incomplete.All(operation =>
+                    operation.Id != manifest.OperationId)
+                && InternalStorageIsClean(library),
+                "probe.crash_recovery_invalid");
+
+            await WriteCrashResultAsync(
+                options,
+                new Stage4CrashProbeResult(
+                    true,
+                    true,
+                    manifest.FaultPoint.ToString(),
+                    asset.Id,
+                    targetHash,
+                    null),
+                cancellationToken);
+            return 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ProbeFailureException error)
+        {
+            await TryWriteCrashFailureAsync(options, manifest, error.ErrorCode);
+            return 1;
+        }
+        catch
+        {
+            await TryWriteCrashFailureAsync(
+                options,
+                manifest,
+                "probe.crash_resume_unexpected_failure");
+            return 1;
+        }
+        finally
+        {
+            if (host is not null)
+            {
+                await StopHostAsync(host);
+                host.Dispose();
+            }
+        }
+    }
+
+    private static async Task TryWriteCrashFailureAsync(
+        Stage4PackageProbeOptions options,
+        Stage4CrashProbeManifest manifest,
+        string errorCode)
+    {
+        try
+        {
+            await WriteCrashResultAsync(
+                options,
+                new Stage4CrashProbeResult(
+                    false,
+                    false,
+                    manifest.FaultPoint.ToString(),
+                    manifest.AssetId,
+                    null,
+                    errorCode),
+                CancellationToken.None);
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task WriteCrashResultAsync(
+        Stage4PackageProbeOptions options,
+        Stage4CrashProbeResult result,
+        CancellationToken cancellationToken)
+    {
+        ValidateRootOwnership(options);
+        string manifestPath = Path.Combine(
+            options.Root,
+            Stage4PackageProbeOptions.CrashManifestFilename);
+        if (Stage4CrashProbeManifest.ReadValidated(
+                manifestPath,
+                options.TokenText) is null)
+        {
+            throw new IOException("The diagnostic crash manifest changed.");
+        }
+
+        string resultPath = Path.Combine(
+            options.Root,
+            Stage4PackageProbeOptions.ResultFilename);
+        await using var output = new FileStream(
+            resultPath,
+            new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous | FileOptions.WriteThrough
+            });
+        await JsonSerializer.SerializeAsync(
+            output,
+            result,
+            new JsonSerializerOptions { WriteIndented = true },
+            cancellationToken);
+        await output.FlushAsync(cancellationToken);
+        output.Flush(flushToDisk: true);
+    }
+
+    private static async Task<string> FileSha256Async(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        await using FileStream input = File.OpenRead(path);
+        byte[] hash = await SHA256.HashDataAsync(input, cancellationToken);
+        return Convert.ToHexString(hash);
+    }
+
     private static IHost BuildHost(
         string dataRoot,
         string? mediaToolRootOverride,
-        ProbeTimeProvider clock) =>
+        ProbeTimeProvider clock,
+        IIngestFaultInjector? faultInjector = null) =>
         Host.CreateDefaultBuilder([])
             .ConfigureServices(services =>
             {
                 services.AddMediaApplication();
                 services.AddMediaInfrastructure(dataRoot, mediaToolRootOverride);
                 services.AddSingleton<TimeProvider>(clock);
+                if (faultInjector is not null)
+                {
+                    services.AddSingleton(faultInjector);
+                    services.AddSingleton<IIngestFaultInjector>(faultInjector);
+                }
             })
             .Build();
 

@@ -59,13 +59,13 @@ public sealed class IngestCleanupService(
             {
                 throw;
             }
-            catch (Exception error)
+            catch (Exception)
             {
                 logger?.LogError(
-                    error,
-                    "IngestCleanupEntryFailed OperationId={OperationId} EntryId={EntryId}",
+                    "IngestCleanupEntryFailed OperationId={OperationId} EntryId={EntryId} ErrorCode={ErrorCode}",
                     operation.Id,
-                    entry.Id);
+                    entry.Id,
+                    "ingest.cleanup_failed");
                 return await PendingAsync(
                     operation,
                     "ingest.cleanup_failed",
@@ -106,12 +106,12 @@ public sealed class IngestCleanupService(
         {
             throw;
         }
-        catch (Exception error)
+        catch (Exception)
         {
             logger?.LogError(
-                error,
-                "IngestTemporaryCleanupFailed OperationId={OperationId}",
-                operation.Id);
+                "IngestTemporaryCleanupFailed OperationId={OperationId} ErrorCode={ErrorCode}",
+                operation.Id,
+                "ingest.cleanup_failed");
             return await PendingAsync(
                 operation,
                 "ingest.cleanup_failed",

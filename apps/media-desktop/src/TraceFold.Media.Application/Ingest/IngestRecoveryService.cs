@@ -52,12 +52,13 @@ public sealed class IngestRecoveryService(
             {
                 throw;
             }
-            catch (Exception error)
+            catch (Exception)
             {
                 logger.LogError(
-                    error,
-                    "IngestRecoveryFailed OperationId={OperationId}",
-                    operation.Id);
+                    "IngestRecoveryFailed OperationId={OperationId} Stage={Stage} ErrorCode={ErrorCode}",
+                    operation.Id,
+                    operation.Stage,
+                    "recovery.unexpected_failure");
                 IngestOperationRecord? current = await store.FindActiveAsync(
                     operation.InboxItemId,
                     cancellationToken);

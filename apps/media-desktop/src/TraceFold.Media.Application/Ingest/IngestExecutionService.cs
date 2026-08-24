@@ -194,12 +194,12 @@ public sealed class IngestExecutionService(
             {
                 throw;
             }
-            catch (Exception error)
+            catch (Exception)
             {
                 logger.LogError(
-                    error,
-                    "IngestReplacementBackupFailed OperationId={OperationId}",
-                    operation.Id);
+                    "IngestReplacementBackupFailed OperationId={OperationId} ErrorCode={ErrorCode}",
+                    operation.Id,
+                    "recovery.backup_identity_ambiguous");
                 await store.MarkRecoveryBlockedAsync(
                     operation.Id,
                     "recovery.backup_identity_ambiguous",
@@ -313,9 +313,9 @@ public sealed class IngestExecutionService(
         catch (Exception error)
         {
             logger.LogError(
-                error,
-                "IngestDatabaseCommitFailed OperationId={OperationId}",
-                operation.Id);
+                "IngestDatabaseCommitFailed OperationId={OperationId} ErrorCode={ErrorCode}",
+                operation.Id,
+                "ingest.database_commit_failed");
             if (backup is not null && plan.Target is not null)
             {
                 bool canRestore;
@@ -330,9 +330,9 @@ public sealed class IngestExecutionService(
                     when (evidenceError is not OperationCanceledException)
                 {
                     logger.LogError(
-                        evidenceError,
-                        "IngestReplacementDatabaseEvidenceFailed OperationId={OperationId}",
-                        operation.Id);
+                        "IngestReplacementDatabaseEvidenceFailed OperationId={OperationId} ErrorCode={ErrorCode}",
+                        operation.Id,
+                        "recovery.database_identity_ambiguous");
                     canRestore = false;
                 }
 
@@ -430,8 +430,8 @@ public sealed class IngestExecutionService(
         Exception originalError,
         CancellationToken cancellationToken)
     {
+        _ = originalError;
         logger.LogError(
-            originalError,
             "IngestReplacementFailed OperationId={OperationId} ErrorCode={ErrorCode}",
             operation.Id,
             failureCode);
@@ -456,12 +456,12 @@ public sealed class IngestExecutionService(
         {
             throw;
         }
-        catch (Exception restoreError)
+        catch (Exception)
         {
             logger.LogError(
-                restoreError,
-                "IngestReplacementRestoreBlocked OperationId={OperationId}",
-                operation.Id);
+                "IngestReplacementRestoreBlocked OperationId={OperationId} ErrorCode={ErrorCode}",
+                operation.Id,
+                "recovery.target_identity_ambiguous");
             await store.MarkRecoveryBlockedAsync(
                 operation.Id,
                 "recovery.target_identity_ambiguous",

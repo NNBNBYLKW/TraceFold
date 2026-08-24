@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Desktop.Diagnostics;
 using Xunit;
 
@@ -36,6 +37,92 @@ public sealed class Stage4PackageProbeOptionsTests
         Assert.Equal(root.Path, ordered.Options!.Root);
         Assert.Equal(root.Token, ordered.Options.Token);
         Assert.Equal(Stage4PackageProbeOptions.ConflictMode, ordered.Options.Mode);
+    }
+
+    [Fact]
+    public void Conflict_mode_rejects_a_fault_argument()
+    {
+        using ProbeRoot root = ProbeRoot.Create();
+
+        Stage4PackageProbeOptionResult result = Parse(
+            root.Path,
+            root.TokenText,
+            Stage4PackageProbeOptions.ConflictMode,
+            nameof(IngestFaultPoint.AfterBackupCreated));
+
+        Assert.Equal(Stage4PackageProbeOptionState.Invalid, result.State);
+    }
+
+    [Theory]
+    [InlineData(nameof(IngestFaultPoint.AfterBackupCreated))]
+    [InlineData(nameof(IngestFaultPoint.AfterFileCommitted))]
+    public void Crash_seed_requires_a_known_fault_point(string fault)
+    {
+        using ProbeRoot root = ProbeRoot.Create();
+
+        Stage4PackageProbeOptionResult result = Parse(
+            root.Path,
+            root.TokenText,
+            Stage4PackageProbeOptions.CrashSeedMode,
+            fault);
+
+        Assert.Equal(Stage4PackageProbeOptionState.Ready, result.State);
+        Assert.Equal(Enum.Parse<IngestFaultPoint>(fault), result.Options!.FaultPoint);
+    }
+
+    [Fact]
+    public void Crash_seed_rejects_missing_or_unknown_fault_point()
+    {
+        using ProbeRoot missingRoot = ProbeRoot.Create();
+        using ProbeRoot unknownRoot = ProbeRoot.Create();
+
+        Stage4PackageProbeOptionResult missing = Parse(
+            missingRoot.Path,
+            missingRoot.TokenText,
+            Stage4PackageProbeOptions.CrashSeedMode);
+        Stage4PackageProbeOptionResult unknown = Parse(
+            unknownRoot.Path,
+            unknownRoot.TokenText,
+            Stage4PackageProbeOptions.CrashSeedMode,
+            "AfterUnknownMutation");
+
+        Assert.Equal(Stage4PackageProbeOptionState.Invalid, missing.State);
+        Assert.Equal(Stage4PackageProbeOptionState.Invalid, unknown.State);
+    }
+
+    [Fact]
+    public void Crash_resume_requires_unchanged_manifest_and_rejects_fault_argument()
+    {
+        using ProbeRoot validRoot = ProbeRoot.Create();
+        validRoot.PrepareCrashResume(IngestFaultPoint.AfterBackupCreated);
+        using ProbeRoot faultRoot = ProbeRoot.Create();
+        faultRoot.PrepareCrashResume(IngestFaultPoint.AfterBackupCreated);
+        using ProbeRoot changedRoot = ProbeRoot.Create();
+        changedRoot.PrepareCrashResume(IngestFaultPoint.AfterFileCommitted);
+        File.AppendAllText(
+            Path.Combine(
+                changedRoot.Path,
+                Stage4PackageProbeOptions.CrashManifestFilename),
+            "changed");
+
+        Stage4PackageProbeOptionResult valid = Parse(
+            validRoot.Path,
+            validRoot.TokenText,
+            Stage4PackageProbeOptions.CrashResumeMode);
+        Stage4PackageProbeOptionResult withFault = Parse(
+            faultRoot.Path,
+            faultRoot.TokenText,
+            Stage4PackageProbeOptions.CrashResumeMode,
+            nameof(IngestFaultPoint.AfterBackupCreated));
+        Stage4PackageProbeOptionResult changed = Parse(
+            changedRoot.Path,
+            changedRoot.TokenText,
+            Stage4PackageProbeOptions.CrashResumeMode);
+
+        Assert.Equal(Stage4PackageProbeOptionState.Ready, valid.State);
+        Assert.Equal(IngestFaultPoint.AfterBackupCreated, valid.Options!.FaultPoint);
+        Assert.Equal(Stage4PackageProbeOptionState.Invalid, withFault.State);
+        Assert.Equal(Stage4PackageProbeOptionState.Invalid, changed.State);
     }
 
     [Fact]
@@ -240,16 +327,27 @@ public sealed class Stage4PackageProbeOptionsTests
 
     private static Stage4PackageProbeOptionResult Parse(
         string root,
-        string token) =>
-        Stage4PackageProbeOptions.Parse(
-        [
+        string token,
+        string mode = Stage4PackageProbeOptions.ConflictMode,
+        string? fault = null)
+    {
+        var arguments = new List<string>
+        {
             Stage4PackageProbeOptions.RootArgument,
             root,
             Stage4PackageProbeOptions.TokenArgument,
             token,
             Stage4PackageProbeOptions.ModeArgument,
-            Stage4PackageProbeOptions.ConflictMode
-        ]);
+            mode
+        };
+        if (fault is not null)
+        {
+            arguments.Add(Stage4PackageProbeOptions.FaultArgument);
+            arguments.Add(fault);
+        }
+
+        return Stage4PackageProbeOptions.Parse(arguments);
+    }
 
     private static void AssertInternalStorageClean(string library)
     {
@@ -305,6 +403,19 @@ public sealed class Stage4PackageProbeOptionsTests
                 System.IO.Path.GetFullPath(path),
                 token,
                 tokenText);
+        }
+
+        public void PrepareCrashResume(IngestFaultPoint point)
+        {
+            foreach (string name in new[] { "data", "inbox", "library", "work" })
+            {
+                Directory.CreateDirectory(System.IO.Path.Combine(Path, name));
+            }
+
+            Stage4CrashProbeManifest.CreateForTest(TokenText, point).WriteTo(
+                System.IO.Path.Combine(
+                    Path,
+                    Stage4PackageProbeOptions.CrashManifestFilename));
         }
 
         public void Dispose()

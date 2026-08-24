@@ -9,9 +9,6 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($PackageDirectory)) {
     $PackageDirectory = Join-Path $repoRoot "dist\TraceFold-MediaDesktop-Stage$StageCheckpoint-win-x64"
 }
-if ($StageCheckpoint -ne '4A') {
-    throw 'Stage 4B package smoke is enabled after the recovery checkpoint is implemented.'
-}
 $packageRoot = [IO.Path]::GetFullPath($PackageDirectory)
 $exePath = [IO.Path]::GetFullPath((Join-Path $packageRoot 'TraceFold.Media.exe'))
 $packageToolRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'tools\ffmpeg'))
@@ -47,6 +44,7 @@ $probeToken = [Guid]::NewGuid().ToString('D')
 $probeName = "tracefold-media-desktop-stage4-probe-$([Guid]::NewGuid().ToString('N'))"
 $probeRoot = [IO.Path]::GetFullPath((Join-Path $tempBase $probeName))
 $probeMarker = Join-Path $probeRoot 'probe-owner.txt'
+$crashProbeRoots = [Collections.Generic.List[object]]::new()
 
 function Get-TrimmedFullPath {
     param([Parameter(Mandatory)][string] $Path)
@@ -127,6 +125,96 @@ function Assert-NoReparseTree {
                 $pending.Push($entry)
             }
         }
+    }
+}
+
+function Invoke-CrashRecoveryProbe {
+    param([Parameter(Mandatory)][string] $FaultPoint)
+
+    $token = [Guid]::NewGuid().ToString('D')
+    $name = "tracefold-media-desktop-stage4-probe-$([Guid]::NewGuid().ToString('N'))"
+    $root = [IO.Path]::GetFullPath((Join-Path $tempBase $name))
+    $marker = Join-Path $root 'probe-owner.txt'
+    New-Item -ItemType Directory -Path $root | Out-Null
+    [IO.File]::WriteAllText($marker, $token)
+    $fixtures = Join-Path $root 'fixtures'
+    New-Item -ItemType Directory -Path $fixtures | Out-Null
+    foreach ($fixtureName in @('paired.mp4', 'paired.m4a', 'photo.jpg')) {
+        Copy-Item `
+            -LiteralPath (Join-Path $fixtureSource $fixtureName) `
+            -Destination $fixtures
+    }
+    $crashProbeRoots.Add([pscustomobject]@{
+        Root = $root
+        Name = $name
+        Marker = $marker
+        Token = $token
+    })
+
+    $seedArguments = @(
+        '--stage4-package-probe-root',
+        ('"{0}"' -f $root),
+        '--stage4-package-probe-token',
+        $token,
+        '--stage4-package-probe-mode',
+        'crash-seed',
+        '--stage4-package-probe-fault',
+        $FaultPoint)
+    $seed = Start-Process `
+        -FilePath $exePath `
+        -ArgumentList $seedArguments `
+        -PassThru `
+        -WindowStyle Hidden
+    if (-not $seed.WaitForExit(60000)) {
+        Stop-Process -Id $seed.Id -Force -ErrorAction SilentlyContinue
+        throw "Stage 4B crash seed timed out: $FaultPoint"
+    }
+    if ($seed.ExitCode -eq 0) {
+        throw "Stage 4B crash seed did not terminate the process: $FaultPoint"
+    }
+    $manifestPath = Join-Path $root 'stage4-crash-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Stage 4B crash manifest is missing: $FaultPoint"
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ([string]$manifest.OwnerToken -ne $token -or
+        [string]$manifest.FaultPoint -ne $FaultPoint -or
+        [string]$manifest.ReachedFaultPoint -ne $FaultPoint -or
+        [string]::IsNullOrWhiteSpace([string]$manifest.OperationId)) {
+        throw "Stage 4B crash manifest is incomplete: $FaultPoint"
+    }
+
+    $resumeArguments = @(
+        '--stage4-package-probe-root',
+        ('"{0}"' -f $root),
+        '--stage4-package-probe-token',
+        $token,
+        '--stage4-package-probe-mode',
+        'crash-resume')
+    $resume = Start-Process `
+        -FilePath $exePath `
+        -ArgumentList $resumeArguments `
+        -PassThru `
+        -WindowStyle Hidden
+    if (-not $resume.WaitForExit(60000)) {
+        Stop-Process -Id $resume.Id -Force -ErrorAction SilentlyContinue
+        throw "Stage 4B crash resume timed out: $FaultPoint"
+    }
+    if ($resume.ExitCode -ne 0) {
+        throw "Stage 4B crash resume failed with exit code $($resume.ExitCode): $FaultPoint"
+    }
+
+    $resultPath = Join-Path $root 'stage4-probe-result.json'
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        throw "Stage 4B crash result is missing: $FaultPoint"
+    }
+    $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    if (-not [bool]$result.Succeeded -or
+        -not [bool]$result.CrashRecoveryPassed -or
+        [string]$result.FaultPoint -ne $FaultPoint -or
+        [string]::IsNullOrWhiteSpace([string]$result.AssetId) -or
+        [string]$result.TargetSha256 -notmatch '^[0-9A-F]{64}$') {
+        throw "Stage 4B crash recovery evidence is invalid: $FaultPoint"
     }
 }
 
@@ -257,6 +345,11 @@ try {
         }
     }
 
+    if ($StageCheckpoint -eq '4B') {
+        Invoke-CrashRecoveryProbe -FaultPoint 'AfterBackupCreated'
+        Invoke-CrashRecoveryProbe -FaultPoint 'AfterFileCommitted'
+    }
+
     $packageProcesses = @(Get-PackageProcesses)
     if ($packageProcesses.Count -ne 1 -or $primary.Id -notin $packageProcesses.Id) {
         throw 'The package probe interfered with the running primary instance.'
@@ -295,6 +388,9 @@ try {
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
     Write-Output 'PASS: Stage 4A registered replace, Keep Both, unmanaged replace, and reopen flows verified'
     Write-Output 'PASS: Stage 4A package-local FFmpeg processing and clean storage verified'
+    if ($StageCheckpoint -eq '4B') {
+        Write-Output 'PASS: Stage 4B process-termination recovery after backup and file commit verified'
+    }
 }
 finally {
     @(Get-PackageFfmpegProcesses) |
@@ -331,6 +427,17 @@ finally {
             throw 'Probe cleanup ownership marker is missing or changed.'
         }
         Remove-Item -LiteralPath $probeRoot -Recurse -Force
+    }
+    foreach ($owned in $crashProbeRoots) {
+        Assert-DirectTempChild -Path $owned.Root -ExpectedName $owned.Name
+        if (Test-Path -LiteralPath $owned.Root) {
+            Assert-NoReparseTree -Path $owned.Root
+            if (-not (Test-Path -LiteralPath $owned.Marker -PathType Leaf) -or
+                [IO.File]::ReadAllText($owned.Marker) -ne $owned.Token) {
+                throw 'Crash probe cleanup ownership marker is missing or changed.'
+            }
+            Remove-Item -LiteralPath $owned.Root -Recurse -Force
+        }
     }
     Assert-DirectTempChild -Path $tempRoot -ExpectedName $smokeName
     if (Test-Path -LiteralPath $tempRoot) {
