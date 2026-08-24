@@ -47,6 +47,8 @@ public static class DependencyInjection
             provider.GetRequiredService<EfIngestStore>());
         services.AddSingleton<IIngestCleanupWorkStore>(provider =>
             provider.GetRequiredService<EfIngestStore>());
+        services.AddSingleton<IRecoveryLocationResolver,
+            EfRecoveryLocationResolver>();
         services.AddSingleton<IConflictCaseStore, EfConflictCaseStore>();
         services.AddSingleton<IProcessingStore, EfProcessingStore>();
         services.AddSingleton<EfTaxonomyStore>();

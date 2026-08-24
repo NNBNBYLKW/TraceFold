@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Domain.Ingest;
@@ -10,7 +11,8 @@ public sealed class IngestExecutionService(
     IControlledMediaStorage storage,
     IIngestCleanupService cleanup,
     IIngestFaultInjector faultInjector,
-    ILogger<IngestExecutionService> logger) : IIngestExecutionService
+    ILogger<IngestExecutionService> logger,
+    IInboxActivityNotifier? activity = null) : IIngestExecutionService
 {
     private readonly SemaphoreSlim commitGate = new(1, 1);
 
@@ -35,6 +37,7 @@ public sealed class IngestExecutionService(
         finally
         {
             commitGate.Release();
+            activity?.Publish(InboxActivityKind.ItemChanged);
         }
     }
 
@@ -65,6 +68,7 @@ public sealed class IngestExecutionService(
         finally
         {
             commitGate.Release();
+            activity?.Publish(InboxActivityKind.ItemChanged);
         }
     }
 

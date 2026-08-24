@@ -46,6 +46,8 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<TaxonomyViewModel>();
                 services.AddSingleton<IProcessStarter, WindowsProcessStarter>();
                 services.AddSingleton<IAssetRevealService, WindowsAssetRevealService>();
+                services.AddSingleton<IRecoveryRevealService,
+                    WindowsRecoveryRevealService>();
                 services.AddSingleton<InboxPage>();
                 services.AddSingleton<LibraryPage>();
                 services.AddSingleton<TaxonomyPage>();

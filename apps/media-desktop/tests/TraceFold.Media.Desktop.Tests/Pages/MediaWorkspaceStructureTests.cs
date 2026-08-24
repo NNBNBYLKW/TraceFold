@@ -36,6 +36,10 @@ public sealed class MediaWorkspaceStructureTests
             "InboxStopProcessingButton",
             "InboxRetryProcessingButton",
             "ResolveInboxConflictButton",
+            "RecheckIngestRecoveryButton",
+            "RetryIngestCleanupButton",
+            "OpenRecoveryLocationButton",
+            "InboxRecoveryStatus",
             "InboxProcessingProgress",
             "InboxProcessingStep"
         })

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Domain.Ingest;
@@ -13,7 +14,8 @@ public sealed class IngestRecoveryService(
     ILogger<IngestRecoveryService> logger,
     IIngestCleanupService? cleanup = null,
     IIngestCleanupWorkStore? cleanupWorkStore = null,
-    IIngestCleanupSignal? cleanupSignal = null) : IIngestRecoveryService
+    IIngestCleanupSignal? cleanupSignal = null,
+    IInboxActivityNotifier? activity = null) : IIngestRecoveryService
 {
     private readonly IIngestCleanupService cleanupService =
         cleanup ?? new IngestCleanupService(store, storage);
@@ -72,6 +74,8 @@ public sealed class IngestRecoveryService(
                 }
             }
         }
+
+        activity?.Publish(InboxActivityKind.ItemChanged);
     }
 
     public async Task<RecoveryResult> RetryAsync(
@@ -97,9 +101,11 @@ public sealed class IngestRecoveryService(
             folders,
             allowBlockedRetry: true,
             cancellationToken);
-        return progressed
+        RecoveryResult result = progressed
             ? new RecoveryResult(true, "recovery.reconciled")
             : new RecoveryResult(false, "recovery.identity_ambiguous");
+        activity?.Publish(InboxActivityKind.ItemChanged);
+        return result;
     }
 
     public async Task<RecoveryResult> RetryCleanupAsync(
@@ -128,6 +134,7 @@ public sealed class IngestRecoveryService(
             folders,
             cancellationToken);
         cleanupSignal?.Signal();
+        activity?.Publish(InboxActivityKind.ItemChanged);
         return new RecoveryResult(true, "recovery.cleanup_retried");
     }
 

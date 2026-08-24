@@ -168,6 +168,16 @@
                                 TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
+                    <Border
+                        Padding="12"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="6"
+                        Visibility="{x:Bind ViewModel.Inspector.RecoveryVisibility, Mode=OneWay}">
+                        <TextBlock
+                            AutomationProperties.AutomationId="InboxRecoveryStatus"
+                            Text="{x:Bind ViewModel.Inspector.RecoveryStatusText, Mode=OneWay}"
+                            TextWrapping="Wrap" />
+                    </Border>
                     <TextBox
                         AutomationProperties.AutomationId="DisplayNameBox"
                         Header="显示名称"
@@ -230,6 +240,24 @@
                         Command="{x:Bind ViewModel.RetryProcessingCommand}"
                         Content="重新处理"
                         Visibility="{x:Bind ViewModel.Inspector.RetryProcessingVisibility, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="RecheckIngestRecoveryButton"
+                        Command="{x:Bind ViewModel.RecheckRecoveryCommand}"
+                        Content="重新检查"
+                        Visibility="{x:Bind ViewModel.Inspector.RecheckRecoveryVisibility, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="RetryIngestCleanupButton"
+                        Command="{x:Bind ViewModel.RetryCleanupCommand}"
+                        Content="立即重试"
+                        Visibility="{x:Bind ViewModel.Inspector.RetryCleanupVisibility, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="OpenRecoveryLocationButton"
+                        Command="{x:Bind ViewModel.OpenRecoveryLocationCommand}"
+                        Content="打开文件位置"
+                        Visibility="{x:Bind ViewModel.Inspector.OpenRecoveryLocationVisibility, Mode=OneWay}" />
                     <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                         <Button
                             HorizontalAlignment="Stretch"

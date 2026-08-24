@@ -4,6 +4,7 @@ using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Processing;
+using TraceFold.Media.Domain.Ingest;
 
 namespace TraceFold.Media.Infrastructure.Persistence;
 
@@ -61,8 +62,9 @@ public sealed class EfInboxQueryStore(
             .Include(row => row.SourceFiles)
             .Include(row => row.ProcessingJobs)
                 .ThenInclude(job => job.Plan)
+            .Include(row => row.IngestOperations)
             .SingleOrDefaultAsync(row => row.Id == inboxItemId, cancellationToken);
-        if (item?.MetadataDraft is null || item.State == InboxItemState.Completed)
+        if (item?.MetadataDraft is null)
         {
             return null;
         }
@@ -107,7 +109,8 @@ public sealed class EfInboxQueryStore(
             item.ErrorCode,
             item.RequiredCapability,
             item.IsRetryable,
-            ToProcessing(item));
+            ToProcessing(item),
+            ToRecovery(item));
     }
 
     public Task ClearMissingAsync(
@@ -147,6 +150,26 @@ public sealed class EfInboxQueryStore(
                 job.IsRetryable);
     }
 
+    private static RecoverySummaryDto? ToRecovery(InboxItemRow row)
+    {
+        IngestOperationRow? operation = row.IngestOperations
+            .Where(candidate => candidate.Stage is
+                IngestOperationStage.RecoveryBlocked
+                or IngestOperationStage.CleanupPending)
+            .OrderByDescending(candidate => candidate.ActiveInboxItemId.HasValue)
+            .ThenByDescending(candidate => candidate.CreatedAtUtc)
+            .FirstOrDefault();
+        return operation is null
+            ? null
+            : new RecoverySummaryDto(
+                operation.Id,
+                operation.Stage,
+                operation.RecoveryBlockedFromStage,
+                operation.ErrorCode,
+                operation.CleanupAttemptCount,
+                operation.NextCleanupAttemptAtUtc);
+    }
+
     private static InboxAction AllowedActions(
         InboxItemState state,
         bool isRetryable,
@@ -176,6 +199,9 @@ public sealed class EfInboxQueryStore(
                 | InboxAction.RetryProcessing,
             InboxItemState.ConflictBlocked => InboxAction.Preview
                 | InboxAction.EditMetadata
+                | InboxAction.OpenFolder,
+            InboxItemState.RecoveryBlocked => InboxAction.Preview
+                | InboxAction.RecheckRecovery
                 | InboxAction.OpenFolder,
             InboxItemState.CleanupPending => InboxAction.Preview
                 | InboxAction.RetryCleanup
@@ -222,6 +248,7 @@ public sealed class EfInboxQueryStore(
             InboxItemState.ProcessingInterrupted => "已中断",
             InboxItemState.Ingesting => "正在入库",
             InboxItemState.ConflictBlocked => "存在冲突",
+            InboxItemState.RecoveryBlocked => "无法自动恢复",
             InboxItemState.CleanupPending => "等待安全清理",
             InboxItemState.Failed => "处理失败",
             InboxItemState.SourceMissing => "源文件缺失",

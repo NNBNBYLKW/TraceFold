@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 
@@ -11,12 +12,28 @@ public sealed class IngestCleanupService(
     IIngestFaultInjector? faultInjector = null,
     IIngestCleanupWorkStore? workStore = null,
     TimeProvider? timeProvider = null,
-    IIngestCleanupSignal? signal = null) : IIngestCleanupService
+    IIngestCleanupSignal? signal = null,
+    IInboxActivityNotifier? activity = null) : IIngestCleanupService
 {
     private readonly IIngestFaultInjector faultInjector =
         faultInjector ?? new NoOpIngestFaultInjector();
 
     public async Task<CleanupResult> CleanupAsync(
+        IngestOperationRecord operation,
+        LibraryFolders folders,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await CleanupCoreAsync(operation, folders, cancellationToken);
+        }
+        finally
+        {
+            activity?.Publish(InboxActivityKind.ItemChanged);
+        }
+    }
+
+    private async Task<CleanupResult> CleanupCoreAsync(
         IngestOperationRecord operation,
         LibraryFolders folders,
         CancellationToken cancellationToken)
