@@ -1,0 +1,93 @@
+using TraceFold.Media.Application.Ingest;
+using TraceFold.Media.Desktop.Diagnostics;
+
+namespace TraceFold.Media.Desktop.Tests.Diagnostics;
+
+internal sealed class OwnedProbeRoot : IDisposable
+{
+    private OwnedProbeRoot(string path, Guid token, string tokenText)
+    {
+        Path = path;
+        Token = token;
+        TokenText = tokenText;
+    }
+
+    public string Path { get; }
+
+    public Guid Token { get; }
+
+    public string TokenText { get; }
+
+    public static OwnedProbeRoot CreateWithFixtures()
+    {
+        Guid token = Guid.NewGuid();
+        string tokenText = token.ToString("D");
+        string path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"tracefold-media-desktop-stage4-probe-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        File.WriteAllText(
+            System.IO.Path.Combine(path, "probe-owner.txt"),
+            tokenText);
+        string fixtures = Directory.CreateDirectory(
+            System.IO.Path.Combine(path, "fixtures")).FullName;
+        foreach (string filename in new[] { "paired.mp4", "paired.m4a", "photo.jpg" })
+        {
+            File.Copy(Fixture(filename), System.IO.Path.Combine(fixtures, filename));
+        }
+
+        return new OwnedProbeRoot(System.IO.Path.GetFullPath(path), token, tokenText);
+    }
+
+    public void PrepareCrashResume(IngestFaultPoint point)
+    {
+        foreach (string name in new[] { "data", "inbox", "library", "work" })
+        {
+            Directory.CreateDirectory(System.IO.Path.Combine(Path, name));
+        }
+
+        Stage4CrashProbeManifest.CreateForTest(TokenText, point).WriteTo(
+            System.IO.Path.Combine(
+                Path,
+                Stage4PackageProbeOptions.CrashManifestFilename));
+    }
+
+    public void Dispose()
+    {
+        string temp = System.IO.Path.TrimEndingDirectorySeparator(
+            System.IO.Path.GetFullPath(System.IO.Path.GetTempPath()));
+        string? parent = System.IO.Path.GetDirectoryName(Path);
+        if (parent is not null
+            && StringComparer.OrdinalIgnoreCase.Equals(
+                System.IO.Path.TrimEndingDirectorySeparator(parent),
+                temp)
+            && Directory.Exists(Path))
+        {
+            Directory.Delete(Path, recursive: true);
+        }
+    }
+
+    private static string Fixture(string filename)
+    {
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            string candidate = System.IO.Path.Combine(
+                current.FullName,
+                "apps",
+                "media-api",
+                "tests",
+                "fixtures",
+                "media",
+                filename);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException($"Repository fixture is missing: {filename}");
+    }
+}
