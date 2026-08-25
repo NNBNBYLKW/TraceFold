@@ -37,6 +37,8 @@ public sealed class DesktopCompositionRootTests
                 host.Services.GetRequiredService<IConflictDialogService>());
             Assert.IsType<WindowsBatchMetadataDialogService>(
                 host.Services.GetRequiredService<IBatchMetadataDialogService>());
+            Assert.IsType<WindowsBatchIngestConfirmationService>(
+                host.Services.GetRequiredService<IBatchIngestConfirmationService>());
         }
         finally
         {

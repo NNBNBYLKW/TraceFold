@@ -30,6 +30,8 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IBatchMetadataService _batchMetadata;
     private readonly IBatchMetadataDialogService _batchMetadataDialog;
     private readonly IBatchProcessingService _batchProcessing;
+    private readonly IBatchIngestService _batchIngest;
+    private readonly IBatchIngestConfirmationService _batchConfirmation;
     private readonly IIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
     private readonly IConflictQueryService _conflictQuery;
@@ -42,6 +44,9 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private bool _hasLoaded;
     private bool _settingSelection;
+    private CancellationTokenSource? _batchStopAfterCurrent;
+    private HashSet<Guid> _batchIncompleteIds = [];
+    private bool _batchIncompleteFilterEnabled;
 
     public InboxViewModel(
         IInboxQueryService query,
@@ -55,6 +60,8 @@ public sealed partial class InboxViewModel : ObservableObject
         IBatchMetadataService batchMetadata,
         IBatchMetadataDialogService batchMetadataDialog,
         IBatchProcessingService batchProcessing,
+        IBatchIngestService batchIngest,
+        IBatchIngestConfirmationService batchConfirmation,
         IIngestService ingest,
         IIngestRecoveryService recovery,
         IConflictQueryService conflictQuery,
@@ -75,6 +82,8 @@ public sealed partial class InboxViewModel : ObservableObject
         _batchMetadata = batchMetadata;
         _batchMetadataDialog = batchMetadataDialog;
         _batchProcessing = batchProcessing;
+        _batchIngest = batchIngest;
+        _batchConfirmation = batchConfirmation;
         _ingest = ingest;
         _recovery = recovery;
         _conflictQuery = conflictQuery;
@@ -263,6 +272,71 @@ public sealed partial class InboxViewModel : ObservableObject
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanBatchIngest))]
+    private async Task BatchIngestAsync(CancellationToken cancellationToken)
+    {
+        if (!CanBatchIngest())
+        {
+            return;
+        }
+
+        _batchIncompleteFilterEnabled = false;
+        _batchIncompleteIds.Clear();
+        IReadOnlyList<InboxSelectionEntry> selection = Selection.Capture();
+        BatchIngestPreviewDto preview = await _batchIngest.PreviewAsync(
+            selection,
+            cancellationToken);
+        if (!await _batchConfirmation.ConfirmAsync(preview, cancellationToken))
+        {
+            return;
+        }
+
+        IsBusy = true;
+        using var stopAfterCurrent = new CancellationTokenSource();
+        _batchStopAfterCurrent = stopAfterCurrent;
+        BatchSummary.BeginIngest(selection.Count);
+        StopBatchIngestCommand.NotifyCanExecuteChanged();
+        try
+        {
+            var progress = new Progress<BatchIngestProgress>(BatchSummary.Report);
+            BatchIngestResult result = await _batchIngest.ExecuteAsync(
+                selection,
+                progress,
+                stopAfterCurrent.Token,
+                cancellationToken);
+            _batchIncompleteIds = result.Items
+                .Where(item => item.Outcome != BatchIngestItemOutcome.Completed)
+                .Select(item => item.InboxItemId)
+                .ToHashSet();
+            await ReloadCardsAsync(cancellationToken);
+            Selection.Retain(_batchIncompleteIds);
+            ReapplyGridSelection();
+            await PresentSelectionAsync(cancellationToken);
+            BatchSummary.Complete(result);
+            OperationMessage =
+                $"已入库 {BatchSummary.CompletedCount} 项，"
+                + $"未完成 {result.Items.Count - BatchSummary.CompletedCount} 项。";
+            ShowBatchIncompleteOnlyCommand.NotifyCanExecuteChanged();
+        }
+        finally
+        {
+            _batchStopAfterCurrent = null;
+            IsBusy = false;
+            StopBatchIngestCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanStopBatchIngest))]
+    private void StopBatchIngest() => _batchStopAfterCurrent?.Cancel();
+
+    [RelayCommand(CanExecute = nameof(CanShowBatchIncompleteOnly))]
+    private async Task ShowBatchIncompleteOnlyAsync(
+        CancellationToken cancellationToken)
+    {
+        _batchIncompleteFilterEnabled = true;
+        await ReloadCardsAsync(cancellationToken);
+    }
+
     [RelayCommand(CanExecute = nameof(CanRefresh))]
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
@@ -444,6 +518,7 @@ public sealed partial class InboxViewModel : ObservableObject
     partial void OnSearchTextChanged(string value)
     {
         _ = value;
+        _batchIncompleteFilterEnabled = false;
         ClearSelectionForFilterChange();
         _ = ApplyFilterChangeSafeAsync();
     }
@@ -451,6 +526,7 @@ public sealed partial class InboxViewModel : ObservableObject
     partial void OnSelectedStateFilterChanged(InboxStateFilterOption value)
     {
         _ = value;
+        _batchIncompleteFilterEnabled = false;
         ClearSelectionForFilterChange();
         _ = ApplyFilterChangeSafeAsync();
     }
@@ -506,7 +582,11 @@ public sealed partial class InboxViewModel : ObservableObject
                     }
                 }
 
-                items.Add(new InboxCardViewModel(card, thumbnail));
+                if (!_batchIncompleteFilterEnabled
+                    || _batchIncompleteIds.Contains(card.Id))
+                {
+                    items.Add(new InboxCardViewModel(card, thumbnail));
+                }
             }
 
             GridItemsReplacing?.Invoke(this, EventArgs.Empty);
@@ -665,6 +745,18 @@ public sealed partial class InboxViewModel : ObservableObject
             : Visibility.Collapsed;
     }
 
+    private void ReapplyGridSelection()
+    {
+        GridItemsReplacing?.Invoke(this, EventArgs.Empty);
+        try
+        {
+        }
+        finally
+        {
+            GridItemsReplaced?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     private void OnInboxActivity(object? sender, InboxActivityEventArgs args)
     {
         _ = sender;
@@ -682,6 +774,18 @@ public sealed partial class InboxViewModel : ObservableObject
         && ProcessingAvailable
         && Selection.IsBatchSelection
         && BatchSummary.CanStartProcessing;
+
+    private bool CanBatchIngest() => !IsBusy
+        && Selection.IsBatchSelection
+        && BatchSummary.CanPreviewIngest;
+
+    private bool CanStopBatchIngest() => _batchStopAfterCurrent is not null
+        && BatchSummary.IsIngestRunning;
+
+    private bool CanShowBatchIncompleteOnly() =>
+        BatchSummary.HasFinalResult
+        && BatchSummary.HasIncompleteItems
+        && !_batchIncompleteFilterEnabled;
 
     private bool CanIngest() => !IsBusy
         && SelectedItem?.Card.CanIngest == true
@@ -731,6 +835,9 @@ public sealed partial class InboxViewModel : ObservableObject
         RefreshCommand.NotifyCanExecuteChanged();
         BatchEditMetadataCommand.NotifyCanExecuteChanged();
         BatchStartProcessingCommand.NotifyCanExecuteChanged();
+        BatchIngestCommand.NotifyCanExecuteChanged();
+        StopBatchIngestCommand.NotifyCanExecuteChanged();
+        ShowBatchIncompleteOnlyCommand.NotifyCanExecuteChanged();
         IngestCommand.NotifyCanExecuteChanged();
         ClearMissingCommand.NotifyCanExecuteChanged();
         RetryCommand.NotifyCanExecuteChanged();

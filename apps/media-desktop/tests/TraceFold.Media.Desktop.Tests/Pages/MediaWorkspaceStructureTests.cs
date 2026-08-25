@@ -45,6 +45,9 @@ public sealed class MediaWorkspaceStructureTests
         string batchDialogXaml = await File.ReadAllTextAsync(
             DesktopSource("Dialogs", "BatchMetadataDialog.xaml"),
             TestContext.Current.CancellationToken);
+        string confirmationXaml = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "BatchIngestConfirmationDialog.xaml"),
+            TestContext.Current.CancellationToken);
         foreach (string id in new[]
         {
             "BatchMetadataDialog",
@@ -65,6 +68,22 @@ public sealed class MediaWorkspaceStructureTests
             Assert.Contains(
                 $"AutomationProperties.AutomationId=\"{id}\"",
                 batchDialogXaml + inboxXaml,
+                StringComparison.Ordinal);
+        }
+        foreach (string id in new[]
+        {
+            "InboxBatchIngestButton",
+            "BatchIngestConfirmationDialog",
+            "BatchIngestConfirmButton",
+            "InboxBatchIngestProgress",
+            "InboxBatchStopAfterCurrentButton",
+            "InboxBatchIngestResult",
+            "InboxBatchShowIncompleteButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                inboxXaml + confirmationXaml,
                 StringComparison.Ordinal);
         }
         Assert.Contains(

@@ -1,0 +1,38 @@
+<ContentDialog
+    x:Class="TraceFold.Media.Desktop.Dialogs.BatchIngestConfirmationDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    MinWidth="460"
+    AutomationProperties.AutomationId="BatchIngestConfirmationDialog"
+    AutomationProperties.Name="确认批量入库"
+    DefaultButton="None"
+    Title="确认批量入库">
+    <Grid RowDefinitions="Auto,Auto" RowSpacing="18">
+        <StackPanel Spacing="8">
+            <TextBlock
+                Text="请确认本次选择的状态统计。只有可直接入库的项目会开始执行。"
+                TextWrapping="Wrap" />
+            <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ReadyText}" />
+            <TextBlock Text="{x:Bind ViewModel.RequiresProcessingText}" />
+            <TextBlock Text="{x:Bind ViewModel.ConflictText}" />
+            <TextBlock Text="{x:Bind ViewModel.RecoveryText}" />
+            <TextBlock Text="{x:Bind ViewModel.ChangedText}" />
+        </StackPanel>
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <TextBlock
+                VerticalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="冲突项不会在批量流程中弹出单项冲突对话框。"
+                TextWrapping="Wrap" />
+            <Button Grid.Column="1" Click="OnCancelClicked" Content="取消" />
+            <Button
+                Grid.Column="2"
+                AutomationProperties.AutomationId="BatchIngestConfirmButton"
+                AutomationProperties.Name="确认开始批量入库"
+                Click="OnConfirmClicked"
+                Content="确认入库"
+                IsEnabled="{x:Bind ViewModel.CanConfirm}"
+                Style="{StaticResource AccentButtonStyle}" />
+        </Grid>
+    </Grid>
+</ContentDialog>
