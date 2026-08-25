@@ -301,9 +301,13 @@ public sealed class InboxViewModelTests
     {
         var query = new RecordingInboxQuery();
         var gateway = new RecordingMetadataGateway();
+        var summary = new RecordingBatchSummaryService();
         var metadata = new MetadataEditorViewModel(
             gateway, new BlockingDebounceScheduler());
-        InboxViewModel viewModel = CreateViewModel(query, metadata);
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            metadata,
+            batchSummary: summary);
         await viewModel.LoadAsync(TestContext.Current.CancellationToken);
         InboxCardViewModel first = viewModel.Items[0];
         InboxCardViewModel second = viewModel.Items[1];
@@ -318,6 +322,7 @@ public sealed class InboxViewModelTests
         Assert.True(viewModel.Selection.IsBatchSelection);
         Assert.True(viewModel.BatchSummary.IsVisible);
         Assert.Null(viewModel.Inspector.InboxItemId);
+        Assert.Equal(1, summary.LastSelection![0].ExpectedMetadataVersion);
     }
 
     [Fact]
@@ -337,6 +342,47 @@ public sealed class InboxViewModelTests
         Assert.Equal([remaining], viewModel.Selection.SelectedIds);
         viewModel.SearchText = "new filter";
         Assert.Empty(viewModel.Selection.SelectedIds);
+    }
+
+    [Fact]
+    public async Task Overlapping_selection_requests_finish_with_latest_details()
+    {
+        var query = new RecordingInboxQuery();
+        InboxViewModel viewModel = CreateViewModel(query, CreateMetadata());
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        InboxCardViewModel first = viewModel.Items[0];
+        InboxCardViewModel second = viewModel.Items[1];
+        query.DelayDetailsFor(first.Id);
+
+        Task firstSelection = viewModel.SelectManyAsync(
+            [first], TestContext.Current.CancellationToken);
+        await query.WaitForDelayedDetailsAsync(
+            TestContext.Current.CancellationToken);
+        Task secondSelection = viewModel.SelectManyAsync(
+            [second], TestContext.Current.CancellationToken);
+        query.ReleaseDelayedDetails();
+
+        await Task.WhenAll(firstSelection, secondSelection);
+
+        Assert.Equal(second.Id, viewModel.Inspector.InboxItemId);
+        Assert.Equal([second.Id], viewModel.Selection.SelectedIds);
+    }
+
+    [Fact]
+    public async Task Safe_selection_entry_reports_detail_load_failure()
+    {
+        var query = new RecordingInboxQuery();
+        InboxViewModel viewModel = CreateViewModel(query, CreateMetadata());
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        query.FailNextDetails = true;
+
+        await viewModel.SelectManySafeAsync(
+            [viewModel.Items[0]], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "加载详情失败",
+            viewModel.OperationMessage,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -459,6 +505,110 @@ public sealed class InboxViewModelTests
     }
 
     [Fact]
+    public async Task Batch_ingest_is_busy_while_preview_and_confirmation_are_open()
+    {
+        var query = new RecordingInboxQuery();
+        var batchIngest = new RecordingBatchIngestService
+        {
+            BlockPreview = true
+        };
+        var confirmation = new RecordingBatchIngestConfirmationService
+        {
+            Confirmed = false
+        };
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            batchIngest: batchIngest,
+            batchConfirmation: confirmation);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectManyAsync(
+            viewModel.Items.Take(2).ToArray(),
+            TestContext.Current.CancellationToken);
+
+        Task command = viewModel.BatchIngestCommand.ExecuteAsync(null);
+        await batchIngest.WaitForPreviewAsync(
+            TestContext.Current.CancellationToken);
+
+        Assert.True(viewModel.IsBusy);
+        Assert.False(viewModel.BatchEditMetadataCommand.CanExecute(null));
+        Assert.False(viewModel.BatchStartProcessingCommand.CanExecute(null));
+
+        batchIngest.ReleasePreview();
+        await command;
+        Assert.False(viewModel.IsBusy);
+    }
+
+    [Fact]
+    public async Task Batch_ingest_result_survives_list_refresh_failure()
+    {
+        var query = new RecordingInboxQuery();
+        var batchIngest = new RecordingBatchIngestService();
+        var confirmation = new RecordingBatchIngestConfirmationService
+        {
+            Confirmed = true
+        };
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            batchIngest: batchIngest,
+            batchConfirmation: confirmation);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectManyAsync(
+            viewModel.Items.Take(2).ToArray(),
+            TestContext.Current.CancellationToken);
+        Guid[] selected = viewModel.Selection.SelectedIds.ToArray();
+        batchIngest.Preview = Preview(
+            (selected[0], BatchIngestPreviewCategory.Ready),
+            (selected[1], BatchIngestPreviewCategory.Ready));
+        batchIngest.Result = new BatchIngestResult(
+        [
+            new(selected[0], 0, BatchIngestItemOutcome.Completed, null),
+            new(selected[1], 1, BatchIngestItemOutcome.Failed, "io.failed")
+        ], false);
+        batchIngest.OnExecuteCompleted = () => query.FailNextSearch = true;
+
+        await viewModel.BatchIngestCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.BatchSummary.HasFinalResult);
+        Assert.False(viewModel.BatchSummary.IsIngestRunning);
+        Assert.Equal(1, viewModel.BatchSummary.CompletedCount);
+        Assert.Equal(1, viewModel.BatchSummary.FailedOrChangedCount);
+        Assert.Contains("列表刷新失败", viewModel.OperationMessage,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Batch_ingest_execution_failure_ends_running_state()
+    {
+        var query = new RecordingInboxQuery();
+        var batchIngest = new RecordingBatchIngestService
+        {
+            ExecuteException = new InvalidOperationException("execute failed")
+        };
+        var confirmation = new RecordingBatchIngestConfirmationService
+        {
+            Confirmed = true
+        };
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            batchIngest: batchIngest,
+            batchConfirmation: confirmation);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectManyAsync(
+            viewModel.Items.Take(2).ToArray(),
+            TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await viewModel.BatchIngestCommand.ExecuteAsync(null));
+
+        Assert.False(viewModel.BatchSummary.IsIngestRunning);
+        Assert.False(viewModel.BatchSummary.CanStopAfterCurrent);
+        Assert.False(viewModel.IsBusy);
+    }
+
+    [Fact]
     public async Task Stop_command_cancels_only_between_item_token()
     {
         var query = new RecordingInboxQuery();
@@ -536,7 +686,8 @@ public sealed class InboxViewModelTests
         IBatchProcessingService? batchProcessing = null,
         IBatchIngestService? batchIngest = null,
         IBatchIngestConfirmationService? batchConfirmation = null,
-        IDebounceScheduler? activityDebounce = null) =>
+        IDebounceScheduler? activityDebounce = null,
+        IInboxBatchSummaryService? batchSummary = null) =>
         new(
             query,
             new CompletedScanner(),
@@ -546,7 +697,8 @@ public sealed class InboxViewModelTests
             new MissingPreviewResolver(),
             new InboxInspectorViewModel(metadata),
             new InboxSelectionViewModel(),
-            new InboxBatchSummaryViewModel(new RecordingBatchSummaryService()),
+            new InboxBatchSummaryViewModel(
+                batchSummary ?? new RecordingBatchSummaryService()),
             batchMetadata ?? new RecordingBatchMetadataService(),
             batchMetadataDialog ?? new RecordingBatchMetadataDialogService(),
             batchProcessing ?? new RecordingBatchProcessingService(),
@@ -637,6 +789,12 @@ public sealed class InboxViewModelTests
 
     private sealed class RecordingInboxQuery : IInboxQueryService
     {
+        private readonly TaskCompletionSource _delayedDetailsStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _delayedDetailsRelease =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Guid? _delayedDetailsId;
+
         public RecordingInboxQuery(int itemCount = 2)
         {
             Guid[] fixedIds =
@@ -663,22 +821,54 @@ public sealed class InboxViewModelTests
 
         public int SearchCount { get; private set; }
 
+        public bool FailNextDetails { get; set; }
+
+        public bool FailNextSearch { get; set; }
+
+        public void DelayDetailsFor(Guid inboxItemId) =>
+            _delayedDetailsId = inboxItemId;
+
+        public Task WaitForDelayedDetailsAsync(CancellationToken cancellationToken) =>
+            _delayedDetailsStarted.Task.WaitAsync(cancellationToken);
+
+        public void ReleaseDelayedDetails() =>
+            _delayedDetailsRelease.TrySetResult();
+
         public Task<IReadOnlyList<InboxCardDto>> SearchAsync(
             InboxQuery query,
             CancellationToken cancellationToken)
         {
+            if (FailNextSearch)
+            {
+                FailNextSearch = false;
+                throw new InvalidOperationException("search failed");
+            }
+
             LastQuery = query;
             SearchCount++;
             return Task.FromResult<IReadOnlyList<InboxCardDto>>(Cards.ToArray());
         }
 
-        public Task<InboxDetailsDto?> GetDetailsAsync(
+        public async Task<InboxDetailsDto?> GetDetailsAsync(
             Guid inboxItemId,
             CancellationToken cancellationToken)
         {
+            if (FailNextDetails)
+            {
+                FailNextDetails = false;
+                throw new InvalidOperationException("detail query failed");
+            }
+
+            if (_delayedDetailsId == inboxItemId)
+            {
+                _delayedDetailsStarted.TrySetResult();
+                await _delayedDetailsRelease.Task.WaitAsync(cancellationToken);
+                _delayedDetailsId = null;
+            }
+
             InboxCardDto card = Cards.Single(item => item.Id == inboxItemId);
             var owner = new MetadataOwner(MetadataOwnerKind.InboxItem, inboxItemId);
-            return Task.FromResult<InboxDetailsDto?>(new InboxDetailsDto(
+            return new InboxDetailsDto(
                 card,
                 [],
                 null,
@@ -686,7 +876,7 @@ public sealed class InboxViewModelTests
                 InboxAction.Preview | InboxAction.EditMetadata | InboxAction.Ingest,
                 null,
                 null,
-                false));
+                false);
         }
 
         public Task ClearMissingAsync(
@@ -706,10 +896,14 @@ public sealed class InboxViewModelTests
 
     private sealed class RecordingBatchSummaryService : IInboxBatchSummaryService
     {
+        public IReadOnlyList<InboxSelectionEntry>? LastSelection { get; private set; }
+
         public Task<InboxBatchSummaryDto> SummarizeAsync(
             IReadOnlyList<InboxSelectionEntry> selection,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new InboxBatchSummaryDto(
+            CancellationToken cancellationToken)
+        {
+            LastSelection = selection;
+            return Task.FromResult(new InboxBatchSummaryDto(
                 selection.Count,
                 selection.Count,
                 0,
@@ -722,6 +916,7 @@ public sealed class InboxViewModelTests
                 true,
                 true,
                 selection.Count >= 2));
+        }
     }
 
     private sealed class RecordingBatchProcessingService : IBatchProcessingService
@@ -741,9 +936,16 @@ public sealed class InboxViewModelTests
 
     private sealed class RecordingBatchIngestService : IBatchIngestService
     {
+        private readonly TaskCompletionSource _previewStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _previewRelease =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public BatchIngestPreviewDto Preview { get; set; } = new([]);
 
         public BatchIngestResult Result { get; set; } = new([], false);
+
+        public Exception? ExecuteException { get; init; }
 
         public Action? OnFirstProgress { get; set; }
 
@@ -753,9 +955,25 @@ public sealed class InboxViewModelTests
 
         public bool OperationTokenWasCancelled { get; private set; }
 
-        public Task<BatchIngestPreviewDto> PreviewAsync(
+        public bool BlockPreview { get; init; }
+
+        public Task WaitForPreviewAsync(CancellationToken cancellationToken) =>
+            _previewStarted.Task.WaitAsync(cancellationToken);
+
+        public void ReleasePreview() => _previewRelease.TrySetResult();
+
+        public async Task<BatchIngestPreviewDto> PreviewAsync(
             IReadOnlyList<InboxSelectionEntry> selection,
-            CancellationToken cancellationToken) => Task.FromResult(Preview);
+            CancellationToken cancellationToken)
+        {
+            _previewStarted.TrySetResult();
+            if (BlockPreview)
+            {
+                await _previewRelease.Task.WaitAsync(cancellationToken);
+            }
+
+            return Preview;
+        }
 
         public Task<BatchIngestResult> ExecuteAsync(
             IReadOnlyList<InboxSelectionEntry> selection,
@@ -763,6 +981,11 @@ public sealed class InboxViewModelTests
             CancellationToken stopAfterCurrent,
             CancellationToken cancellationToken)
         {
+            if (ExecuteException is not null)
+            {
+                throw ExecuteException;
+            }
+
             if (selection.Count > 0)
             {
                 progress?.Report(new BatchIngestProgress(

@@ -169,6 +169,14 @@ public sealed partial class InboxBatchSummaryViewModel(
         FinalResultVisibility = Visibility.Visible;
     }
 
+    public void EndIngest()
+    {
+        IsIngestRunning = false;
+        CanStopAfterCurrent = false;
+        IngestProgressVisibility = Visibility.Collapsed;
+        CurrentItemText = string.Empty;
+    }
+
     private static int Count(
         BatchIngestResult result,
         BatchIngestItemOutcome outcome) =>

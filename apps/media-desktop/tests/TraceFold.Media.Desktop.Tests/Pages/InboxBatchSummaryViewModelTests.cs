@@ -1,5 +1,6 @@
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Desktop.Pages;
+using Microsoft.UI.Xaml;
 using Xunit;
 
 namespace TraceFold.Media.Desktop.Tests.Pages;
@@ -46,6 +47,22 @@ public sealed class InboxBatchSummaryViewModelTests
         Assert.Equal(string.Empty, viewModel.MediaCountText);
         Assert.Equal(string.Empty, viewModel.StateCountText);
         Assert.False(viewModel.CanEditMetadata);
+    }
+
+    [Fact]
+    public void End_ingest_clears_running_progress_without_final_result()
+    {
+        var viewModel = new InboxBatchSummaryViewModel(
+            new FixedSummaryService(new InboxBatchSummaryDto(
+                2, 1, 1, 2, 0, 0, 0, 0, 0, true, false, true)));
+        viewModel.BeginIngest(2);
+
+        viewModel.EndIngest();
+
+        Assert.False(viewModel.IsIngestRunning);
+        Assert.False(viewModel.CanStopAfterCurrent);
+        Assert.Equal(Visibility.Collapsed, viewModel.IngestProgressVisibility);
+        Assert.False(viewModel.HasFinalResult);
     }
 
     private static IReadOnlyList<InboxSelectionEntry> Selection(int count) =>

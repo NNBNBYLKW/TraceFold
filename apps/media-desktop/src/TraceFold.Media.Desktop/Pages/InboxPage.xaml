@@ -99,6 +99,7 @@
                 Margin="16,0,12,16"
                 Padding="8"
                 AutomationProperties.AutomationId="InboxGrid"
+                AutomationProperties.Name="待入库文件列表"
                 IsItemClickEnabled="True"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
                 SelectionChanged="OnSelectionChanged"
@@ -176,7 +177,7 @@
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1,0,0,0">
             <ScrollViewer>
-                <Grid RowDefinitions="Auto,Auto">
+                <Grid RowDefinitions="Auto,Auto,Auto">
                 <StackPanel
                     Spacing="12"
                     Visibility="{x:Bind ViewModel.InspectorVisibility, Mode=OneWay}">
@@ -353,28 +354,30 @@
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="{x:Bind ViewModel.BatchSummary.StateCountText, Mode=OneWay}"
                         TextWrapping="Wrap" />
-                    <StackPanel
-                        Spacing="8"
-                        Visibility="{x:Bind ViewModel.BatchSummary.IngestProgressVisibility, Mode=OneWay}">
-                        <TextBlock
-                            FontWeight="SemiBold"
-                            Text="{x:Bind ViewModel.BatchSummary.CurrentItemText, Mode=OneWay}"
-                            TextTrimming="CharacterEllipsis" />
-                        <ProgressBar
-                            AutomationProperties.AutomationId="InboxBatchIngestProgress"
-                            AutomationProperties.Name="批量入库总进度"
-                            Maximum="100"
-                            Value="{x:Bind ViewModel.BatchSummary.ProgressPercent, Mode=OneWay}" />
-                        <Button
-                            HorizontalAlignment="Stretch"
-                            AutomationProperties.AutomationId="InboxBatchStopAfterCurrentButton"
-                            AutomationProperties.Name="当前项目安全完成后停止后续入库"
-                            Command="{x:Bind ViewModel.StopBatchIngestCommand}"
-                            Content="当前项完成后停止" />
-                    </StackPanel>
                 </StackPanel>
                 <StackPanel
                     Grid.Row="1"
+                    Margin="0,18,0,0"
+                    Spacing="8"
+                    Visibility="{x:Bind ViewModel.BatchSummary.IngestProgressVisibility, Mode=OneWay}">
+                    <TextBlock
+                        FontWeight="SemiBold"
+                        Text="{x:Bind ViewModel.BatchSummary.CurrentItemText, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                    <ProgressBar
+                        AutomationProperties.AutomationId="InboxBatchIngestProgress"
+                        AutomationProperties.Name="批量入库总进度"
+                        Maximum="100"
+                        Value="{x:Bind ViewModel.BatchSummary.ProgressPercent, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="InboxBatchStopAfterCurrentButton"
+                        AutomationProperties.Name="当前项目安全完成后停止后续入库"
+                        Command="{x:Bind ViewModel.StopBatchIngestCommand}"
+                        Content="当前项完成后停止" />
+                </StackPanel>
+                <StackPanel
+                    Grid.Row="2"
                     Margin="0,18,0,0"
                     Spacing="8"
                     AutomationProperties.AutomationId="InboxBatchIngestResult"

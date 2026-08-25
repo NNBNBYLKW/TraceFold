@@ -42,6 +42,8 @@ public sealed partial class MetadataEditorViewModel(
 
     public ObservableCollection<TaxonomyTermDto> Tags { get; } = [];
 
+    public long CurrentVersion => _version;
+
     public event Action<MetadataOwner>? Saved;
 
     public async Task LoadAsync(

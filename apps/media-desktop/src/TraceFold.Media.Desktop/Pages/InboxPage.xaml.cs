@@ -65,7 +65,7 @@ public sealed partial class InboxPage : Page
             return;
         }
 
-        await ViewModel.SelectManyAsync(
+        await ViewModel.SelectManySafeAsync(
             InboxGrid.SelectedItems.Cast<InboxCardViewModel>().ToArray(),
             CancellationToken.None);
         if (ViewModel.Selection.IsSingleSelection)

@@ -72,6 +72,7 @@ public sealed class MediaWorkspaceStructureTests
         }
         foreach (string id in new[]
         {
+            "InboxGrid",
             "InboxBatchBar",
             "InboxBatchSummary",
             "InboxCancelSelectionButton",
@@ -143,6 +144,16 @@ public sealed class MediaWorkspaceStructureTests
         }
 
         Assert.Contains("MediaPlayerElement", previewXaml, StringComparison.Ordinal);
+
+        XDocument document = XDocument.Parse(inboxXaml);
+        XElement progress = Assert.Single(document.Descendants(), element =>
+            element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.AutomationId"
+                && attribute.Value == "InboxBatchIngestProgress"));
+        Assert.DoesNotContain(progress.Ancestors(), element =>
+            element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.AutomationId"
+                && attribute.Value == "InboxBatchSummary"));
     }
 
     [Fact]
