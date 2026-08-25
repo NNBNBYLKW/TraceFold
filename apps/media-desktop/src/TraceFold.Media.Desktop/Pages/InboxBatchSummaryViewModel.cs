@@ -140,7 +140,8 @@ public sealed partial class InboxBatchSummaryViewModel(
             CompletedItems * 100d / TotalItems,
             0,
             100);
-        CurrentItemText = $"正在处理：{progress.SafeName}";
+        CurrentItemText =
+            $"正在处理 {progress.CurrentPosition}/{TotalItems}：{progress.SafeName}";
     }
 
     public void Complete(BatchIngestResult result)

@@ -56,6 +56,7 @@ public sealed record BatchIngestItemResult(
 public sealed record BatchIngestProgress(
     int CompletedItems,
     int TotalItems,
+    int CurrentPosition,
     Guid CurrentInboxItemId,
     string SafeName);
 

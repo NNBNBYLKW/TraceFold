@@ -86,6 +86,7 @@ public sealed class BatchIngestService(
                 progress?.Report(new BatchIngestProgress(
                     items.Count,
                     ordered.Length,
+                    index + 1,
                     entry.InboxItemId,
                     safeName));
                 IngestResult single = await ingest.IngestAsync(
@@ -94,6 +95,7 @@ public sealed class BatchIngestService(
                 progress?.Report(new BatchIngestProgress(
                     items.Count,
                     ordered.Length,
+                    index + 1,
                     entry.InboxItemId,
                     safeName));
                 if (single.Outcome == IngestOutcome.ShuttingDown)

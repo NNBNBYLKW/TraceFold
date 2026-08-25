@@ -142,6 +142,30 @@ public sealed class BatchIngestServiceTests
         Assert.Equal(BatchIngestItemOutcome.NotStarted, result.Items[1].Outcome);
     }
 
+    [Fact]
+    public async Task Progress_reports_explicit_one_based_position_before_and_after_each_item()
+    {
+        Guid first = Guid.NewGuid();
+        Guid second = Guid.NewGuid();
+        var progress = new RecordingProgress();
+        var service = new BatchIngestService(
+            CurrentReadyStore(first, second),
+            new RecordingIngestService(
+                (first, Result(IngestOutcome.Completed)),
+                (second, Result(IngestOutcome.Completed))));
+
+        await service.ExecuteAsync(
+            Select(first, second),
+            progress,
+            CancellationToken.None,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 1, 2, 2],
+            progress.Values.Select(value => value.CurrentPosition));
+        Assert.Equal([0, 1, 1, 2],
+            progress.Values.Select(value => value.CompletedItems));
+    }
+
     private static FakeInboxSelectionStore CurrentReadyStore(
         Guid id,
         long currentVersion) =>
@@ -245,5 +269,12 @@ public sealed class BatchIngestServiceTests
                 Interlocked.Decrement(ref activeCalls);
             }
         }
+    }
+
+    private sealed class RecordingProgress : IProgress<BatchIngestProgress>
+    {
+        public List<BatchIngestProgress> Values { get; } = [];
+
+        public void Report(BatchIngestProgress value) => Values.Add(value);
     }
 }

@@ -1,3 +1,4 @@
+using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Desktop.Pages;
 using Microsoft.UI.Xaml;
@@ -63,6 +64,24 @@ public sealed class InboxBatchSummaryViewModelTests
         Assert.False(viewModel.CanStopAfterCurrent);
         Assert.Equal(Visibility.Collapsed, viewModel.IngestProgressVisibility);
         Assert.False(viewModel.HasFinalResult);
+    }
+
+    [Fact]
+    public void Report_displays_explicit_one_based_position_and_safe_name()
+    {
+        var viewModel = new InboxBatchSummaryViewModel(
+            new FixedSummaryService(new InboxBatchSummaryDto(
+                12, 6, 6, 12, 0, 0, 0, 0, 0, true, false, true)));
+        viewModel.BeginIngest(12);
+
+        viewModel.Report(new BatchIngestProgress(
+            CompletedItems: 7,
+            TotalItems: 12,
+            CurrentPosition: 3,
+            CurrentInboxItemId: Guid.NewGuid(),
+            SafeName: "安全名称.mp4"));
+
+        Assert.Equal("正在处理 3/12：安全名称.mp4", viewModel.CurrentItemText);
     }
 
     private static IReadOnlyList<InboxSelectionEntry> Selection(int count) =>

@@ -991,6 +991,7 @@ public sealed class InboxViewModelTests
                 progress?.Report(new BatchIngestProgress(
                     1,
                     selection.Count,
+                    1,
                     selection[0].InboxItemId,
                     "item-0"));
             }

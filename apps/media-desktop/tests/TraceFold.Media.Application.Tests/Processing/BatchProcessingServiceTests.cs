@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
@@ -91,6 +92,53 @@ public sealed class BatchProcessingServiceTests
         Assert.Empty(commands.StartedIds);
     }
 
+    [Fact]
+    public async Task Unexpected_command_failure_preserves_results_stops_and_finishes_safely()
+    {
+        const string privateMessage = "PRIVATE command failure detail";
+        Guid first = Guid.NewGuid();
+        Guid failing = Guid.NewGuid();
+        Guid later = Guid.NewGuid();
+        var commands = new ThrowingSecondProcessingCommandService(privateMessage);
+        var logger = new RecordingLogger<BatchProcessingService>();
+        var service = new BatchProcessingService(
+            new FakeInboxSelectionStore(
+                RequiresProcessing(first, 0),
+                RequiresProcessing(failing, 1),
+                RequiresProcessing(later, 2)),
+            commands,
+            logger);
+
+        BatchProcessingResult result = await service.StartAsync(
+            Select(first, failing, later),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([first, failing], commands.StartedIds);
+        Assert.Collection(
+            result.Items,
+            item =>
+            {
+                Assert.Equal(BatchProcessingItemOutcome.Queued, item.Outcome);
+                Assert.Null(item.ErrorCode);
+            },
+            item =>
+            {
+                Assert.Equal(BatchProcessingItemOutcome.NeedsAttention, item.Outcome);
+                Assert.Equal("batch.processing.orchestration_failed", item.ErrorCode);
+            },
+            item =>
+            {
+                Assert.Equal(BatchProcessingItemOutcome.NotStarted, item.Outcome);
+                Assert.Equal("batch.processing.not_started", item.ErrorCode);
+            });
+        string captured = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Contains("Batch processing finished", captured, StringComparison.Ordinal);
+        Assert.Contains("NeedsAttentionCount 1", captured, StringComparison.Ordinal);
+        Assert.Contains("NotStartedCount 1", captured, StringComparison.Ordinal);
+        Assert.DoesNotContain(privateMessage, captured, StringComparison.Ordinal);
+        Assert.DoesNotContain(logger.Exceptions, exception => exception is not null);
+    }
+
     private static BatchProcessingService ServiceFor(
         Guid id,
         ProcessingCommandOutcome outcome) =>
@@ -173,5 +221,65 @@ public sealed class BatchProcessingServiceTests
             Guid inboxItemId,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingSecondProcessingCommandService(
+        string privateMessage) : IProcessingCommandService
+    {
+        public List<Guid> StartedIds { get; } = [];
+
+        public Task<ProcessingCommandResult> StartAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken)
+        {
+            StartedIds.Add(inboxItemId);
+            if (StartedIds.Count == 2)
+            {
+                throw new InvalidOperationException(privateMessage);
+            }
+
+            return Task.FromResult(new ProcessingCommandResult(
+                ProcessingCommandOutcome.Queued,
+                Guid.NewGuid(),
+                "queued"));
+        }
+
+        public Task<ProcessingCommandResult> CancelQueuedAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ProcessingCommandResult> StopAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ProcessingCommandResult> RetryAsync(
+            Guid inboxItemId,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public List<Exception?> Exceptions { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+            Exceptions.Add(exception);
+        }
     }
 }

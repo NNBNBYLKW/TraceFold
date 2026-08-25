@@ -95,6 +95,16 @@ public sealed class BatchProcessingService(
                 AppendNotStarted(results, ordered, index);
                 break;
             }
+            catch (Exception)
+            {
+                results.Add(new BatchProcessingItemResult(
+                    entry.InboxItemId,
+                    entry.Ordinal,
+                    BatchProcessingItemOutcome.NeedsAttention,
+                    "batch.processing.orchestration_failed"));
+                AppendNotStarted(results, ordered, index + 1);
+                break;
+            }
 
             BatchProcessingItemOutcome outcome = Map(command.Outcome);
             results.Add(new BatchProcessingItemResult(
