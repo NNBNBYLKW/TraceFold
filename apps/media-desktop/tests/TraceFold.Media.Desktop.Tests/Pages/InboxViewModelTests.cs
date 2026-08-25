@@ -376,6 +376,35 @@ public sealed class InboxViewModelTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Batch_processing_passes_complete_snapshot_and_keeps_selection()
+    {
+        var query = new RecordingInboxQuery();
+        var batchProcessing = new RecordingBatchProcessingService();
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            batchProcessing: batchProcessing);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectManyAsync(
+            viewModel.Items.Take(2).ToArray(),
+            TestContext.Current.CancellationToken);
+        batchProcessing.Result = new BatchProcessingResult(
+        [
+            new(viewModel.Selection.SelectedIds[0], 0,
+                BatchProcessingItemOutcome.NotRequired, null),
+            new(viewModel.Selection.SelectedIds[1], 1,
+                BatchProcessingItemOutcome.Queued, null)
+        ]);
+
+        await viewModel.BatchStartProcessingCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, batchProcessing.LastSelection!.Count);
+        Assert.Contains("已排队 1 项", viewModel.OperationMessage,
+            StringComparison.Ordinal);
+        Assert.Equal(2, viewModel.Selection.SelectedCount);
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
@@ -389,7 +418,8 @@ public sealed class InboxViewModelTests
         IRecoveryRevealService? recoveryReveal = null,
         IInboxActivityNotifier? activity = null,
         IBatchMetadataService? batchMetadata = null,
-        IBatchMetadataDialogService? batchMetadataDialog = null) =>
+        IBatchMetadataDialogService? batchMetadataDialog = null,
+        IBatchProcessingService? batchProcessing = null) =>
         new(
             query,
             new CompletedScanner(),
@@ -401,6 +431,7 @@ public sealed class InboxViewModelTests
             new InboxBatchSummaryViewModel(new RecordingBatchSummaryService()),
             batchMetadata ?? new RecordingBatchMetadataService(),
             batchMetadataDialog ?? new RecordingBatchMetadataDialogService(),
+            batchProcessing ?? new RecordingBatchProcessingService(),
             ingest ?? new RecordingIngestService(() => true),
             recovery ?? new NoOpRecoveryService(),
             conflicts ?? new FixedConflictQueryService(null),
@@ -561,8 +592,23 @@ public sealed class InboxViewModelTests
                 0,
                 0,
                 true,
-                false,
+                true,
                 selection.Count >= 2));
+    }
+
+    private sealed class RecordingBatchProcessingService : IBatchProcessingService
+    {
+        public BatchProcessingResult Result { get; set; } = new([]);
+
+        public IReadOnlyList<InboxSelectionEntry>? LastSelection { get; private set; }
+
+        public Task<BatchProcessingResult> StartAsync(
+            IReadOnlyList<InboxSelectionEntry> selection,
+            CancellationToken cancellationToken)
+        {
+            LastSelection = selection;
+            return Task.FromResult(Result);
+        }
     }
 
     private sealed class RecordingBatchMetadataService : IBatchMetadataService

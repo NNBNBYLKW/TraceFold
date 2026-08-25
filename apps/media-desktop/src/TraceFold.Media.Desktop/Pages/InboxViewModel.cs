@@ -29,6 +29,7 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IMediaPreviewResolver _previewResolver;
     private readonly IBatchMetadataService _batchMetadata;
     private readonly IBatchMetadataDialogService _batchMetadataDialog;
+    private readonly IBatchProcessingService _batchProcessing;
     private readonly IIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
     private readonly IConflictQueryService _conflictQuery;
@@ -53,6 +54,7 @@ public sealed partial class InboxViewModel : ObservableObject
         InboxBatchSummaryViewModel batchSummary,
         IBatchMetadataService batchMetadata,
         IBatchMetadataDialogService batchMetadataDialog,
+        IBatchProcessingService batchProcessing,
         IIngestService ingest,
         IIngestRecoveryService recovery,
         IConflictQueryService conflictQuery,
@@ -72,6 +74,7 @@ public sealed partial class InboxViewModel : ObservableObject
         BatchSummary = batchSummary;
         _batchMetadata = batchMetadata;
         _batchMetadataDialog = batchMetadataDialog;
+        _batchProcessing = batchProcessing;
         _ingest = ingest;
         _recovery = recovery;
         _conflictQuery = conflictQuery;
@@ -226,6 +229,33 @@ public sealed partial class InboxViewModel : ObservableObject
                     + $"{dialogResult.Result.UnchangedCount} 项无变化。";
                 await ReloadCardsAsync(cancellationToken);
             }
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanBatchStartProcessing))]
+    private async Task BatchStartProcessingAsync(CancellationToken cancellationToken)
+    {
+        if (!CanBatchStartProcessing())
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            BatchProcessingResult result = await _batchProcessing.StartAsync(
+                Selection.Capture(),
+                cancellationToken);
+            OperationMessage =
+                $"已排队 {Count(result, BatchProcessingItemOutcome.Queued)} 项，"
+                + $"已在队列 {Count(result, BatchProcessingItemOutcome.AlreadyActive)} 项，"
+                + $"无需处理 {Count(result, BatchProcessingItemOutcome.NotRequired)} 项，"
+                + $"需要检查 {Count(result, BatchProcessingItemOutcome.NeedsAttention)} 项。";
+            await ReloadCardsAsync(cancellationToken);
         }
         finally
         {
@@ -648,6 +678,11 @@ public sealed partial class InboxViewModel : ObservableObject
         && Selection.IsBatchSelection
         && BatchSummary.CanEditMetadata;
 
+    private bool CanBatchStartProcessing() => !IsBusy
+        && ProcessingAvailable
+        && Selection.IsBatchSelection
+        && BatchSummary.CanStartProcessing;
+
     private bool CanIngest() => !IsBusy
         && SelectedItem?.Card.CanIngest == true
         && Inspector.AllowedActions.HasFlag(InboxAction.Ingest);
@@ -695,6 +730,7 @@ public sealed partial class InboxViewModel : ObservableObject
     {
         RefreshCommand.NotifyCanExecuteChanged();
         BatchEditMetadataCommand.NotifyCanExecuteChanged();
+        BatchStartProcessingCommand.NotifyCanExecuteChanged();
         IngestCommand.NotifyCanExecuteChanged();
         ClearMissingCommand.NotifyCanExecuteChanged();
         RetryCommand.NotifyCanExecuteChanged();
@@ -707,6 +743,11 @@ public sealed partial class InboxViewModel : ObservableObject
         StopProcessingCommand.NotifyCanExecuteChanged();
         RetryProcessingCommand.NotifyCanExecuteChanged();
     }
+
+    private static int Count(
+        BatchProcessingResult result,
+        BatchProcessingItemOutcome outcome) =>
+        result.Items.Count(item => item.Outcome == outcome);
 
     private async Task ShowConflictAsync(
         Guid inboxItemId,

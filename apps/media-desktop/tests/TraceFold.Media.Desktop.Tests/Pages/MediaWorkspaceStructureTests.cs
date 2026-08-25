@@ -58,7 +58,8 @@ public sealed class MediaWorkspaceStructureTests
             "BatchReplaceTagsEnabled",
             "BatchReplaceTagsClear",
             "BatchMetadataSubmitButton",
-            "InboxBatchMetadataButton"
+            "InboxBatchMetadataButton",
+            "InboxBatchStartProcessingButton"
         })
         {
             Assert.Contains(
