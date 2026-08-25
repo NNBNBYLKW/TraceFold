@@ -35,6 +35,8 @@ public static class DependencyInjection
             provider.GetRequiredService<MetadataEditorService>());
         services.AddSingleton<IBatchMetadataService, BatchMetadataService>();
         services.AddSingleton<TaxonomyService>();
+        services.AddSingleton<ITaxonomySearchService>(provider =>
+            provider.GetRequiredService<TaxonomyService>());
         services.AddSingleton<ITaxonomyService>(provider =>
             provider.GetRequiredService<TaxonomyService>());
         services.AddSingleton<LibraryQueryService>();
