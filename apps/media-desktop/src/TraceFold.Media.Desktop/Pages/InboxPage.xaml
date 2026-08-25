@@ -8,7 +8,13 @@
         <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,*">
             <Grid Margin="24,18,20,8" ColumnDefinitions="*,Auto">
                 <StackPanel>
-                    <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="待入库" />
+                    <TextBlock
+                        x:Name="InboxTitle"
+                        AutomationProperties.AutomationId="InboxTitle"
+                        AutomationProperties.Name="待入库页面标题"
+                        IsTabStop="True"
+                        Style="{ThemeResource TitleTextBlockStyle}"
+                        Text="待入库" />
                     <TextBlock
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="检查下载文件、补充资料，然后安全转入正式文件库。" />
@@ -45,6 +51,7 @@
                 Margin="24,0,20,12"
                 Padding="12,8"
                 AutomationProperties.AutomationId="InboxBatchBar"
+                AutomationProperties.Name="待入库批量操作栏"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 CornerRadius="6"
                 Visibility="{x:Bind ViewModel.BatchBarVisibility, Mode=OneWay}">
@@ -80,6 +87,7 @@
                     <Button
                         Grid.Column="3"
                         AutomationProperties.AutomationId="InboxCancelSelectionButton"
+                        AutomationProperties.Name="取消所有待入库选择"
                         Click="OnCancelSelectionClick"
                         Content="取消选择" />
                 </Grid>
@@ -327,6 +335,7 @@
                 <StackPanel
                     Spacing="14"
                     AutomationProperties.AutomationId="InboxBatchSummary"
+                    AutomationProperties.Name="所选待入库文件的批量摘要"
                     Visibility="{x:Bind ViewModel.BatchSummaryVisibility, Mode=OneWay}">
                     <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="批量摘要" />
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">

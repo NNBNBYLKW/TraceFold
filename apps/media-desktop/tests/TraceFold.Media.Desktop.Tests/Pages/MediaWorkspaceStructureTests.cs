@@ -72,6 +72,37 @@ public sealed class MediaWorkspaceStructureTests
         }
         foreach (string id in new[]
         {
+            "InboxBatchBar",
+            "InboxBatchSummary",
+            "InboxCancelSelectionButton",
+            "InboxBatchMetadataButton",
+            "InboxBatchStartProcessingButton",
+            "InboxBatchIngestButton",
+            "InboxBatchIngestProgress",
+            "InboxBatchStopAfterCurrentButton",
+            "InboxBatchIngestResult",
+            "InboxBatchShowIncompleteButton",
+            "BatchMetadataDialog",
+            "BatchMetadataSubmitButton",
+            "BatchIngestConfirmationDialog",
+            "BatchIngestConfirmButton"
+        })
+        {
+            AssertElementHasAccessibleName(
+                inboxXaml + batchDialogXaml + confirmationXaml,
+                id);
+        }
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxTitle\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        string inboxCode = await File.ReadAllTextAsync(
+            DesktopSource("Pages", "InboxPage.xaml.cs"),
+            TestContext.Current.CancellationToken);
+        Assert.Contains("OnFocusRequested", inboxCode, StringComparison.Ordinal);
+        Assert.Contains("ApplyFocusRequest", inboxCode, StringComparison.Ordinal);
+        foreach (string id in new[]
+        {
             "InboxBatchIngestButton",
             "BatchIngestConfirmationDialog",
             "BatchIngestConfirmButton",
@@ -278,5 +309,20 @@ public sealed class MediaWorkspaceStructureTests
         }
 
         return count;
+    }
+
+    private static void AssertElementHasAccessibleName(string xaml, string id)
+    {
+        string marker = $"AutomationProperties.AutomationId=\"{id}\"";
+        int markerIndex = xaml.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(markerIndex >= 0, $"Missing {id}.");
+        int elementStart = xaml.LastIndexOf('<', markerIndex);
+        int elementEnd = xaml.IndexOf('>', markerIndex);
+        Assert.True(elementStart >= 0 && elementEnd > markerIndex);
+        string element = xaml[elementStart..(elementEnd + 1)];
+        Assert.Contains(
+            "AutomationProperties.Name=\"",
+            element,
+            StringComparison.Ordinal);
     }
 }

@@ -32,6 +32,7 @@ public sealed partial class InboxPage : Page
         };
         ViewModel.GridItemsReplacing += OnGridItemsReplacing;
         ViewModel.GridItemsReplaced += OnGridItemsReplaced;
+        ViewModel.FocusRequested += OnFocusRequested;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
@@ -125,6 +126,46 @@ public sealed partial class InboxPage : Page
         _ = sender;
         _ = args;
         InboxGrid.SelectedItems.Clear();
+    }
+
+    private void OnFocusRequested(object? sender, InboxFocusRequest request)
+    {
+        _ = sender;
+        DispatcherQueue.TryEnqueue(() => ApplyFocusRequest(request));
+    }
+
+    private void ApplyFocusRequest(InboxFocusRequest request)
+    {
+        switch (request.Target)
+        {
+            case InboxFocusTarget.List:
+                InboxGrid.Focus(FocusState.Programmatic);
+                break;
+            case InboxFocusTarget.Item when request.InboxItemId.HasValue:
+                InboxCardViewModel? item = ViewModel.Items.FirstOrDefault(
+                    card => card.Id == request.InboxItemId.Value);
+                if (item is null)
+                {
+                    InboxTitle.Focus(FocusState.Programmatic);
+                    break;
+                }
+
+                InboxGrid.ScrollIntoView(item);
+                InboxGrid.UpdateLayout();
+                if (InboxGrid.ContainerFromItem(item) is GridViewItem container)
+                {
+                    container.Focus(FocusState.Programmatic);
+                }
+                else
+                {
+                    InboxGrid.Focus(FocusState.Programmatic);
+                }
+
+                break;
+            default:
+                InboxTitle.Focus(FocusState.Programmatic);
+                break;
+        }
     }
 
     private void OnAuthorSelectionChanged(object? sender, EventArgs args)

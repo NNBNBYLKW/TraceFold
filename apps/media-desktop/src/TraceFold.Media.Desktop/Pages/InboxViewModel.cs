@@ -26,6 +26,7 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IInboxScanner _scanner;
     private readonly IInboxActivityNotifier _activity;
     private readonly IUiDispatcher _dispatcher;
+    private readonly IDebounceScheduler _activityDebounce;
     private readonly IMediaPreviewResolver _previewResolver;
     private readonly IBatchMetadataService _batchMetadata;
     private readonly IBatchMetadataDialogService _batchMetadataDialog;
@@ -42,17 +43,20 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IRecoveryRevealService? _recoveryReveal;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
+    private readonly object _activityReloadGate = new();
     private bool _hasLoaded;
     private bool _settingSelection;
     private CancellationTokenSource? _batchStopAfterCurrent;
     private HashSet<Guid> _batchIncompleteIds = [];
     private bool _batchIncompleteFilterEnabled;
+    private CancellationTokenSource? _activityReload;
 
     public InboxViewModel(
         IInboxQueryService query,
         IInboxScanner scanner,
         IInboxActivityNotifier activity,
         IUiDispatcher dispatcher,
+        IDebounceScheduler activityDebounce,
         IMediaPreviewResolver previewResolver,
         InboxInspectorViewModel inspector,
         InboxSelectionViewModel selection,
@@ -75,6 +79,7 @@ public sealed partial class InboxViewModel : ObservableObject
         _scanner = scanner;
         _activity = activity;
         _dispatcher = dispatcher;
+        _activityDebounce = activityDebounce;
         _previewResolver = previewResolver;
         Inspector = inspector;
         Selection = selection;
@@ -120,6 +125,8 @@ public sealed partial class InboxViewModel : ObservableObject
     public event EventHandler? GridItemsReplacing;
 
     public event EventHandler? GridItemsReplaced;
+
+    public event EventHandler<InboxFocusRequest>? FocusRequested;
 
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
@@ -231,6 +238,9 @@ public sealed partial class InboxViewModel : ObservableObject
                     selection,
                     _batchMetadata.ApplyAsync,
                     cancellationToken);
+            FocusRequested?.Invoke(
+                this,
+                new InboxFocusRequest(InboxFocusTarget.List));
             if (dialogResult.Applied && dialogResult.Result is not null)
             {
                 OperationMessage =
@@ -317,6 +327,17 @@ public sealed partial class InboxViewModel : ObservableObject
                 $"已入库 {BatchSummary.CompletedCount} 项，"
                 + $"未完成 {result.Items.Count - BatchSummary.CompletedCount} 项。";
             ShowBatchIncompleteOnlyCommand.NotifyCanExecuteChanged();
+            BatchIngestItemResult? firstIncomplete = result.Items
+                .Where(item => item.Outcome != BatchIngestItemOutcome.Completed)
+                .OrderBy(item => item.Ordinal)
+                .FirstOrDefault();
+            FocusRequested?.Invoke(
+                this,
+                firstIncomplete is null
+                    ? new InboxFocusRequest(InboxFocusTarget.Title)
+                    : new InboxFocusRequest(
+                        InboxFocusTarget.Item,
+                        firstIncomplete.InboxItemId));
         }
         finally
         {
@@ -518,6 +539,7 @@ public sealed partial class InboxViewModel : ObservableObject
     partial void OnSearchTextChanged(string value)
     {
         _ = value;
+        CancelPendingActivityReload();
         _batchIncompleteFilterEnabled = false;
         ClearSelectionForFilterChange();
         _ = ApplyFilterChangeSafeAsync();
@@ -526,6 +548,7 @@ public sealed partial class InboxViewModel : ObservableObject
     partial void OnSelectedStateFilterChanged(InboxStateFilterOption value)
     {
         _ = value;
+        CancelPendingActivityReload();
         _batchIncompleteFilterEnabled = false;
         ClearSelectionForFilterChange();
         _ = ApplyFilterChangeSafeAsync();
@@ -551,7 +574,13 @@ public sealed partial class InboxViewModel : ObservableObject
         RefreshCommand.NotifyCanExecuteChanged();
     }
 
-    private async Task ReloadCardsAsync(CancellationToken cancellationToken)
+    private Task ReloadCardsAsync(CancellationToken cancellationToken)
+    {
+        CancelPendingActivityReload();
+        return ReloadCardsCoreAsync(cancellationToken);
+    }
+
+    private async Task ReloadCardsCoreAsync(CancellationToken cancellationToken)
     {
         await _reloadGate.WaitAsync(cancellationToken);
         try
@@ -761,7 +790,61 @@ public sealed partial class InboxViewModel : ObservableObject
     {
         _ = sender;
         _ = args;
-        _dispatcher.Enqueue(() => _ = ReloadCardsSafeAsync());
+        _dispatcher.Enqueue(ScheduleActivityReload);
+    }
+
+    private void ScheduleActivityReload()
+    {
+        CancellationTokenSource current;
+        lock (_activityReloadGate)
+        {
+            _activityReload?.Cancel();
+            _activityReload?.Dispose();
+            current = new CancellationTokenSource();
+            _activityReload = current;
+        }
+
+        _ = ReloadAfterActivityDelayAsync(current);
+    }
+
+    private async Task ReloadAfterActivityDelayAsync(
+        CancellationTokenSource request)
+    {
+        try
+        {
+            await _activityDebounce.DelayAsync(
+                TimeSpan.FromMilliseconds(100),
+                request.Token);
+            await ReloadCardsCoreAsync(request.Token);
+        }
+        catch (OperationCanceledException) when (request.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            OperationMessage = $"刷新列表失败：{error.Message}";
+        }
+        finally
+        {
+            lock (_activityReloadGate)
+            {
+                if (ReferenceEquals(_activityReload, request))
+                {
+                    _activityReload = null;
+                    request.Dispose();
+                }
+            }
+        }
+    }
+
+    private void CancelPendingActivityReload()
+    {
+        lock (_activityReloadGate)
+        {
+            _activityReload?.Cancel();
+            _activityReload?.Dispose();
+            _activityReload = null;
+        }
     }
 
     private bool CanRefresh() => !IsRefreshing && !IsBusy;

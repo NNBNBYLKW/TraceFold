@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Domain.Inbox;
 
@@ -5,7 +7,8 @@ namespace TraceFold.Media.Application.Ingest;
 
 public sealed class BatchIngestService(
     IInboxSelectionStore selectionStore,
-    IIngestService ingest) : IBatchIngestService
+    IIngestService ingest,
+    ILogger<BatchIngestService>? logger = null) : IBatchIngestService
 {
     public async Task<BatchIngestPreviewDto> PreviewAsync(
         IReadOnlyList<InboxSelectionEntry> selection,
@@ -39,6 +42,13 @@ public sealed class BatchIngestService(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        Guid batchId = Guid.NewGuid();
+        long started = Stopwatch.GetTimestamp();
+        logger?.LogInformation(
+            "Batch ingest started BatchId {BatchId} SelectedCount {SelectedCount} Phase {Phase}",
+            batchId,
+            selection.Count,
+            "start");
         InboxSelectionEntry[] ordered = selection
             .OrderBy(entry => entry.Ordinal)
             .ToArray();
@@ -109,8 +119,58 @@ public sealed class BatchIngestService(
             }
         }
 
-        return new BatchIngestResult(items, stopped);
+        return Finish(
+            new BatchIngestResult(items, stopped),
+            batchId,
+            started,
+            logger);
     }
+
+    private static BatchIngestResult Finish(
+        BatchIngestResult result,
+        Guid batchId,
+        long started,
+        ILogger<BatchIngestService>? logger)
+    {
+        int completed = Count(result, BatchIngestItemOutcome.Completed);
+        int conflict = Count(result, BatchIngestItemOutcome.ConflictBlocked);
+        int processing = Count(
+            result,
+            BatchIngestItemOutcome.RequiresProcessing);
+        int recovery = Count(result, BatchIngestItemOutcome.RecoveryBlocked);
+        int changed = Count(result, BatchIngestItemOutcome.ChangedOrInvalid);
+        int failed = Count(result, BatchIngestItemOutcome.Failed);
+        int notStarted = Count(result, BatchIngestItemOutcome.NotStarted);
+        string? errorCode = failed > 0
+            ? "batch.ingest.failed"
+            : conflict > 0 ? "batch.ingest.conflict_blocked"
+            : processing > 0 ? "batch.ingest.requires_processing"
+            : recovery > 0 ? "batch.ingest.recovery_blocked"
+            : changed > 0 ? "batch.ingest.changed_or_invalid"
+            : notStarted > 0 ? "batch.ingest.not_started"
+            : null;
+        logger?.LogInformation(
+            "Batch ingest finished BatchId {BatchId} Phase {Phase} SelectedCount {SelectedCount} CompletedCount {CompletedCount} ConflictCount {ConflictCount} RequiresProcessingCount {RequiresProcessingCount} RecoveryBlockedCount {RecoveryBlockedCount} ChangedCount {ChangedCount} FailedCount {FailedCount} NotStartedCount {NotStartedCount} StoppedByUser {StoppedByUser} ErrorCode {ErrorCode} DurationMs {DurationMs}",
+            batchId,
+            "finish",
+            result.Items.Count,
+            completed,
+            conflict,
+            processing,
+            recovery,
+            changed,
+            failed,
+            notStarted,
+            result.StoppedByUser,
+            errorCode,
+            Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        return result;
+    }
+
+    private static int Count(
+        BatchIngestResult result,
+        BatchIngestItemOutcome outcome) =>
+        result.Items.Count(item => item.Outcome == outcome);
 
     private static BatchIngestPreviewCategory PreviewCategory(
         InboxSelectionEntry entry,

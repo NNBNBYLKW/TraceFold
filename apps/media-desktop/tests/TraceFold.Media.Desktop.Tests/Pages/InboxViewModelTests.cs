@@ -365,6 +365,8 @@ public sealed class InboxViewModelTests
             viewModel.Items.Take(2).ToArray(),
             TestContext.Current.CancellationToken);
         int searchesBefore = query.SearchCount;
+        InboxFocusRequest? focus = null;
+        viewModel.FocusRequested += (_, request) => focus = request;
 
         await viewModel.BatchEditMetadataCommand.ExecuteAsync(null);
 
@@ -374,6 +376,7 @@ public sealed class InboxViewModelTests
         Assert.True(query.SearchCount > searchesBefore);
         Assert.Contains("已修改 2 项资料", viewModel.OperationMessage,
             StringComparison.Ordinal);
+        Assert.Equal(InboxFocusTarget.List, focus?.Target);
     }
 
     [Fact]
@@ -441,6 +444,8 @@ public sealed class InboxViewModelTests
             query.Remove(selected[0]);
             query.Remove(selected[1]);
         };
+        InboxFocusRequest? focus = null;
+        viewModel.FocusRequested += (_, request) => focus = request;
 
         await viewModel.BatchIngestCommand.ExecuteAsync(null);
 
@@ -449,6 +454,8 @@ public sealed class InboxViewModelTests
         Assert.Equal(2, viewModel.BatchSummary.CompletedCount);
         Assert.Equal(1, viewModel.BatchSummary.ConflictCount);
         Assert.Equal(0, conflictDialog.ShowCount);
+        Assert.Equal(InboxFocusTarget.Item, focus?.Target);
+        Assert.Equal(selected[2], focus?.InboxItemId);
     }
 
     [Fact]
@@ -487,6 +494,31 @@ public sealed class InboxViewModelTests
         Assert.False(batchIngest.OperationTokenWasCancelled);
     }
 
+    [Fact]
+    public async Task Burst_item_notifications_trigger_one_debounced_query_reload()
+    {
+        var query = new RecordingInboxQuery();
+        var activity = new RecordingActivityNotifier();
+        var debounce = new ControlledDebounceScheduler();
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            activity: activity,
+            activityDebounce: debounce);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        int baseline = query.SearchCount;
+
+        activity.Publish(InboxActivityKind.ItemChanged);
+        activity.Publish(InboxActivityKind.ItemChanged);
+        activity.Publish(InboxActivityKind.ItemChanged);
+        debounce.ReleaseLatest();
+        await WaitUntilAsync(
+            () => query.SearchCount == baseline + 1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(baseline + 1, query.SearchCount);
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
@@ -503,12 +535,14 @@ public sealed class InboxViewModelTests
         IBatchMetadataDialogService? batchMetadataDialog = null,
         IBatchProcessingService? batchProcessing = null,
         IBatchIngestService? batchIngest = null,
-        IBatchIngestConfirmationService? batchConfirmation = null) =>
+        IBatchIngestConfirmationService? batchConfirmation = null,
+        IDebounceScheduler? activityDebounce = null) =>
         new(
             query,
             new CompletedScanner(),
             activity ?? new RecordingActivityNotifier(),
             new ImmediateDispatcher(),
+            activityDebounce ?? new ImmediateDebounceScheduler(),
             new MissingPreviewResolver(),
             new InboxInspectorViewModel(metadata),
             new InboxSelectionViewModel(),
@@ -1207,6 +1241,48 @@ public sealed class InboxViewModelTests
     private sealed class ImmediateDispatcher : IUiDispatcher
     {
         public void Enqueue(Action callback) => callback();
+    }
+
+    private sealed class ImmediateDebounceScheduler : IDebounceScheduler
+    {
+        public Task DelayAsync(
+            TimeSpan delay,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class ControlledDebounceScheduler : IDebounceScheduler
+    {
+        private readonly object _gate = new();
+        private TaskCompletionSource? _latest;
+
+        public async Task DelayAsync(
+            TimeSpan delay,
+            CancellationToken cancellationToken)
+        {
+            _ = delay;
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate)
+            {
+                _latest = completion;
+            }
+
+            using CancellationTokenRegistration registration =
+                cancellationToken.Register(() =>
+                    completion.TrySetCanceled(cancellationToken));
+            await completion.Task;
+        }
+
+        public void ReleaseLatest()
+        {
+            TaskCompletionSource? completion;
+            lock (_gate)
+            {
+                completion = _latest;
+            }
+
+            completion?.TrySetResult();
+        }
     }
 
     private sealed class BlockingDebounceScheduler : IDebounceScheduler

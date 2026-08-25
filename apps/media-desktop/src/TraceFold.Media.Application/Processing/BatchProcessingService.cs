@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Domain.Inbox;
 
@@ -5,13 +7,21 @@ namespace TraceFold.Media.Application.Processing;
 
 public sealed class BatchProcessingService(
     IInboxSelectionStore selectionStore,
-    IProcessingCommandService commands) : IBatchProcessingService
+    IProcessingCommandService commands,
+    ILogger<BatchProcessingService>? logger = null) : IBatchProcessingService
 {
     public async Task<BatchProcessingResult> StartAsync(
         IReadOnlyList<InboxSelectionEntry> selection,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        Guid batchId = Guid.NewGuid();
+        long started = Stopwatch.GetTimestamp();
+        logger?.LogInformation(
+            "Batch processing started BatchId {BatchId} SelectedCount {SelectedCount} Phase {Phase}",
+            batchId,
+            selection.Count,
+            "start");
         InboxSelectionEntry[] ordered = selection
             .OrderBy(item => item.Ordinal)
             .ToArray();
@@ -23,7 +33,11 @@ public sealed class BatchProcessingService(
         }
         catch (OperationCanceledException)
         {
-            return new BatchProcessingResult(NotStarted(ordered));
+            return Finish(
+                new BatchProcessingResult(NotStarted(ordered)),
+                batchId,
+                started,
+                logger);
         }
 
         Dictionary<Guid, InboxSelectionItemDto> byId = current
@@ -98,8 +112,48 @@ public sealed class BatchProcessingService(
             }
         }
 
-        return new BatchProcessingResult(results);
+        return Finish(
+            new BatchProcessingResult(results),
+            batchId,
+            started,
+            logger);
     }
+
+    private static BatchProcessingResult Finish(
+        BatchProcessingResult result,
+        Guid batchId,
+        long started,
+        ILogger<BatchProcessingService>? logger)
+    {
+        int queued = Count(result, BatchProcessingItemOutcome.Queued);
+        int active = Count(result, BatchProcessingItemOutcome.AlreadyActive);
+        int notRequired = Count(result, BatchProcessingItemOutcome.NotRequired);
+        int needsAttention = Count(
+            result,
+            BatchProcessingItemOutcome.NeedsAttention);
+        int notStarted = Count(result, BatchProcessingItemOutcome.NotStarted);
+        string? errorCode = needsAttention > 0
+            ? "batch.processing.needs_attention"
+            : notStarted > 0 ? "batch.processing.not_started" : null;
+        logger?.LogInformation(
+            "Batch processing finished BatchId {BatchId} Phase {Phase} SelectedCount {SelectedCount} QueuedCount {QueuedCount} AlreadyActiveCount {AlreadyActiveCount} NotRequiredCount {NotRequiredCount} NeedsAttentionCount {NeedsAttentionCount} NotStartedCount {NotStartedCount} ErrorCode {ErrorCode} DurationMs {DurationMs}",
+            batchId,
+            "finish",
+            result.Items.Count,
+            queued,
+            active,
+            notRequired,
+            needsAttention,
+            notStarted,
+            errorCode,
+            Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        return result;
+    }
+
+    private static int Count(
+        BatchProcessingResult result,
+        BatchProcessingItemOutcome outcome) =>
+        result.Items.Count(item => item.Outcome == outcome);
 
     private static BatchProcessingItemOutcome Map(ProcessingCommandOutcome value) =>
         value switch

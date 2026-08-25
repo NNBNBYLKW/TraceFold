@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Domain.Metadata;
 
@@ -5,7 +7,8 @@ namespace TraceFold.Media.Application.Metadata;
 
 public sealed class BatchMetadataService(
     IBatchMetadataStore store,
-    IInboxActivityNotifier notifier) : IBatchMetadataService
+    IInboxActivityNotifier notifier,
+    ILogger<BatchMetadataService>? logger = null) : IBatchMetadataService
 {
     public Task<BatchMetadataEditorDto?> PrepareAsync(
         IReadOnlyList<InboxSelectionEntry> selection,
@@ -17,11 +20,19 @@ public sealed class BatchMetadataService(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
+        Guid batchId = Guid.NewGuid();
+        long started = Stopwatch.GetTimestamp();
+        int selectedCount = command.Selection?.Count ?? 0;
+        logger?.LogInformation(
+            "Batch metadata started BatchId {BatchId} SelectedCount {SelectedCount} Phase {Phase}",
+            batchId,
+            selectedCount,
+            "start");
         BatchMetadataCommand validated;
         try
         {
             validated = BatchMetadataCommand.Create(
-                command.Selection,
+                command.Selection!,
                 command.Mode,
                 command.Authors,
                 command.Series,
@@ -29,9 +40,11 @@ public sealed class BatchMetadataService(
         }
         catch (ArgumentException)
         {
-            return Failure(
-                command.Selection?.Count ?? 0,
-                "batch.metadata.selection_invalid");
+            return Finish(
+                Failure(selectedCount, "batch.metadata.selection_invalid"),
+                batchId,
+                started,
+                logger);
         }
 
         BatchMetadataWrite write;
@@ -51,9 +64,13 @@ public sealed class BatchMetadataService(
         }
         catch (ArgumentException)
         {
-            return Failure(
-                validated.Selection.Count,
-                "batch.metadata.taxonomy_invalid");
+            return Finish(
+                Failure(
+                    validated.Selection.Count,
+                    "batch.metadata.taxonomy_invalid"),
+                batchId,
+                started,
+                logger);
         }
 
         BatchMetadataResult result = await store.ApplyAsync(
@@ -63,11 +80,35 @@ public sealed class BatchMetadataService(
             notifier.Publish(InboxActivityKind.ItemChanged);
         }
 
-        return result;
+        return Finish(result, batchId, started, logger);
     }
 
     private static BatchMetadataResult Failure(int affectedCount, string errorCode) =>
         new(false, 0, 0, affectedCount, errorCode);
+
+    private static BatchMetadataResult Finish(
+        BatchMetadataResult result,
+        Guid batchId,
+        long started,
+        ILogger<BatchMetadataService>? logger)
+    {
+        string? errorCode = result.ErrorCode?.StartsWith(
+            "batch.metadata.",
+            StringComparison.Ordinal) == true
+                ? result.ErrorCode
+                : result.Succeeded ? null : "batch.metadata.failed";
+        logger?.LogInformation(
+            "Batch metadata finished BatchId {BatchId} Phase {Phase} Succeeded {Succeeded} ChangedCount {ChangedCount} UnchangedCount {UnchangedCount} AffectedCount {AffectedCount} ErrorCode {ErrorCode} DurationMs {DurationMs}",
+            batchId,
+            "finish",
+            result.Succeeded,
+            result.ChangedCount,
+            result.UnchangedCount,
+            result.AffectedCount,
+            errorCode,
+            Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        return result;
+    }
 
     private static IReadOnlyList<BatchTaxonomyToken> Convert(
         IReadOnlyList<BatchTaxonomyReference> values)
