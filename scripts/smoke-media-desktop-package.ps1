@@ -346,7 +346,7 @@ try {
         }
         foreach ($formalFile in @('photo.jpg', 'ordinary.mp4', 'paired.mp4')) {
             if (-not (Test-Path -LiteralPath (Join-Path $probeRoot "library\$formalFile"))) {
-                throw "Stage 5A probe formal file is missing: $formalFile"
+                throw 'Stage 5A probe formal asset is missing.'
             }
         }
     }
