@@ -91,7 +91,7 @@ privacy test passed; 6/6 architecture tests passed; and 30/30 Stage 5A/Stage
 | No automatic processing or ingest | `BatchProcessingServiceTests.Start_calls_the_single_item_command_only_for_actionable_items_in_order` delegates only after an explicit batch-start action; `BatchIngestServiceTests.Preview_reclassifies_current_facts_without_calling_ingest` proves preview does not ingest. |
 | One series field with explicit semantics | `BatchMetadataMutationTests.Replace_can_explicitly_clear_series_without_touching_other_fields` and `BatchMetadataDialogViewModelTests.Explicit_clear_builds_clear_while_disabled_field_stays_unchanged`; manual item 6 passed. |
 | No batch display-name or physical-filename change | Batch metadata command/model tests cover authors, series, and tags only; manual item 5 explicitly inspected both display and physical filenames and passed. |
-| No sensitive batch logging | `Stage5ALoggingPrivacyTests.Batch_logs_keep_counts_and_codes_without_private_values` permits counts/codes and rejects path, display name, taxonomy values, and hashes; focused run: 1/1. |
+| No sensitive batch logging | `Stage5ALoggingPrivacyTests.Batch_logs_keep_counts_and_codes_without_private_values` permits counts/codes and rejects path, display name, taxonomy values, and hashes. `Stage4LoggingPrivacyTests.Conflict_failure_keeps_ids_and_code_without_private_evidence` injects physical-filename and probe-owner-token markers (with paths, display name, taxonomy values, and hash) into a failure and asserts every marker is absent from captured logs. Focused privacy run: 2/2. Batch dialog-input handling has bounded static evidence rather than a dedicated log-capture test: `WindowsBatchMetadataDialogService` and `WindowsBatchIngestConfirmationService` contain neither an `ILogger` dependency nor a `Log*` call, so those adapters do not emit dialog-input logs. |
 
 The Stage 5A package-probe regression additionally covers guarded parsing,
 atomic metadata, generic processing, partial ingest, conflict retention, and
@@ -99,7 +99,26 @@ clean internal storage; its focused run passed 30/30. Stage 4 behavior remains
 in that same regression filter rather than relying on an unverified historic
 count.
 
-## Package and smoke evidence
+### Privacy-evidence boundary
+
+The focused privacy command was:
+
+```powershell
+dotnet test apps/media-desktop/tests/TraceFold.Media.Infrastructure.Tests/TraceFold.Media.Infrastructure.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --filter "FullyQualifiedName~Stage4LoggingPrivacyTests|FullyQualifiedName~Stage5ALoggingPrivacyTests"
+```
+
+It passed 2/2 with 0 failures and 0 skips. `Stage4LoggingPrivacyTests` is the
+specific automated evidence for physical filenames and probe owner tokens.
+There is no current automated test that injects a batch-dialog input marker
+into a logger and asserts its absence. The dialog-input statement above is
+therefore limited to the two batch dialog adapter source files, for which the
+following static inspection returned no matches:
+
+```powershell
+rg -n "(Log[A-Za-z]*\(|ILogger|Log\.)" apps/media-desktop/src/TraceFold.Media.Desktop/Dialogs -g '*.cs' -g '*.xaml.cs'
+```
+
+## Package, deployment, and smoke evidence
 
 The published offline Windows x64 package is
 `dist/TraceFold-MediaDesktop-Stage5A-win-x64`; its ZIP is
@@ -117,6 +136,22 @@ The published offline Windows x64 package is
 | `tools/ffmpeg/ffmpeg.exe` SHA-256 | `D5A3CDFF713F3DE9C3EC6CD0DD1BCD046BB0EB97712BD32D340E39D1F88DEF05` |
 | `tools/ffmpeg/ffprobe.exe` SHA-256 | `E6C17A4AE25E03275ADB00F664448D5D37ADDB88AE82372BAF1DC8BBDC7C3BB2` |
 
+Direct read-only package inspection establishes the deployment form:
+
+```powershell
+$package = 'dist\TraceFold-MediaDesktop-Stage5A-win-x64'
+$rootExe = Join-Path $package 'TraceFold.Media.exe'
+$appx = Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object { $_.Name -in 'AppxManifest.xml','AppxBlockMap.xml' -or $_.Extension -in '.appx','.msix','.msixbundle','.appxbundle' }
+$runtime = @('hostfxr.dll','hostpolicy.dll','coreclr.dll','TraceFold.Media.runtimeconfig.json') | ForEach-Object { $path = Join-Path $package $_; [pscustomobject]@{ Name = $_; Exists = Test-Path -LiteralPath $path; Length = if (Test-Path -LiteralPath $path) { (Get-Item -LiteralPath $path).Length } else { $null } } }
+[pscustomobject]@{ RootTraceFoldMediaExe = Test-Path -LiteralPath $rootExe; AppxArtifactsFound = @($appx).Count; AppxArtifactNames = (@($appx | Select-Object -ExpandProperty Name) -join ','); RuntimePayload = $runtime } | ConvertTo-Json -Depth 4
+```
+
+Output: root `TraceFold.Media.exe` exists; `AppxArtifactsFound` is `0`; and
+the root has `hostfxr.dll` (379,728 bytes), `hostpolicy.dll` (378,664 bytes),
+`coreclr.dll` (4,609,320 bytes), and `TraceFold.Media.runtimeconfig.json`
+(566 bytes). This is direct evidence of an unpackaged root-EXE deployment with
+its self-contained .NET runtime payload, rather than an MSIX/AppX package.
+
 The package smoke command was:
 
 ```powershell
@@ -129,6 +164,11 @@ Its output was:
 PASS: native window, single instance, offline startup, and clean exit verified
 PASS: Stage 5A batch metadata, processing, partial ingest, and clean storage verified
 ```
+
+The smoke script launches the root EXE and sets `PATH` to only
+`$env:SystemRoot\System32` for its restricted-PATH run (`$exePath` at line 13;
+PATH restriction at line 239), so the recorded offline PASS result also checks
+that the package does not depend on a host FFmpeg/runtime lookup.
 
 Package hygiene inspection found no `.pdb`, `.cs`, `.csproj`, `.db`, `.log`,
 or `.dmp` files. The post-smoke residual-process query for `TraceFold.Media`
@@ -143,3 +183,10 @@ manifest, inventory, hashes, smoke output, hygiene query, and process query
 for package evidence. It does not claim a clean-VM run, does not republish or
 modify `dist`, and does not treat an automated result as a substitute for the
 user's manual result.
+
+Evidence-verification boundary: this documentation-only diff records observed
+command/package outcomes but cannot independently prove the earlier build,
+full/focused test, inventory/hash, FFmpeg, hygiene/process, or smoke results.
+The controller must independently rerun the cited current-HEAD build/tests and
+package checks after review; this record does not represent that controller
+verification as already complete.
