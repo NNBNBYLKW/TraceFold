@@ -42,6 +42,30 @@ public sealed class MediaWorkspaceStructureTests
         Assert.Contains("Modifiers=\"Control\" Key=\"A\"", inboxXaml,
             StringComparison.Ordinal);
         Assert.Contains("Key=\"Escape\"", inboxXaml, StringComparison.Ordinal);
+        string batchDialogXaml = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "BatchMetadataDialog.xaml"),
+            TestContext.Current.CancellationToken);
+        foreach (string id in new[]
+        {
+            "BatchMetadataDialog",
+            "BatchMetadataAddTab",
+            "BatchMetadataRemoveTab",
+            "BatchMetadataReplaceTab",
+            "BatchReplaceAuthorsEnabled",
+            "BatchReplaceAuthorsClear",
+            "BatchReplaceSeriesEnabled",
+            "BatchReplaceSeriesClear",
+            "BatchReplaceTagsEnabled",
+            "BatchReplaceTagsClear",
+            "BatchMetadataSubmitButton",
+            "InboxBatchMetadataButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                batchDialogXaml + inboxXaml,
+                StringComparison.Ordinal);
+        }
         Assert.Contains(
             "AutomationProperties.AutomationId=\"InspectorPane\"",
             inboxXaml,

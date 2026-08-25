@@ -56,6 +56,13 @@
                         FontWeight="SemiBold"
                         Text="{x:Bind ViewModel.Selection.SelectedCount, Mode=OneWay}" />
                     <Button
+                        Grid.Column="2"
+                        HorizontalAlignment="Right"
+                        AutomationProperties.AutomationId="InboxBatchMetadataButton"
+                        AutomationProperties.Name="批量编辑所选文件的资料"
+                        Command="{x:Bind ViewModel.BatchEditMetadataCommand}"
+                        Content="批量编辑资料" />
+                    <Button
                         Grid.Column="3"
                         AutomationProperties.AutomationId="InboxCancelSelectionButton"
                         Click="OnCancelSelectionClick"
@@ -322,18 +329,6 @@
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="{x:Bind ViewModel.BatchSummary.StateCountText, Mode=OneWay}"
                         TextWrapping="Wrap" />
-                    <Button
-                        HorizontalAlignment="Stretch"
-                        Content="批量编辑资料"
-                        IsEnabled="{x:Bind ViewModel.BatchSummary.CanEditMetadata, Mode=OneWay}" />
-                    <Button
-                        HorizontalAlignment="Stretch"
-                        Content="批量开始前置处理"
-                        IsEnabled="{x:Bind ViewModel.BatchSummary.CanStartProcessing, Mode=OneWay}" />
-                    <Button
-                        HorizontalAlignment="Stretch"
-                        Content="预览批量入库"
-                        IsEnabled="{x:Bind ViewModel.BatchSummary.CanPreviewIngest, Mode=OneWay}" />
                 </StackPanel>
                 </Grid>
             </ScrollViewer>

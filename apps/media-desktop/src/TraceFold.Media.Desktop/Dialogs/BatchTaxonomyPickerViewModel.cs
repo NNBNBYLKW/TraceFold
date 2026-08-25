@@ -5,6 +5,10 @@ using TraceFold.Media.Domain.Metadata;
 
 namespace TraceFold.Media.Desktop.Dialogs;
 
+public sealed record BatchTaxonomyChoiceViewModel(
+    BatchTaxonomyReference Value,
+    string DisplayText);
+
 public sealed partial class BatchTaxonomyPickerViewModel(
     ITaxonomySearchService taxonomy,
     TaxonomyKind kind) : ObservableObject
@@ -22,6 +26,8 @@ public sealed partial class BatchTaxonomyPickerViewModel(
     public ObservableCollection<TaxonomyTermDto> Suggestions { get; } = [];
 
     public ObservableCollection<BatchTaxonomyReference> SelectedValues { get; } = [];
+
+    public ObservableCollection<BatchTaxonomyChoiceViewModel> SelectedChoices { get; } = [];
 
     public ObservableCollection<BatchTermCoverageOptionViewModel>
         AvailableExisting { get; } = [];
@@ -69,12 +75,16 @@ public sealed partial class BatchTaxonomyPickerViewModel(
         if (Kind == TaxonomyKind.Series)
         {
             SelectedValues.Clear();
+            SelectedChoices.Clear();
             _selectedKeys.Clear();
         }
 
         if (!_selectedKeys.Contains(key, StringComparer.Ordinal))
         {
             SelectedValues.Add(value);
+            SelectedChoices.Add(new(
+                value,
+                existing?.DisplayName ?? name.Display));
             _selectedKeys.Add(key);
         }
 
@@ -92,6 +102,7 @@ public sealed partial class BatchTaxonomyPickerViewModel(
         }
 
         SelectedValues.RemoveAt(index);
+        SelectedChoices.RemoveAt(index);
         _selectedKeys.RemoveAt(index);
     }
 
@@ -109,6 +120,7 @@ public sealed partial class BatchTaxonomyPickerViewModel(
         InputText = string.Empty;
         Suggestions.Clear();
         SelectedValues.Clear();
+        SelectedChoices.Clear();
         _selectedKeys.Clear();
         foreach (BatchTermCoverageOptionViewModel option in AvailableExisting)
         {

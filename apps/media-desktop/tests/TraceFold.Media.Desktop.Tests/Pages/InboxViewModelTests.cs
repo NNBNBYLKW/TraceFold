@@ -5,6 +5,7 @@ using TraceFold.Media.Application.Preview;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Ingest;
+using TraceFold.Media.Domain.Metadata;
 using TraceFold.Media.Domain.Processing;
 using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Pages;
@@ -338,6 +339,43 @@ public sealed class InboxViewModelTests
         Assert.Empty(viewModel.Selection.SelectedIds);
     }
 
+    [Fact]
+    public async Task Batch_metadata_command_retries_inside_one_dialog_and_reloads_on_success()
+    {
+        var query = new RecordingInboxQuery();
+        var batchMetadata = new RecordingBatchMetadataService
+        {
+            PrepareResult = new BatchMetadataEditorDto(2, [], [])
+        };
+        batchMetadata.ApplyResults.Enqueue(new BatchMetadataResult(
+            false, 0, 0, 2, "batch.metadata.version_conflict"));
+        batchMetadata.ApplyResults.Enqueue(new BatchMetadataResult(
+            true, 2, 0, 2, null));
+        var dialog = new RecordingBatchMetadataDialogService
+        {
+            SubmitTwiceBeforeClosing = true
+        };
+        InboxViewModel viewModel = CreateViewModel(
+            query,
+            CreateMetadata(),
+            batchMetadata: batchMetadata,
+            batchMetadataDialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectManyAsync(
+            viewModel.Items.Take(2).ToArray(),
+            TestContext.Current.CancellationToken);
+        int searchesBefore = query.SearchCount;
+
+        await viewModel.BatchEditMetadataCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, dialog.ShowCount);
+        Assert.Equal(2, batchMetadata.ApplyCount);
+        Assert.True(dialog.InputWasRetainedAfterFailure);
+        Assert.True(query.SearchCount > searchesBefore);
+        Assert.Contains("已修改 2 项资料", viewModel.OperationMessage,
+            StringComparison.Ordinal);
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
@@ -349,7 +387,9 @@ public sealed class InboxViewModelTests
         IConflictDialogService? conflictDialog = null,
         IIngestRecoveryService? recovery = null,
         IRecoveryRevealService? recoveryReveal = null,
-        IInboxActivityNotifier? activity = null) =>
+        IInboxActivityNotifier? activity = null,
+        IBatchMetadataService? batchMetadata = null,
+        IBatchMetadataDialogService? batchMetadataDialog = null) =>
         new(
             query,
             new CompletedScanner(),
@@ -359,6 +399,8 @@ public sealed class InboxViewModelTests
             new InboxInspectorViewModel(metadata),
             new InboxSelectionViewModel(),
             new InboxBatchSummaryViewModel(new RecordingBatchSummaryService()),
+            batchMetadata ?? new RecordingBatchMetadataService(),
+            batchMetadataDialog ?? new RecordingBatchMetadataDialogService(),
             ingest ?? new RecordingIngestService(() => true),
             recovery ?? new NoOpRecoveryService(),
             conflicts ?? new FixedConflictQueryService(null),
@@ -460,11 +502,14 @@ public sealed class InboxViewModelTests
 
         public InboxQuery? LastQuery { get; private set; }
 
+        public int SearchCount { get; private set; }
+
         public Task<IReadOnlyList<InboxCardDto>> SearchAsync(
             InboxQuery query,
             CancellationToken cancellationToken)
         {
             LastQuery = query;
+            SearchCount++;
             return Task.FromResult<IReadOnlyList<InboxCardDto>>(Cards.ToArray());
         }
 
@@ -518,6 +563,74 @@ public sealed class InboxViewModelTests
                 true,
                 false,
                 selection.Count >= 2));
+    }
+
+    private sealed class RecordingBatchMetadataService : IBatchMetadataService
+    {
+        public BatchMetadataEditorDto? PrepareResult { get; set; }
+
+        public Queue<BatchMetadataResult> ApplyResults { get; } = [];
+
+        public int ApplyCount { get; private set; }
+
+        public Task<BatchMetadataEditorDto?> PrepareAsync(
+            IReadOnlyList<InboxSelectionEntry> selection,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<BatchMetadataEditorDto?>(PrepareResult
+                ?? new BatchMetadataEditorDto(selection.Count, [], []));
+
+        public Task<BatchMetadataResult> ApplyAsync(
+            BatchMetadataCommand command,
+            CancellationToken cancellationToken)
+        {
+            ApplyCount++;
+            return Task.FromResult(ApplyResults.Count > 0
+                ? ApplyResults.Dequeue()
+                : new BatchMetadataResult(
+                    true,
+                    command.Selection.Count,
+                    0,
+                    command.Selection.Count,
+                    null));
+        }
+    }
+
+    private sealed class RecordingBatchMetadataDialogService
+        : IBatchMetadataDialogService
+    {
+        public bool SubmitTwiceBeforeClosing { get; init; }
+
+        public int ShowCount { get; private set; }
+
+        public bool InputWasRetainedAfterFailure { get; private set; }
+
+        public async Task<BatchMetadataDialogResult> ShowAsync(
+            BatchMetadataEditorDto editor,
+            IReadOnlyList<InboxSelectionEntry> selection,
+            Func<BatchMetadataCommand, CancellationToken,
+                Task<BatchMetadataResult>> submit,
+            CancellationToken cancellationToken)
+        {
+            ShowCount++;
+            BatchMetadataCommand command = BatchMetadataCommand.Create(
+                selection,
+                BatchMetadataMode.Add,
+                new BatchMetadataSetEdit(
+                    BatchMetadataFieldOperation.Add,
+                    [BatchTaxonomyReference.New(
+                        TaxonomyKind.Author,
+                        "作者甲")]),
+                BatchMetadataSeriesEdit.Unchanged,
+                BatchMetadataSetEdit.Unchanged);
+            BatchMetadataResult result = await submit(command, cancellationToken);
+            if (SubmitTwiceBeforeClosing && !result.Succeeded)
+            {
+                InputWasRetainedAfterFailure = true;
+                result = await submit(command, cancellationToken);
+            }
+
+            return new BatchMetadataDialogResult(result.Succeeded, result);
+        }
     }
 
     private sealed class RecordingMetadataGateway : IMetadataEditorService

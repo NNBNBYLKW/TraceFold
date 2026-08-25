@@ -27,6 +27,8 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IInboxActivityNotifier _activity;
     private readonly IUiDispatcher _dispatcher;
     private readonly IMediaPreviewResolver _previewResolver;
+    private readonly IBatchMetadataService _batchMetadata;
+    private readonly IBatchMetadataDialogService _batchMetadataDialog;
     private readonly IIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
     private readonly IConflictQueryService _conflictQuery;
@@ -49,6 +51,8 @@ public sealed partial class InboxViewModel : ObservableObject
         InboxInspectorViewModel inspector,
         InboxSelectionViewModel selection,
         InboxBatchSummaryViewModel batchSummary,
+        IBatchMetadataService batchMetadata,
+        IBatchMetadataDialogService batchMetadataDialog,
         IIngestService ingest,
         IIngestRecoveryService recovery,
         IConflictQueryService conflictQuery,
@@ -66,6 +70,8 @@ public sealed partial class InboxViewModel : ObservableObject
         Inspector = inspector;
         Selection = selection;
         BatchSummary = batchSummary;
+        _batchMetadata = batchMetadata;
+        _batchMetadataDialog = batchMetadataDialog;
         _ingest = ingest;
         _recovery = recovery;
         _conflictQuery = conflictQuery;
@@ -183,6 +189,48 @@ public sealed partial class InboxViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(items);
         Selection.ReplaceFromGrid(items, Items);
         await PresentSelectionAsync(cancellationToken);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanBatchEditMetadata))]
+    private async Task BatchEditMetadataAsync(CancellationToken cancellationToken)
+    {
+        if (!CanBatchEditMetadata())
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            IReadOnlyList<InboxSelectionEntry> selection = Selection.Capture();
+            BatchMetadataEditorDto? editor = await _batchMetadata.PrepareAsync(
+                selection,
+                cancellationToken);
+            if (editor is null)
+            {
+                OperationMessage = "选择已变化，请刷新后重新选择。";
+                await ReloadCardsAsync(cancellationToken);
+                return;
+            }
+
+            BatchMetadataDialogResult dialogResult =
+                await _batchMetadataDialog.ShowAsync(
+                    editor,
+                    selection,
+                    _batchMetadata.ApplyAsync,
+                    cancellationToken);
+            if (dialogResult.Applied && dialogResult.Result is not null)
+            {
+                OperationMessage =
+                    $"已修改 {dialogResult.Result.ChangedCount} 项资料，"
+                    + $"{dialogResult.Result.UnchangedCount} 项无变化。";
+                await ReloadCardsAsync(cancellationToken);
+            }
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -596,6 +644,10 @@ public sealed partial class InboxViewModel : ObservableObject
 
     private bool CanRefresh() => !IsRefreshing && !IsBusy;
 
+    private bool CanBatchEditMetadata() => !IsBusy
+        && Selection.IsBatchSelection
+        && BatchSummary.CanEditMetadata;
+
     private bool CanIngest() => !IsBusy
         && SelectedItem?.Card.CanIngest == true
         && Inspector.AllowedActions.HasFlag(InboxAction.Ingest);
@@ -642,6 +694,7 @@ public sealed partial class InboxViewModel : ObservableObject
     private void NotifyCommands()
     {
         RefreshCommand.NotifyCanExecuteChanged();
+        BatchEditMetadataCommand.NotifyCanExecuteChanged();
         IngestCommand.NotifyCanExecuteChanged();
         ClearMissingCommand.NotifyCanExecuteChanged();
         RetryCommand.NotifyCanExecuteChanged();

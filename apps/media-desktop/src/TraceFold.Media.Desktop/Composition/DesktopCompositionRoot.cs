@@ -32,6 +32,8 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<IDebounceScheduler, ProductionDebounceScheduler>();
                 services.AddSingleton<IMetadataEditorRegistry, MetadataEditorRegistry>();
                 services.AddSingleton<IConflictDialogService, WindowsConflictDialogService>();
+                services.AddSingleton<IBatchMetadataDialogService,
+                    WindowsBatchMetadataDialogService>();
                 services.AddSingleton<IUiDispatcher>(_ => new DispatcherQueueAdapter(
                     DispatcherQueue.GetForCurrentThread()
                     ?? throw new InvalidOperationException(

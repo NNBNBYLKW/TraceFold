@@ -85,6 +85,20 @@ public sealed partial class BatchMetadataDialogViewModel : ObservableObject
     [ObservableProperty]
     public partial BatchMetadataResult? LastResult { get; private set; }
 
+    [ObservableProperty]
+    public partial bool IsSubmitting { get; set; }
+
+    public bool CanSubmit => !IsSubmitting;
+
+    public bool ReplaceAuthorsInputEnabled =>
+        ReplaceAuthorsEnabled && !ClearAuthors;
+
+    public bool ReplaceSeriesInputEnabled =>
+        ReplaceSeriesEnabled && !ClearSeries;
+
+    public bool ReplaceTagsInputEnabled =>
+        ReplaceTagsEnabled && !ClearTags;
+
     public void Load(
         BatchMetadataEditorDto editor,
         IReadOnlyList<InboxSelectionEntry> selection)
@@ -167,6 +181,55 @@ public sealed partial class BatchMetadataDialogViewModel : ObservableObject
         StatusMessage = result.Succeeded
             ? $"已修改 {result.ChangedCount} 项资料，{result.UnchangedCount} 项无变化。"
             : ResultError(result.ErrorCode);
+    }
+
+    public void ReportInputError(string message)
+    {
+        StatusMessage = string.IsNullOrWhiteSpace(message)
+            ? "输入无效，请检查后重试。"
+            : message;
+    }
+
+    partial void OnIsSubmittingChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(CanSubmit));
+    }
+
+    partial void OnReplaceAuthorsEnabledChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ReplaceAuthorsInputEnabled));
+    }
+
+    partial void OnClearAuthorsChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ReplaceAuthorsInputEnabled));
+    }
+
+    partial void OnReplaceSeriesEnabledChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ReplaceSeriesInputEnabled));
+    }
+
+    partial void OnClearSeriesChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ReplaceSeriesInputEnabled));
+    }
+
+    partial void OnReplaceTagsEnabledChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ReplaceTagsInputEnabled));
+    }
+
+    partial void OnClearTagsChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ReplaceTagsInputEnabled));
     }
 
     private BatchMetadataCommand BuildAddCommand()
