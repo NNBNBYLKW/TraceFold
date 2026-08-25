@@ -44,6 +44,8 @@ public sealed class PackageProbeEnvironment
 
     public PackageProbeRequest Request { get; }
 
+    public string ResultFilename => ResultFilenameFor(Request.Scenario);
+
     public string? MediaToolRootOverride { get; }
 
     public string DataDirectory { get; }
@@ -64,7 +66,8 @@ public sealed class PackageProbeEnvironment
         string? mediaToolRootOverride = null)
     {
         ArgumentNullException.ThrowIfNull(request);
-        string root = ValidateRootOwnership(request.Root, request.OwnerToken);
+        string root = ValidateRootOwnership(
+            request.Root, request.OwnerToken, request.Scenario);
         if (!ValidateFixtures(Path.Combine(root, Stage4PackageProbeOptions.FixturesDirectoryName)))
         {
             throw new IOException("The package probe fixtures changed.");
@@ -250,7 +253,8 @@ public sealed class PackageProbeEnvironment
 
     public void ValidateOwnedProbeTree(params string[] directories)
     {
-        _ = ValidateRootOwnership(Request.Root, Request.OwnerToken);
+        _ = ValidateRootOwnership(
+            Request.Root, Request.OwnerToken, Request.Scenario);
         foreach (string directory in directories)
         {
             string fullPath = Path.GetFullPath(directory);
@@ -280,12 +284,13 @@ public sealed class PackageProbeEnvironment
             throw new IOException("The package probe root contains an extra entry.");
         }
 
-        EnsureResultDoesNotExist(Stage4PackageProbeOptions.ResultFilename);
+        EnsureResultDoesNotExist(ResultFilename);
     }
 
     public void ValidateCrashResultWrite()
     {
-        _ = ValidateRootOwnership(Request.Root, Request.OwnerToken);
+        _ = ValidateRootOwnership(
+            Request.Root, Request.OwnerToken, Request.Scenario);
         if (Stage4CrashProbeManifest.ReadValidated(
                 Path.Combine(Request.Root, Stage4PackageProbeOptions.CrashManifestFilename),
                 Request.OwnerToken) is null)
@@ -316,7 +321,18 @@ public sealed class PackageProbeEnvironment
         return true;
     }
 
-    internal static string ValidateRootOwnership(string rootValue, string ownerToken)
+    public bool InternalWorkIsClean() =>
+        ProcessingWorkspaceIsEmpty() && InternalStorageIsClean();
+
+    public Task WriteScenarioResultAsync<T>(
+        T result,
+        CancellationToken cancellationToken) =>
+        WriteResultAsync(ResultFilename, result, cancellationToken);
+
+    internal static string ValidateRootOwnership(
+        string rootValue,
+        string ownerToken,
+        PackageProbeScenarioKind scenario)
     {
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootValue));
         string temp = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
@@ -324,14 +340,15 @@ public sealed class PackageProbeEnvironment
         string basename = Path.GetFileName(root);
         if (parent is null
             || !StringComparer.OrdinalIgnoreCase.Equals(Path.TrimEndingDirectorySeparator(parent), temp)
-            || !basename.StartsWith(Stage4PackageProbeOptions.RootNamePrefix, StringComparison.OrdinalIgnoreCase)
+            || !basename.StartsWith(RootNamePrefixFor(scenario), StringComparison.OrdinalIgnoreCase)
             || !Directory.Exists(root) || IsReparsePoint(root))
         {
             throw new IOException("The probe root is not owned.");
         }
 
         string ownerPath = Path.Combine(root, Stage4PackageProbeOptions.OwnerFilename);
-        if (!File.Exists(ownerPath) || IsReparsePoint(ownerPath)
+        if (HasReparsePointAtOrBelow(root)
+            || !File.Exists(ownerPath)
             || !StringComparer.Ordinal.Equals(File.ReadAllText(ownerPath), ownerToken))
         {
             throw new ProbeOptionValidationException("probe.owner_mismatch");
@@ -339,6 +356,15 @@ public sealed class PackageProbeEnvironment
 
         return root;
     }
+
+    internal static string ResultFilenameFor(PackageProbeScenarioKind scenario) => scenario switch
+    {
+        PackageProbeScenarioKind.Stage4Conflict or
+        PackageProbeScenarioKind.Stage4CrashSeed or
+        PackageProbeScenarioKind.Stage4CrashResume => Stage4PackageProbeOptions.ResultFilename,
+        PackageProbeScenarioKind.Stage5ABatch => PackageProbeOptions.Stage5AResultFilename,
+        _ => throw new ArgumentOutOfRangeException(nameof(scenario))
+    };
 
     internal static bool ValidateFixtures(string directory)
     {
@@ -439,6 +465,38 @@ public sealed class PackageProbeEnvironment
 
     private static bool IsReparsePoint(string path) =>
         File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
+
+    private static string RootNamePrefixFor(PackageProbeScenarioKind scenario) => scenario switch
+    {
+        PackageProbeScenarioKind.Stage4Conflict or
+        PackageProbeScenarioKind.Stage4CrashSeed or
+        PackageProbeScenarioKind.Stage4CrashResume => Stage4PackageProbeOptions.RootNamePrefix,
+        PackageProbeScenarioKind.Stage5ABatch => PackageProbeOptions.Stage5ARootNamePrefix,
+        _ => throw new ArgumentOutOfRangeException(nameof(scenario))
+    };
+
+    private static bool HasReparsePointAtOrBelow(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            foreach (string entry in Directory.EnumerateFileSystemEntries(pending.Pop()))
+            {
+                if (IsReparsePoint(entry))
+                {
+                    return true;
+                }
+
+                if (Directory.Exists(entry))
+                {
+                    pending.Push(entry);
+                }
+            }
+        }
+
+        return false;
+    }
 
     internal sealed class ProbeOptionValidationException(string errorCode) : IOException
     {

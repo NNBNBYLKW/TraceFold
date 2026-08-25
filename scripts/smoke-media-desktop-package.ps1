@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $PackageDirectory,
-    [Parameter(Mandatory)][ValidateSet('4A','4B')][string] $StageCheckpoint
+    [Parameter(Mandatory)][ValidateSet('4A','4B','5A')][string] $StageCheckpoint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,7 +41,13 @@ $secondary = $null
 $fatalLaunch = $null
 $probeProcess = $null
 $probeToken = [Guid]::NewGuid().ToString('D')
-$probeName = "tracefold-media-desktop-stage4-probe-$([Guid]::NewGuid().ToString('N'))"
+$probePrefix = if ($StageCheckpoint -eq '5A') {
+    'tracefold-media-desktop-stage5a-probe-'
+}
+else {
+    'tracefold-media-desktop-stage4-probe-'
+}
+$probeName = "$probePrefix$([Guid]::NewGuid().ToString('N'))"
 $probeRoot = [IO.Path]::GetFullPath((Join-Path $tempBase $probeName))
 $probeMarker = Join-Path $probeRoot 'probe-owner.txt'
 $crashProbeRoots = [Collections.Generic.List[object]]::new()
@@ -277,60 +283,105 @@ try {
             -LiteralPath (Join-Path $fixtureSource $fixtureName) `
             -Destination $probeFixtures
     }
-    $probeArguments = @(
-        '--stage4-package-probe-root',
-        ('"{0}"' -f $probeRoot),
-        '--stage4-package-probe-token',
-        $probeToken,
-        '--stage4-package-probe-mode',
-        'conflict')
+    if ($StageCheckpoint -eq '5A') {
+        $probeArguments = @(
+            '--package-probe-root',
+            ('"{0}"' -f $probeRoot),
+            '--package-probe-token',
+            $probeToken,
+            '--package-probe-scenario',
+            'stage5a-batch')
+        $probeNameLabel = 'Stage 5A'
+        $probeResultFilename = 'stage5a-probe-result.json'
+    }
+    else {
+        $probeArguments = @(
+            '--stage4-package-probe-root',
+            ('"{0}"' -f $probeRoot),
+            '--stage4-package-probe-token',
+            $probeToken,
+            '--stage4-package-probe-mode',
+            'conflict')
+        $probeNameLabel = 'Stage 4A'
+        $probeResultFilename = 'stage4-probe-result.json'
+    }
     $probeProcess = Start-Process `
         -FilePath $exePath `
         -ArgumentList $probeArguments `
         -PassThru `
         -WindowStyle Hidden
     if (-not $probeProcess.WaitForExit(60000)) {
-        throw 'Stage 4A package probe did not exit within 60 seconds.'
+        throw "$probeNameLabel package probe did not exit within 60 seconds."
     }
     if ($probeProcess.ExitCode -ne 0) {
-        throw "Stage 4A package probe failed with exit code $($probeProcess.ExitCode)."
+        throw "$probeNameLabel package probe failed with exit code $($probeProcess.ExitCode)."
     }
 
-    $probeResultPath = Join-Path $probeRoot 'stage4-probe-result.json'
+    $probeResultPath = Join-Path $probeRoot $probeResultFilename
     if (-not (Test-Path -LiteralPath $probeResultPath -PathType Leaf)) {
-        throw 'Stage 4A package probe result is missing.'
+        throw "$probeNameLabel package probe result is missing."
     }
     $result = Get-Content -LiteralPath $probeResultPath -Raw | ConvertFrom-Json
-    if (-not $result.Succeeded) {
-        throw "Stage 4A package probe reported failure: $($result.ErrorCode)"
-    }
-    foreach ($caseProperty in @(
-            'RegisteredReplacePassed',
-            'ContentKeepBothPassed',
-            'UnmanagedReplacePassed',
-            'ReopenPassed',
-            'ProcessedMediaPassed')) {
-        if (-not [bool]$result.$caseProperty) {
-            throw "Stage 4A package probe case failed: $caseProperty"
+    if ($StageCheckpoint -eq '5A') {
+        foreach ($caseProperty in @(
+                'Succeeded',
+                'AtomicMetadata',
+                'GenericProcessingQueued',
+                'ProcessingCompleted',
+                'ConflictSourceRetained',
+                'InternalStorageClean')) {
+            if (-not [bool]$result.$caseProperty) {
+                throw "Stage 5A package probe case failed: $caseProperty"
+            }
+        }
+        if ([int]$result.CompletedIngestCount -ne 3 -or
+            [int]$result.ConflictCount -ne 1 -or
+            -not [string]::IsNullOrEmpty([string]$result.ErrorCode)) {
+            throw 'Stage 5A package probe result fields are invalid.'
+        }
+        if ((Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\paired.mp4')) -or
+            (Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\paired.m4a')) -or
+            -not (Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\photo-copy.jpg'))) {
+            throw 'Stage 5A probe sources were not retained and cleaned as expected.'
+        }
+        foreach ($formalFile in @('photo.jpg', 'ordinary.mp4', 'paired.mp4')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $probeRoot "library\$formalFile"))) {
+                throw "Stage 5A probe formal file is missing: $formalFile"
+            }
         }
     }
-    if ([int]$result.ImageAssetCount -ne 3 -or
-        [int]$result.VideoAssetCount -ne 1 -or
-        [int]$result.TotalAssetCount -ne 4) {
-        throw 'Stage 4A package probe asset counts are invalid.'
-    }
-    $reportedToolPath = [IO.Path]::GetFullPath([string]$result.ToolPath)
-    if (-not [StringComparer]::OrdinalIgnoreCase.Equals(
-            $reportedToolPath,
-            $packageFfmpegPath)) {
-        throw "Probe used a tool outside the package: $reportedToolPath"
-    }
-    if ((Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\paired.mp4')) -or
-        (Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\paired.m4a'))) {
-        throw 'Probe sources were not removed after verified ingest.'
-    }
-    if (-not (Test-Path -LiteralPath (Join-Path $probeRoot 'library\paired.mp4'))) {
-        throw 'Probe formal file is missing.'
+    else {
+        if (-not $result.Succeeded) {
+            throw "Stage 4A package probe reported failure: $($result.ErrorCode)"
+        }
+        foreach ($caseProperty in @(
+                'RegisteredReplacePassed',
+                'ContentKeepBothPassed',
+                'UnmanagedReplacePassed',
+                'ReopenPassed',
+                'ProcessedMediaPassed')) {
+            if (-not [bool]$result.$caseProperty) {
+                throw "Stage 4A package probe case failed: $caseProperty"
+            }
+        }
+        if ([int]$result.ImageAssetCount -ne 3 -or
+            [int]$result.VideoAssetCount -ne 1 -or
+            [int]$result.TotalAssetCount -ne 4) {
+            throw 'Stage 4A package probe asset counts are invalid.'
+        }
+        $reportedToolPath = [IO.Path]::GetFullPath([string]$result.ToolPath)
+        if (-not [StringComparer]::OrdinalIgnoreCase.Equals(
+                $reportedToolPath,
+                $packageFfmpegPath)) {
+            throw "Probe used a tool outside the package: $reportedToolPath"
+        }
+        if ((Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\paired.mp4')) -or
+            (Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\paired.m4a'))) {
+            throw 'Probe sources were not removed after verified ingest.'
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $probeRoot 'library\paired.mp4'))) {
+            throw 'Probe formal file is missing.'
+        }
     }
     $processingRoot = Join-Path $probeRoot 'work\.tracefold\processing'
     if ((Test-Path -LiteralPath $processingRoot) -and
@@ -386,8 +437,13 @@ try {
     }
 
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
-    Write-Output 'PASS: Stage 4A registered replace, Keep Both, unmanaged replace, and reopen flows verified'
-    Write-Output 'PASS: Stage 4A package-local FFmpeg processing and clean storage verified'
+    if ($StageCheckpoint -eq '5A') {
+        Write-Output 'PASS: Stage 5A batch metadata, processing, partial ingest, and clean storage verified'
+    }
+    else {
+        Write-Output 'PASS: Stage 4A registered replace, Keep Both, unmanaged replace, and reopen flows verified'
+        Write-Output 'PASS: Stage 4A package-local FFmpeg processing and clean storage verified'
+    }
     if ($StageCheckpoint -eq '4B') {
         Write-Output 'PASS: Stage 4B process-termination recovery after backup and file commit verified'
     }
@@ -420,7 +476,7 @@ finally {
 
     Assert-DirectTempChild -Path $probeRoot -ExpectedName $probeName
     if ((Test-Path -LiteralPath $probeRoot) -and
-        $probeName.StartsWith('tracefold-media-desktop-stage4-probe-', [StringComparison]::Ordinal)) {
+        $probeName.StartsWith($probePrefix, [StringComparison]::Ordinal)) {
         Assert-NoReparseTree -Path $probeRoot
         if (-not (Test-Path -LiteralPath $probeMarker -PathType Leaf) -or
             [IO.File]::ReadAllText($probeMarker) -ne $probeToken) {

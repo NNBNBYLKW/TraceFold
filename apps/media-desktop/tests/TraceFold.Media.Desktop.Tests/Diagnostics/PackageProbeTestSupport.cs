@@ -18,13 +18,14 @@ internal sealed class OwnedProbeRoot : IDisposable
 
     public string TokenText { get; }
 
-    public static OwnedProbeRoot CreateWithFixtures()
+    public static OwnedProbeRoot CreateWithFixtures(
+        string prefix = "tracefold-media-desktop-stage4-probe-")
     {
         Guid token = Guid.NewGuid();
         string tokenText = token.ToString("D");
         string path = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"tracefold-media-desktop-stage4-probe-{Guid.NewGuid():N}");
+            $"{prefix}{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         File.WriteAllText(
             System.IO.Path.Combine(path, "probe-owner.txt"),
@@ -90,4 +91,23 @@ internal sealed class OwnedProbeRoot : IDisposable
 
         throw new FileNotFoundException($"Repository fixture is missing: {filename}");
     }
+}
+
+internal static class PackageProbeRequests
+{
+    public static PackageProbeRequest Stage4Conflict(OwnedProbeRoot root) =>
+        new(
+            root.Path,
+            root.TokenText,
+            PackageProbeScenarioKind.Stage4Conflict,
+            null,
+            null);
+
+    public static PackageProbeRequest Stage5ABatch(OwnedProbeRoot root) =>
+        new(
+            root.Path,
+            root.TokenText,
+            PackageProbeScenarioKind.Stage5ABatch,
+            null,
+            null);
 }

@@ -30,7 +30,7 @@ public sealed class PackageProbeRefactorTests
     public async Task Common_runner_preserves_the_stage4_conflict_result_schema()
     {
         using OwnedProbeRoot root = OwnedProbeRoot.CreateWithFixtures();
-        PackageProbeRequest request = Request.Stage4Conflict(root);
+        PackageProbeRequest request = PackageProbeRequests.Stage4Conflict(root);
 
         int exitCode = await PackageProbeRunner.RunAsync(
             request,
@@ -50,16 +50,5 @@ public sealed class PackageProbeRefactorTests
         {
             Assert.True(result.RootElement.TryGetProperty(property, out _), property);
         }
-    }
-
-    private static class Request
-    {
-        public static PackageProbeRequest Stage4Conflict(OwnedProbeRoot root) =>
-            new(
-                root.Path,
-                root.TokenText,
-                PackageProbeScenarioKind.Stage4Conflict,
-                null,
-                null);
     }
 }

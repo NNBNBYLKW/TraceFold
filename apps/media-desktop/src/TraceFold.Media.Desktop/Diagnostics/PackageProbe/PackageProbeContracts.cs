@@ -24,6 +24,17 @@ public sealed record PackageProbeOptionResult(
     PackageProbeRequest? Request,
     string? ErrorCode);
 
+public sealed record Stage5ABatchProbeResult(
+    bool Succeeded,
+    bool AtomicMetadata,
+    bool GenericProcessingQueued,
+    bool ProcessingCompleted,
+    int CompletedIngestCount,
+    int ConflictCount,
+    bool ConflictSourceRetained,
+    bool InternalStorageClean,
+    string? ErrorCode);
+
 public interface IPackageProbeScenario
 {
     PackageProbeScenarioKind Kind { get; }
