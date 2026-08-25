@@ -22,10 +22,11 @@ Automated/package evidence below is kept distinct from this user-reported
 manual result.
 
 The feature branch is `codex/native-media-desktop-stage5a-batch-intake`. Its
-merge base is `c9599690da4c52e44277a30f028bc92aaa12a9a7`. The latest package
-facts will be recorded after the functional fix commit is published offline
-and checked. Until items 8, 9, and 10 are rerun on that package, the current
-branch remains pending targeted retest.
+merge base is `c9599690da4c52e44277a30f028bc92aaa12a9a7`. The current functional
+and packaged source commit is
+`721cef070afcca43d2a3f23ef2b286d2e0544756`. Automated package checks pass,
+but until items 8, 9, and 10 are rerun on that package, the current branch
+remains pending targeted retest.
 
 ## Manual acceptance state
 
@@ -129,11 +130,63 @@ following static inspection returned no matches:
 rg -n "(Log[A-Za-z]*\(|ILogger|Log\.)" apps/media-desktop/src/TraceFold.Media.Desktop/Dialogs -g '*.cs' -g '*.xaml.cs'
 ```
 
-## Historical accepted package, deployment, and smoke evidence
+## Current package evidence — pending targeted retest
 
-The previously accepted offline Windows x64 package was
+The current offline Windows x64 package is
 `dist/TraceFold-MediaDesktop-Stage5A-win-x64`; its ZIP is
-`dist/TraceFold-MediaDesktop-Stage5A-win-x64.zip`.
+`dist/TraceFold-MediaDesktop-Stage5A-win-x64.zip`. Publication used:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-media-desktop.ps1 -StageCheckpoint 5A -FfmpegSourceRoot 'C:\Program Files\ffmpeg'
+```
+
+The publisher's built-in verification passed all 561 tests before promotion.
+This automated evidence does not make the package accepted while the targeted
+manual retest remains pending.
+
+| Item | Verified value |
+| --- | --- |
+| Directory inventory | 579 files in 94 directories; 551,600,831 bytes |
+| ZIP inventory | 579 file entries; 551,600,831 uncompressed bytes |
+| ZIP size | 219,773,158 bytes |
+| ZIP SHA-256 | `4FFFF60FC42B4E2579721C079CA0C0B41E092CBF03BD33F16DF60E62B1368B69` |
+| `package-version.json` checkpoint | `5A` |
+| `package-version.json` source commit | `721cef070afcca43d2a3f23ef2b286d2e0544756` |
+| Informational version | `4.0.0-stage5a+721cef070afcca43d2a3f23ef2b286d2e0544756` |
+| Bundled FFmpeg version | `2025-06-23-git-e6298e0759-full_build-www.gyan.dev` |
+| `tools/ffmpeg/ffmpeg.exe` | 153,995,264 bytes; SHA-256 `D5A3CDFF713F3DE9C3EC6CD0DD1BCD046BB0EB97712BD32D340E39D1F88DEF05` |
+| `tools/ffmpeg/ffprobe.exe` | 153,799,680 bytes; SHA-256 `E6C17A4AE25E03275ADB00F664448D5D37ADDB88AE82372BAF1DC8BBDC7C3BB2` |
+
+The package and ZIP inventories have the same file count and uncompressed byte
+count. The FFmpeg and FFprobe sizes and hashes match the pinned
+`apps/media-desktop/tools/ffmpeg/win-x64/manifest.json`. The package has a root
+`TraceFold.Media.exe`, no AppX/MSIX artifacts, and the self-contained runtime
+payload (`hostfxr.dll`, `hostpolicy.dll`, `coreclr.dll`, and
+`TraceFold.Media.runtimeconfig.json`). Recursive inspection found no reparse
+points and no `.pdb`, `.cs`, `.csproj`, `.db`, `.log`, or `.dmp` files.
+
+The current package smoke command was:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-media-desktop-package.ps1 -PackageDirectory 'dist\TraceFold-MediaDesktop-Stage5A-win-x64' -StageCheckpoint 5A
+```
+
+Its output was:
+
+```text
+PASS: native window, single instance, offline startup, and clean exit verified
+PASS: Stage 5A batch metadata, processing, partial ingest, and clean storage verified
+```
+
+The post-smoke residual-process query found no `TraceFold.Media`, `ffmpeg`, or
+`ffprobe` process. Items 8, 9, and 10 remain pending manual retest on this
+package.
+
+## Historical accepted package evidence (`9dde268`)
+
+The previously accepted offline Windows x64 package used the same package and
+ZIP names. The facts below were captured before those artifacts were replaced
+by the current `721cef0` publication.
 
 | Item | Verified value |
 | --- | --- |
@@ -192,8 +245,8 @@ This record preserves the user report and package evidence for the historical
 the pending manual rerun of items 8, 9, and 10, and the document does not claim
 a clean-VM run.
 
-Evidence-verification boundary: the current functional-fix verification above
-was run in this worktree. The package inventory, hash, FFmpeg, hygiene/process,
-and smoke facts in the historical section still describe only source
-`9dde268`; a follow-up documentation commit will record the newly published
-package facts without changing product behavior.
+Evidence-verification boundary: the current functional-fix and package
+verification above was run in this worktree. The historical section remains
+explicitly limited to source `9dde268`. This documentation update changes no
+product or package behavior and does not convert current automated evidence
+into manual acceptance.
