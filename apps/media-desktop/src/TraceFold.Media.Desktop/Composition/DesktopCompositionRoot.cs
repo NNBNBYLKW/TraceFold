@@ -40,6 +40,8 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<SettingsViewModel>();
                 services.AddTransient<MetadataEditorViewModel>();
                 services.AddSingleton<InboxInspectorViewModel>();
+                services.AddSingleton<InboxSelectionViewModel>();
+                services.AddSingleton<InboxBatchSummaryViewModel>();
                 services.AddSingleton<InboxViewModel>();
                 services.AddSingleton<LibraryInspectorViewModel>();
                 services.AddSingleton<LibraryViewModel>();

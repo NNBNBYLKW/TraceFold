@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
 using TraceFold.Media.Desktop.Controls;
@@ -9,6 +10,7 @@ namespace TraceFold.Media.Desktop.Pages;
 public sealed partial class InboxPage : Page
 {
     private bool _synchronizingPickers;
+    private bool _synchronizingGridSelection;
 
     public InboxPage(
         InboxViewModel viewModel,
@@ -28,6 +30,8 @@ public sealed partial class InboxPage : Page
         {
             Kind = TaxonomyKind.Tag
         };
+        ViewModel.GridItemsReplacing += OnGridItemsReplacing;
+        ViewModel.GridItemsReplaced += OnGridItemsReplaced;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
@@ -55,10 +59,72 @@ public sealed partial class InboxPage : Page
     {
         _ = sender;
         _ = args;
-        await ViewModel.SelectAsync(
-            InboxGrid.SelectedItem as InboxCardViewModel,
+        if (_synchronizingGridSelection)
+        {
+            return;
+        }
+
+        await ViewModel.SelectManyAsync(
+            InboxGrid.SelectedItems.Cast<InboxCardViewModel>().ToArray(),
             CancellationToken.None);
-        SynchronizePickers();
+        if (ViewModel.Selection.IsSingleSelection)
+        {
+            SynchronizePickers();
+        }
+    }
+
+    private void OnGridItemsReplacing(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        _synchronizingGridSelection = true;
+    }
+
+    private void OnGridItemsReplaced(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        try
+        {
+            HashSet<Guid> selectedIds = ViewModel.Selection.SelectedIds.ToHashSet();
+            InboxGrid.SelectedItems.Clear();
+            foreach (InboxCardViewModel item in ViewModel.Items)
+            {
+                if (selectedIds.Contains(item.Id))
+                {
+                    InboxGrid.SelectedItems.Add(item);
+                }
+            }
+        }
+        finally
+        {
+            _synchronizingGridSelection = false;
+        }
+    }
+
+    private void OnSelectAllAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        _ = sender;
+        InboxGrid.SelectAll();
+        args.Handled = true;
+    }
+
+    private void OnClearSelectionAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        _ = sender;
+        InboxGrid.SelectedItems.Clear();
+        args.Handled = true;
+    }
+
+    private void OnCancelSelectionClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        InboxGrid.SelectedItems.Clear();
     }
 
     private void OnAuthorSelectionChanged(object? sender, EventArgs args)

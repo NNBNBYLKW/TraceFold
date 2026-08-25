@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml;
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Metadata;
@@ -46,6 +47,8 @@ public sealed partial class InboxViewModel : ObservableObject
         IUiDispatcher dispatcher,
         IMediaPreviewResolver previewResolver,
         InboxInspectorViewModel inspector,
+        InboxSelectionViewModel selection,
+        InboxBatchSummaryViewModel batchSummary,
         IIngestService ingest,
         IIngestRecoveryService recovery,
         IConflictQueryService conflictQuery,
@@ -61,6 +64,8 @@ public sealed partial class InboxViewModel : ObservableObject
         _dispatcher = dispatcher;
         _previewResolver = previewResolver;
         Inspector = inspector;
+        Selection = selection;
+        BatchSummary = batchSummary;
         _ingest = ingest;
         _recovery = recovery;
         _conflictQuery = conflictQuery;
@@ -90,6 +95,14 @@ public sealed partial class InboxViewModel : ObservableObject
 
     public InboxInspectorViewModel Inspector { get; }
 
+    public InboxSelectionViewModel Selection { get; }
+
+    public InboxBatchSummaryViewModel BatchSummary { get; }
+
+    public event EventHandler? GridItemsReplacing;
+
+    public event EventHandler? GridItemsReplaced;
+
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
 
@@ -113,6 +126,18 @@ public sealed partial class InboxViewModel : ObservableObject
 
     [ObservableProperty]
     public partial bool ProcessingAvailable { get; private set; } = true;
+
+    [ObservableProperty]
+    public partial Visibility InspectorVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial Visibility BatchSummaryVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial Visibility BatchBarVisibility { get; private set; } =
+        Visibility.Collapsed;
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
@@ -144,49 +169,20 @@ public sealed partial class InboxViewModel : ObservableObject
     public Task ApplyFiltersAsync(CancellationToken cancellationToken) =>
         ReloadCardsAsync(cancellationToken);
 
-    public async Task SelectAsync(
+    public Task SelectAsync(
         InboxCardViewModel? item,
+        CancellationToken cancellationToken) =>
+        SelectManyAsync(
+            item is null ? [] : [item],
+            cancellationToken);
+
+    public async Task SelectManyAsync(
+        IReadOnlyList<InboxCardViewModel> items,
         CancellationToken cancellationToken)
     {
-        if (ReferenceEquals(SelectedItem, item)
-            && Inspector.InboxItemId == item?.Id)
-        {
-            return;
-        }
-
-        _settingSelection = true;
-        try
-        {
-            SelectedItem = item;
-        }
-        finally
-        {
-            _settingSelection = false;
-        }
-
-        if (item is null)
-        {
-            await Inspector.Metadata.FlushAsync(cancellationToken);
-            Inspector.Reset();
-            NotifyCommands();
-            return;
-        }
-
-        InboxDetailsDto? details = await _query.GetDetailsAsync(
-            item.Id,
-            cancellationToken);
-        if (details is null)
-        {
-            Inspector.Reset();
-            OperationMessage = "该待入库项目已不存在。";
-        }
-        else
-        {
-            await Inspector.LoadAsync(details, cancellationToken);
-            OperationMessage = Inspector.StatusMessage;
-        }
-
-        NotifyCommands();
+        ArgumentNullException.ThrowIfNull(items);
+        Selection.ReplaceFromGrid(items, Items);
+        await PresentSelectionAsync(cancellationToken);
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -370,13 +366,15 @@ public sealed partial class InboxViewModel : ObservableObject
     partial void OnSearchTextChanged(string value)
     {
         _ = value;
-        _ = ReloadCardsSafeAsync();
+        ClearSelectionForFilterChange();
+        _ = ApplyFilterChangeSafeAsync();
     }
 
     partial void OnSelectedStateFilterChanged(InboxStateFilterOption value)
     {
         _ = value;
-        _ = ReloadCardsSafeAsync();
+        ClearSelectionForFilterChange();
+        _ = ApplyFilterChangeSafeAsync();
     }
 
     partial void OnSelectedItemChanged(InboxCardViewModel? value)
@@ -404,7 +402,6 @@ public sealed partial class InboxViewModel : ObservableObject
         await _reloadGate.WaitAsync(cancellationToken);
         try
         {
-            Guid? selectedId = SelectedItem?.Id;
             IReadOnlyList<InboxCardDto> cards = await _query.SearchAsync(
                 new InboxQuery(
                     string.IsNullOrWhiteSpace(SearchText) ? null : SearchText,
@@ -434,18 +431,25 @@ public sealed partial class InboxViewModel : ObservableObject
                 items.Add(new InboxCardViewModel(card, thumbnail));
             }
 
-            Items.Clear();
-            foreach (InboxCardViewModel item in items)
+            GridItemsReplacing?.Invoke(this, EventArgs.Empty);
+            try
             {
-                Items.Add(item);
+                Items.Clear();
+                foreach (InboxCardViewModel item in items)
+                {
+                    Items.Add(item);
+                }
+
+                Selection.Reconcile(Items);
+            }
+            finally
+            {
+                GridItemsReplaced?.Invoke(this, EventArgs.Empty);
             }
 
-            if (selectedId.HasValue)
-            {
-                InboxCardViewModel? refreshed = Items.FirstOrDefault(
-                    item => item.Id == selectedId.Value);
-                await SelectAsync(refreshed, cancellationToken);
-            }
+            await PresentSelectionAsync(
+                cancellationToken,
+                forceSingleReload: true);
         }
         finally
         {
@@ -465,6 +469,20 @@ public sealed partial class InboxViewModel : ObservableObject
         }
     }
 
+    private async Task ApplyFilterChangeSafeAsync()
+    {
+        try
+        {
+            await Inspector.Metadata.FlushAsync(CancellationToken.None);
+            Inspector.Reset();
+            await ReloadCardsAsync(CancellationToken.None);
+        }
+        catch (Exception error)
+        {
+            OperationMessage = $"刷新列表失败：{error.Message}";
+        }
+    }
+
     private async Task SelectSafeAsync(InboxCardViewModel? item)
     {
         try
@@ -475,6 +493,98 @@ public sealed partial class InboxViewModel : ObservableObject
         {
             OperationMessage = $"加载详情失败：{error.Message}";
         }
+    }
+
+    private async Task PresentSelectionAsync(
+        CancellationToken cancellationToken,
+        bool forceSingleReload = false)
+    {
+        InboxCardViewModel? single = Selection.SingleSelectedItem;
+        bool leavingLoadedSingle = Inspector.InboxItemId.HasValue
+            && (single is null || Inspector.InboxItemId.Value != single.Id);
+        if (leavingLoadedSingle)
+        {
+            await Inspector.Metadata.FlushAsync(cancellationToken);
+        }
+
+        if (Selection.IsBatchSelection)
+        {
+            SetSelectedItem(null);
+            Inspector.Reset();
+            await BatchSummary.LoadAsync(
+                Selection.Capture(),
+                cancellationToken);
+            UpdateSelectionVisibility();
+            NotifyCommands();
+            return;
+        }
+
+        BatchSummary.Reset();
+        if (single is null)
+        {
+            SetSelectedItem(null);
+            Inspector.Reset();
+            UpdateSelectionVisibility();
+            NotifyCommands();
+            return;
+        }
+
+        SetSelectedItem(single);
+        if (forceSingleReload
+            || Inspector.InboxItemId != single.Id)
+        {
+            InboxDetailsDto? details = await _query.GetDetailsAsync(
+                single.Id,
+                cancellationToken);
+            if (details is null)
+            {
+                Inspector.Reset();
+                OperationMessage = "该待入库项目已不存在。";
+            }
+            else
+            {
+                await Inspector.LoadAsync(details, cancellationToken);
+                OperationMessage = Inspector.StatusMessage;
+            }
+        }
+
+        UpdateSelectionVisibility();
+        NotifyCommands();
+    }
+
+    private void ClearSelectionForFilterChange()
+    {
+        Selection.Clear();
+        SetSelectedItem(null);
+        BatchSummary.Reset();
+        UpdateSelectionVisibility();
+        NotifyCommands();
+    }
+
+    private void SetSelectedItem(InboxCardViewModel? item)
+    {
+        _settingSelection = true;
+        try
+        {
+            SelectedItem = item;
+        }
+        finally
+        {
+            _settingSelection = false;
+        }
+    }
+
+    private void UpdateSelectionVisibility()
+    {
+        InspectorVisibility = Selection.IsSingleSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BatchSummaryVisibility = Selection.IsBatchSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BatchBarVisibility = Selection.IsBatchSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void OnInboxActivity(object? sender, InboxActivityEventArgs args)

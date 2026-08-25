@@ -295,6 +295,49 @@ public sealed class InboxViewModelTests
         Assert.True(query.GetDetailsCallCount > detailsBefore);
     }
 
+    [Fact]
+    public async Task Two_selected_items_flush_single_metadata_and_load_batch_summary()
+    {
+        var query = new RecordingInboxQuery();
+        var gateway = new RecordingMetadataGateway();
+        var metadata = new MetadataEditorViewModel(
+            gateway, new BlockingDebounceScheduler());
+        InboxViewModel viewModel = CreateViewModel(query, metadata);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        InboxCardViewModel first = viewModel.Items[0];
+        InboxCardViewModel second = viewModel.Items[1];
+        await viewModel.SelectManyAsync(
+            [first], TestContext.Current.CancellationToken);
+        metadata.DisplayName = "等待保存";
+
+        await viewModel.SelectManyAsync(
+            [first, second], TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, gateway.SaveCount);
+        Assert.True(viewModel.Selection.IsBatchSelection);
+        Assert.True(viewModel.BatchSummary.IsVisible);
+        Assert.Null(viewModel.Inspector.InboxItemId);
+    }
+
+    [Fact]
+    public async Task Filter_change_clears_selection_but_scan_refresh_intersects_ids()
+    {
+        var query = new RecordingInboxQuery();
+        InboxViewModel viewModel = CreateViewModel(query, CreateMetadata());
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectManyAsync(
+            viewModel.Items.Take(2).ToArray(),
+            TestContext.Current.CancellationToken);
+        Guid remaining = viewModel.Items[0].Id;
+        query.RemoveAllExcept(remaining);
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        Assert.Equal([remaining], viewModel.Selection.SelectedIds);
+        viewModel.SearchText = "new filter";
+        Assert.Empty(viewModel.Selection.SelectedIds);
+    }
+
     private static InboxViewModel CreateViewModel(
         IInboxQueryService query,
         MetadataEditorViewModel metadata,
@@ -314,6 +357,8 @@ public sealed class InboxViewModelTests
             new ImmediateDispatcher(),
             new MissingPreviewResolver(),
             new InboxInspectorViewModel(metadata),
+            new InboxSelectionViewModel(),
+            new InboxBatchSummaryViewModel(new RecordingBatchSummaryService()),
             ingest ?? new RecordingIngestService(() => true),
             recovery ?? new NoOpRecoveryService(),
             conflicts ?? new FixedConflictQueryService(null),
@@ -408,7 +453,10 @@ public sealed class InboxViewModelTests
             ];
         }
 
-        public IReadOnlyList<InboxCardDto> Cards { get; }
+        public List<InboxCardDto> Cards { get; }
+
+        public void RemoveAllExcept(Guid inboxItemId) =>
+            Cards.RemoveAll(card => card.Id != inboxItemId);
 
         public InboxQuery? LastQuery { get; private set; }
 
@@ -417,7 +465,7 @@ public sealed class InboxViewModelTests
             CancellationToken cancellationToken)
         {
             LastQuery = query;
-            return Task.FromResult(Cards);
+            return Task.FromResult<IReadOnlyList<InboxCardDto>>(Cards.ToArray());
         }
 
         public Task<InboxDetailsDto?> GetDetailsAsync(
@@ -450,6 +498,26 @@ public sealed class InboxViewModelTests
                 InboxItemState.ReadyToTag,
                 "待入库",
                 true);
+    }
+
+    private sealed class RecordingBatchSummaryService : IInboxBatchSummaryService
+    {
+        public Task<InboxBatchSummaryDto> SummarizeAsync(
+            IReadOnlyList<InboxSelectionEntry> selection,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new InboxBatchSummaryDto(
+                selection.Count,
+                selection.Count,
+                0,
+                selection.Count,
+                0,
+                0,
+                0,
+                0,
+                0,
+                true,
+                false,
+                selection.Count >= 2));
     }
 
     private sealed class RecordingMetadataGateway : IMetadataEditorService

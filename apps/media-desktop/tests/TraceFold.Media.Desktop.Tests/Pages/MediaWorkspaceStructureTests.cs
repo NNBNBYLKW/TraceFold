@@ -25,6 +25,23 @@ public sealed class MediaWorkspaceStructureTests
             "AutomationProperties.AutomationId=\"InboxGrid\"",
             inboxXaml,
             StringComparison.Ordinal);
+        Assert.Contains("SelectionMode=\"Extended\"", inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxBatchBar\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxBatchSummary\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxCancelSelectionButton\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains("Modifiers=\"Control\" Key=\"A\"", inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains("Key=\"Escape\"", inboxXaml, StringComparison.Ordinal);
         Assert.Contains(
             "AutomationProperties.AutomationId=\"InspectorPane\"",
             inboxXaml,
