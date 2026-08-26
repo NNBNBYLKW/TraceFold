@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml;
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Metadata;
@@ -25,7 +26,13 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IInboxScanner _scanner;
     private readonly IInboxActivityNotifier _activity;
     private readonly IUiDispatcher _dispatcher;
+    private readonly IDebounceScheduler _activityDebounce;
     private readonly IMediaPreviewResolver _previewResolver;
+    private readonly IBatchMetadataService _batchMetadata;
+    private readonly IBatchMetadataDialogService _batchMetadataDialog;
+    private readonly IBatchProcessingService _batchProcessing;
+    private readonly IBatchIngestService _batchIngest;
+    private readonly IBatchIngestConfirmationService _batchConfirmation;
     private readonly IIngestService _ingest;
     private readonly IIngestRecoveryService _recovery;
     private readonly IConflictQueryService _conflictQuery;
@@ -36,16 +43,30 @@ public sealed partial class InboxViewModel : ObservableObject
     private readonly IRecoveryRevealService? _recoveryReveal;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
+    private readonly SemaphoreSlim _selectionGate = new(1, 1);
+    private readonly object _activityReloadGate = new();
     private bool _hasLoaded;
     private bool _settingSelection;
+    private CancellationTokenSource? _batchStopAfterCurrent;
+    private HashSet<Guid> _batchIncompleteIds = [];
+    private bool _batchIncompleteFilterEnabled;
+    private CancellationTokenSource? _activityReload;
 
     public InboxViewModel(
         IInboxQueryService query,
         IInboxScanner scanner,
         IInboxActivityNotifier activity,
         IUiDispatcher dispatcher,
+        IDebounceScheduler activityDebounce,
         IMediaPreviewResolver previewResolver,
         InboxInspectorViewModel inspector,
+        InboxSelectionViewModel selection,
+        InboxBatchSummaryViewModel batchSummary,
+        IBatchMetadataService batchMetadata,
+        IBatchMetadataDialogService batchMetadataDialog,
+        IBatchProcessingService batchProcessing,
+        IBatchIngestService batchIngest,
+        IBatchIngestConfirmationService batchConfirmation,
         IIngestService ingest,
         IIngestRecoveryService recovery,
         IConflictQueryService conflictQuery,
@@ -59,8 +80,16 @@ public sealed partial class InboxViewModel : ObservableObject
         _scanner = scanner;
         _activity = activity;
         _dispatcher = dispatcher;
+        _activityDebounce = activityDebounce;
         _previewResolver = previewResolver;
         Inspector = inspector;
+        Selection = selection;
+        BatchSummary = batchSummary;
+        _batchMetadata = batchMetadata;
+        _batchMetadataDialog = batchMetadataDialog;
+        _batchProcessing = batchProcessing;
+        _batchIngest = batchIngest;
+        _batchConfirmation = batchConfirmation;
         _ingest = ingest;
         _recovery = recovery;
         _conflictQuery = conflictQuery;
@@ -90,6 +119,16 @@ public sealed partial class InboxViewModel : ObservableObject
 
     public InboxInspectorViewModel Inspector { get; }
 
+    public InboxSelectionViewModel Selection { get; }
+
+    public InboxBatchSummaryViewModel BatchSummary { get; }
+
+    public event EventHandler? GridItemsReplacing;
+
+    public event EventHandler? GridItemsReplaced;
+
+    public event EventHandler<InboxFocusRequest>? FocusRequested;
+
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
 
@@ -113,6 +152,18 @@ public sealed partial class InboxViewModel : ObservableObject
 
     [ObservableProperty]
     public partial bool ProcessingAvailable { get; private set; } = true;
+
+    [ObservableProperty]
+    public partial Visibility InspectorVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial Visibility BatchSummaryVisibility { get; private set; } =
+        Visibility.Collapsed;
+
+    [ObservableProperty]
+    public partial Visibility BatchBarVisibility { get; private set; } =
+        Visibility.Collapsed;
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
@@ -144,49 +195,203 @@ public sealed partial class InboxViewModel : ObservableObject
     public Task ApplyFiltersAsync(CancellationToken cancellationToken) =>
         ReloadCardsAsync(cancellationToken);
 
-    public async Task SelectAsync(
+    public Task SelectAsync(
         InboxCardViewModel? item,
+        CancellationToken cancellationToken) =>
+        SelectManyAsync(
+            item is null ? [] : [item],
+            cancellationToken);
+
+    public async Task SelectManyAsync(
+        IReadOnlyList<InboxCardViewModel> items,
         CancellationToken cancellationToken)
     {
-        if (ReferenceEquals(SelectedItem, item)
-            && Inspector.InboxItemId == item?.Id)
-        {
-            return;
-        }
-
-        _settingSelection = true;
+        ArgumentNullException.ThrowIfNull(items);
+        await _selectionGate.WaitAsync(cancellationToken);
         try
         {
-            SelectedItem = item;
+            Selection.ReplaceFromGrid(items, Items);
+            await PresentSelectionAsync(cancellationToken);
         }
         finally
         {
-            _settingSelection = false;
+            _selectionGate.Release();
         }
+    }
 
-        if (item is null)
+    public async Task SelectManySafeAsync(
+        IReadOnlyList<InboxCardViewModel> items,
+        CancellationToken cancellationToken)
+    {
+        try
         {
-            await Inspector.Metadata.FlushAsync(cancellationToken);
-            Inspector.Reset();
-            NotifyCommands();
+            await SelectManyAsync(items, cancellationToken);
+        }
+        catch (Exception error)
+        {
+            OperationMessage = $"加载详情失败：{error.Message}";
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanBatchEditMetadata))]
+    private async Task BatchEditMetadataAsync(CancellationToken cancellationToken)
+    {
+        if (!CanBatchEditMetadata())
+        {
             return;
         }
 
-        InboxDetailsDto? details = await _query.GetDetailsAsync(
-            item.Id,
-            cancellationToken);
-        if (details is null)
+        IsBusy = true;
+        try
         {
-            Inspector.Reset();
-            OperationMessage = "该待入库项目已不存在。";
+            IReadOnlyList<InboxSelectionEntry> selection = Selection.Capture();
+            BatchMetadataEditorDto? editor = await _batchMetadata.PrepareAsync(
+                selection,
+                cancellationToken);
+            if (editor is null)
+            {
+                OperationMessage = "选择已变化，请刷新后重新选择。";
+                await ReloadCardsAsync(cancellationToken);
+                return;
+            }
+
+            BatchMetadataDialogResult dialogResult =
+                await _batchMetadataDialog.ShowAsync(
+                    editor,
+                    selection,
+                    _batchMetadata.ApplyAsync,
+                    cancellationToken);
+            FocusRequested?.Invoke(
+                this,
+                new InboxFocusRequest(InboxFocusTarget.List));
+            if (dialogResult.Applied && dialogResult.Result is not null)
+            {
+                OperationMessage =
+                    $"已修改 {dialogResult.Result.ChangedCount} 项资料，"
+                    + $"{dialogResult.Result.UnchangedCount} 项无变化。";
+                await ReloadCardsAsync(cancellationToken);
+            }
         }
-        else
+        finally
         {
-            await Inspector.LoadAsync(details, cancellationToken);
-            OperationMessage = Inspector.StatusMessage;
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanBatchStartProcessing))]
+    private async Task BatchStartProcessingAsync(CancellationToken cancellationToken)
+    {
+        if (!CanBatchStartProcessing())
+        {
+            return;
         }
 
-        NotifyCommands();
+        IsBusy = true;
+        try
+        {
+            BatchProcessingResult result = await _batchProcessing.StartAsync(
+                Selection.Capture(),
+                cancellationToken);
+            OperationMessage =
+                $"已排队 {Count(result, BatchProcessingItemOutcome.Queued)} 项，"
+                + $"已在队列 {Count(result, BatchProcessingItemOutcome.AlreadyActive)} 项，"
+                + $"无需处理 {Count(result, BatchProcessingItemOutcome.NotRequired)} 项，"
+                + $"需要检查 {Count(result, BatchProcessingItemOutcome.NeedsAttention)} 项。";
+            await ReloadCardsAsync(cancellationToken);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanBatchIngest))]
+    private async Task BatchIngestAsync(CancellationToken cancellationToken)
+    {
+        if (!CanBatchIngest())
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            _batchIncompleteFilterEnabled = false;
+            _batchIncompleteIds.Clear();
+            IReadOnlyList<InboxSelectionEntry> selection = Selection.Capture();
+            BatchIngestPreviewDto preview = await _batchIngest.PreviewAsync(
+                selection,
+                cancellationToken);
+            if (!await _batchConfirmation.ConfirmAsync(preview, cancellationToken))
+            {
+                return;
+            }
+
+            using var stopAfterCurrent = new CancellationTokenSource();
+            _batchStopAfterCurrent = stopAfterCurrent;
+            BatchSummary.BeginIngest(selection.Count);
+            StopBatchIngestCommand.NotifyCanExecuteChanged();
+            var progress = new Progress<BatchIngestProgress>(BatchSummary.Report);
+            BatchIngestResult result = await _batchIngest.ExecuteAsync(
+                selection,
+                progress,
+                stopAfterCurrent.Token,
+                cancellationToken);
+            BatchSummary.Complete(result);
+            _batchIncompleteIds = result.Items
+                .Where(item => item.Outcome != BatchIngestItemOutcome.Completed)
+                .Select(item => item.InboxItemId)
+                .ToHashSet();
+            OperationMessage =
+                $"已入库 {BatchSummary.CompletedCount} 项，"
+                + $"未完成 {result.Items.Count - BatchSummary.CompletedCount} 项。";
+            ShowBatchIncompleteOnlyCommand.NotifyCanExecuteChanged();
+            try
+            {
+                await ReloadCardsAsync(cancellationToken);
+                Selection.Retain(_batchIncompleteIds);
+                ReapplyGridSelection();
+                await PresentSelectionAsync(cancellationToken);
+            }
+            catch (Exception error)
+            {
+                OperationMessage += $" 列表刷新失败：{error.Message}";
+            }
+
+            BatchIngestItemResult? firstIncomplete = result.Items
+                .Where(item => item.Outcome != BatchIngestItemOutcome.Completed)
+                .OrderBy(item => item.Ordinal)
+                .FirstOrDefault();
+            FocusRequested?.Invoke(
+                this,
+                firstIncomplete is null
+                    ? new InboxFocusRequest(InboxFocusTarget.Title)
+                    : new InboxFocusRequest(
+                        InboxFocusTarget.Item,
+                        firstIncomplete.InboxItemId));
+        }
+        finally
+        {
+            _batchStopAfterCurrent = null;
+            if (BatchSummary.IsIngestRunning)
+            {
+                BatchSummary.EndIngest();
+            }
+
+            IsBusy = false;
+            StopBatchIngestCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanStopBatchIngest))]
+    private void StopBatchIngest() => _batchStopAfterCurrent?.Cancel();
+
+    [RelayCommand(CanExecute = nameof(CanShowBatchIncompleteOnly))]
+    private async Task ShowBatchIncompleteOnlyAsync(
+        CancellationToken cancellationToken)
+    {
+        _batchIncompleteFilterEnabled = true;
+        await ReloadCardsAsync(cancellationToken);
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -370,13 +575,19 @@ public sealed partial class InboxViewModel : ObservableObject
     partial void OnSearchTextChanged(string value)
     {
         _ = value;
-        _ = ReloadCardsSafeAsync();
+        CancelPendingActivityReload();
+        _batchIncompleteFilterEnabled = false;
+        ClearSelectionForFilterChange();
+        _ = ApplyFilterChangeSafeAsync();
     }
 
     partial void OnSelectedStateFilterChanged(InboxStateFilterOption value)
     {
         _ = value;
-        _ = ReloadCardsSafeAsync();
+        CancelPendingActivityReload();
+        _batchIncompleteFilterEnabled = false;
+        ClearSelectionForFilterChange();
+        _ = ApplyFilterChangeSafeAsync();
     }
 
     partial void OnSelectedItemChanged(InboxCardViewModel? value)
@@ -399,12 +610,17 @@ public sealed partial class InboxViewModel : ObservableObject
         RefreshCommand.NotifyCanExecuteChanged();
     }
 
-    private async Task ReloadCardsAsync(CancellationToken cancellationToken)
+    private Task ReloadCardsAsync(CancellationToken cancellationToken)
+    {
+        CancelPendingActivityReload();
+        return ReloadCardsCoreAsync(cancellationToken);
+    }
+
+    private async Task ReloadCardsCoreAsync(CancellationToken cancellationToken)
     {
         await _reloadGate.WaitAsync(cancellationToken);
         try
         {
-            Guid? selectedId = SelectedItem?.Id;
             IReadOnlyList<InboxCardDto> cards = await _query.SearchAsync(
                 new InboxQuery(
                     string.IsNullOrWhiteSpace(SearchText) ? null : SearchText,
@@ -431,21 +647,32 @@ public sealed partial class InboxViewModel : ObservableObject
                     }
                 }
 
-                items.Add(new InboxCardViewModel(card, thumbnail));
+                if (!_batchIncompleteFilterEnabled
+                    || _batchIncompleteIds.Contains(card.Id))
+                {
+                    items.Add(new InboxCardViewModel(card, thumbnail));
+                }
             }
 
-            Items.Clear();
-            foreach (InboxCardViewModel item in items)
+            GridItemsReplacing?.Invoke(this, EventArgs.Empty);
+            try
             {
-                Items.Add(item);
+                Items.Clear();
+                foreach (InboxCardViewModel item in items)
+                {
+                    Items.Add(item);
+                }
+
+                Selection.Reconcile(Items);
+            }
+            finally
+            {
+                GridItemsReplaced?.Invoke(this, EventArgs.Empty);
             }
 
-            if (selectedId.HasValue)
-            {
-                InboxCardViewModel? refreshed = Items.FirstOrDefault(
-                    item => item.Id == selectedId.Value);
-                await SelectAsync(refreshed, cancellationToken);
-            }
+            await PresentSelectionAsync(
+                cancellationToken,
+                forceSingleReload: true);
         }
         finally
         {
@@ -465,15 +692,131 @@ public sealed partial class InboxViewModel : ObservableObject
         }
     }
 
-    private async Task SelectSafeAsync(InboxCardViewModel? item)
+    private async Task ApplyFilterChangeSafeAsync()
     {
         try
         {
-            await SelectAsync(item, CancellationToken.None);
+            await Inspector.Metadata.FlushAsync(CancellationToken.None);
+            Inspector.Reset();
+            await ReloadCardsAsync(CancellationToken.None);
         }
         catch (Exception error)
         {
-            OperationMessage = $"加载详情失败：{error.Message}";
+            OperationMessage = $"刷新列表失败：{error.Message}";
+        }
+    }
+
+    private async Task SelectSafeAsync(InboxCardViewModel? item)
+    {
+        await SelectManySafeAsync(
+            item is null ? [] : [item],
+            CancellationToken.None);
+    }
+
+    private async Task PresentSelectionAsync(
+        CancellationToken cancellationToken,
+        bool forceSingleReload = false)
+    {
+        InboxCardViewModel? single = Selection.SingleSelectedItem;
+        bool leavingLoadedSingle = Inspector.InboxItemId.HasValue
+            && (single is null || Inspector.InboxItemId.Value != single.Id);
+        if (leavingLoadedSingle)
+        {
+            await Inspector.Metadata.FlushAsync(cancellationToken);
+            Guid savedId = Inspector.InboxItemId!.Value;
+            Items.FirstOrDefault(item => item.Id == savedId)?
+                .UpdateMetadataVersion(Inspector.Metadata.CurrentVersion);
+        }
+
+        if (Selection.IsBatchSelection)
+        {
+            SetSelectedItem(null);
+            Inspector.Reset();
+            await BatchSummary.LoadAsync(
+                Selection.Capture(),
+                cancellationToken);
+            UpdateSelectionVisibility();
+            NotifyCommands();
+            return;
+        }
+
+        BatchSummary.Reset();
+        if (single is null)
+        {
+            SetSelectedItem(null);
+            Inspector.Reset();
+            UpdateSelectionVisibility();
+            NotifyCommands();
+            return;
+        }
+
+        SetSelectedItem(single);
+        if (forceSingleReload
+            || Inspector.InboxItemId != single.Id)
+        {
+            InboxDetailsDto? details = await _query.GetDetailsAsync(
+                single.Id,
+                cancellationToken);
+            if (details is null)
+            {
+                Inspector.Reset();
+                OperationMessage = "该待入库项目已不存在。";
+            }
+            else
+            {
+                await Inspector.LoadAsync(details, cancellationToken);
+                OperationMessage = Inspector.StatusMessage;
+            }
+        }
+
+        UpdateSelectionVisibility();
+        NotifyCommands();
+    }
+
+    private void ClearSelectionForFilterChange()
+    {
+        Selection.Clear();
+        SetSelectedItem(null);
+        BatchSummary.Reset();
+        UpdateSelectionVisibility();
+        NotifyCommands();
+    }
+
+    private void SetSelectedItem(InboxCardViewModel? item)
+    {
+        _settingSelection = true;
+        try
+        {
+            SelectedItem = item;
+        }
+        finally
+        {
+            _settingSelection = false;
+        }
+    }
+
+    private void UpdateSelectionVisibility()
+    {
+        InspectorVisibility = Selection.IsSingleSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BatchSummaryVisibility = Selection.IsBatchSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BatchBarVisibility = Selection.IsBatchSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void ReapplyGridSelection()
+    {
+        GridItemsReplacing?.Invoke(this, EventArgs.Empty);
+        try
+        {
+        }
+        finally
+        {
+            GridItemsReplaced?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -481,10 +824,85 @@ public sealed partial class InboxViewModel : ObservableObject
     {
         _ = sender;
         _ = args;
-        _dispatcher.Enqueue(() => _ = ReloadCardsSafeAsync());
+        _dispatcher.Enqueue(ScheduleActivityReload);
+    }
+
+    private void ScheduleActivityReload()
+    {
+        CancellationTokenSource current;
+        lock (_activityReloadGate)
+        {
+            _activityReload?.Cancel();
+            _activityReload?.Dispose();
+            current = new CancellationTokenSource();
+            _activityReload = current;
+        }
+
+        _ = ReloadAfterActivityDelayAsync(current);
+    }
+
+    private async Task ReloadAfterActivityDelayAsync(
+        CancellationTokenSource request)
+    {
+        try
+        {
+            await _activityDebounce.DelayAsync(
+                TimeSpan.FromMilliseconds(100),
+                request.Token);
+            await ReloadCardsCoreAsync(request.Token);
+        }
+        catch (OperationCanceledException) when (request.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            OperationMessage = $"刷新列表失败：{error.Message}";
+        }
+        finally
+        {
+            lock (_activityReloadGate)
+            {
+                if (ReferenceEquals(_activityReload, request))
+                {
+                    _activityReload = null;
+                    request.Dispose();
+                }
+            }
+        }
+    }
+
+    private void CancelPendingActivityReload()
+    {
+        lock (_activityReloadGate)
+        {
+            _activityReload?.Cancel();
+            _activityReload?.Dispose();
+            _activityReload = null;
+        }
     }
 
     private bool CanRefresh() => !IsRefreshing && !IsBusy;
+
+    private bool CanBatchEditMetadata() => !IsBusy
+        && Selection.IsBatchSelection
+        && BatchSummary.CanEditMetadata;
+
+    private bool CanBatchStartProcessing() => !IsBusy
+        && ProcessingAvailable
+        && Selection.IsBatchSelection
+        && BatchSummary.CanStartProcessing;
+
+    private bool CanBatchIngest() => !IsBusy
+        && Selection.IsBatchSelection
+        && BatchSummary.CanPreviewIngest;
+
+    private bool CanStopBatchIngest() => _batchStopAfterCurrent is not null
+        && BatchSummary.IsIngestRunning;
+
+    private bool CanShowBatchIncompleteOnly() =>
+        BatchSummary.HasFinalResult
+        && BatchSummary.HasIncompleteItems
+        && !_batchIncompleteFilterEnabled;
 
     private bool CanIngest() => !IsBusy
         && SelectedItem?.Card.CanIngest == true
@@ -532,6 +950,11 @@ public sealed partial class InboxViewModel : ObservableObject
     private void NotifyCommands()
     {
         RefreshCommand.NotifyCanExecuteChanged();
+        BatchEditMetadataCommand.NotifyCanExecuteChanged();
+        BatchStartProcessingCommand.NotifyCanExecuteChanged();
+        BatchIngestCommand.NotifyCanExecuteChanged();
+        StopBatchIngestCommand.NotifyCanExecuteChanged();
+        ShowBatchIncompleteOnlyCommand.NotifyCanExecuteChanged();
         IngestCommand.NotifyCanExecuteChanged();
         ClearMissingCommand.NotifyCanExecuteChanged();
         RetryCommand.NotifyCanExecuteChanged();
@@ -544,6 +967,11 @@ public sealed partial class InboxViewModel : ObservableObject
         StopProcessingCommand.NotifyCanExecuteChanged();
         RetryProcessingCommand.NotifyCanExecuteChanged();
     }
+
+    private static int Count(
+        BatchProcessingResult result,
+        BatchProcessingItemOutcome outcome) =>
+        result.Items.Count(item => item.Outcome == outcome);
 
     private async Task ShowConflictAsync(
         Guid inboxItemId,

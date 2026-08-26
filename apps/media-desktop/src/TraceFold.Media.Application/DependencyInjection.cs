@@ -27,12 +27,16 @@ public static class DependencyInjection
         services.AddSingleton<InboxQueryService>();
         services.AddSingleton<IInboxQueryService>(provider =>
             provider.GetRequiredService<InboxQueryService>());
+        services.AddSingleton<IInboxBatchSummaryService, InboxBatchSummaryService>();
         services.AddSingleton<IScanPreferencesService>(provider =>
             provider.GetRequiredService<ScanPreferencesService>());
         services.AddSingleton<MetadataEditorService>();
         services.AddSingleton<IMetadataEditorService>(provider =>
             provider.GetRequiredService<MetadataEditorService>());
+        services.AddSingleton<IBatchMetadataService, BatchMetadataService>();
         services.AddSingleton<TaxonomyService>();
+        services.AddSingleton<ITaxonomySearchService>(provider =>
+            provider.GetRequiredService<TaxonomyService>());
         services.AddSingleton<ITaxonomyService>(provider =>
             provider.GetRequiredService<TaxonomyService>());
         services.AddSingleton<LibraryQueryService>();
@@ -49,6 +53,7 @@ public static class DependencyInjection
             ProcessingExecutionController>();
         services.AddSingleton<ProcessingProgressBuffer>();
         services.AddSingleton<IProcessingCommandService, ProcessingCommandService>();
+        services.AddSingleton<IBatchProcessingService, BatchProcessingService>();
         services.AddSingleton<IProcessingInvalidationService,
             ProcessingInvalidationService>();
         services.AddSingleton<IProcessingJobExecutor, ProcessingJobExecutor>();
@@ -68,6 +73,7 @@ public static class DependencyInjection
         services.AddSingleton<IngestService>();
         services.AddSingleton<IIngestService>(provider =>
             provider.GetRequiredService<IngestService>());
+        services.AddSingleton<IBatchIngestService, BatchIngestService>();
         services.AddSingleton<IngestRecoveryService>();
         services.AddSingleton<IIngestRecoveryService>(provider =>
             provider.GetRequiredService<IngestRecoveryService>());

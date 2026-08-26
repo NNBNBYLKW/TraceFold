@@ -16,7 +16,9 @@ public sealed record InboxCardDto(
     InboxItemState State,
     string StatusText,
     bool CanIngest,
-    ProcessingSummaryDto? Processing = null);
+    ProcessingSummaryDto? Processing = null,
+    long MetadataVersion = 0,
+    InboxAction AllowedActions = InboxAction.None);
 
 public sealed record ProcessingSummaryDto(
     Guid JobId,

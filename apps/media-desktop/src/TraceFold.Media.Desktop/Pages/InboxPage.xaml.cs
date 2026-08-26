@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
 using TraceFold.Media.Desktop.Controls;
@@ -9,6 +10,7 @@ namespace TraceFold.Media.Desktop.Pages;
 public sealed partial class InboxPage : Page
 {
     private bool _synchronizingPickers;
+    private bool _synchronizingGridSelection;
 
     public InboxPage(
         InboxViewModel viewModel,
@@ -28,6 +30,9 @@ public sealed partial class InboxPage : Page
         {
             Kind = TaxonomyKind.Tag
         };
+        ViewModel.GridItemsReplacing += OnGridItemsReplacing;
+        ViewModel.GridItemsReplaced += OnGridItemsReplaced;
+        ViewModel.FocusRequested += OnFocusRequested;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
@@ -55,10 +60,112 @@ public sealed partial class InboxPage : Page
     {
         _ = sender;
         _ = args;
-        await ViewModel.SelectAsync(
-            InboxGrid.SelectedItem as InboxCardViewModel,
+        if (_synchronizingGridSelection)
+        {
+            return;
+        }
+
+        await ViewModel.SelectManySafeAsync(
+            InboxGrid.SelectedItems.Cast<InboxCardViewModel>().ToArray(),
             CancellationToken.None);
-        SynchronizePickers();
+        if (ViewModel.Selection.IsSingleSelection)
+        {
+            SynchronizePickers();
+        }
+    }
+
+    private void OnGridItemsReplacing(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        _synchronizingGridSelection = true;
+    }
+
+    private void OnGridItemsReplaced(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        try
+        {
+            HashSet<Guid> selectedIds = ViewModel.Selection.SelectedIds.ToHashSet();
+            InboxGrid.SelectedItems.Clear();
+            foreach (InboxCardViewModel item in ViewModel.Items)
+            {
+                if (selectedIds.Contains(item.Id))
+                {
+                    InboxGrid.SelectedItems.Add(item);
+                }
+            }
+        }
+        finally
+        {
+            _synchronizingGridSelection = false;
+        }
+    }
+
+    private void OnSelectAllAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        _ = sender;
+        InboxGrid.SelectAll();
+        args.Handled = true;
+    }
+
+    private void OnClearSelectionAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        _ = sender;
+        InboxGrid.SelectedItems.Clear();
+        args.Handled = true;
+    }
+
+    private void OnCancelSelectionClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        InboxGrid.SelectedItems.Clear();
+    }
+
+    private void OnFocusRequested(object? sender, InboxFocusRequest request)
+    {
+        _ = sender;
+        DispatcherQueue.TryEnqueue(() => ApplyFocusRequest(request));
+    }
+
+    private void ApplyFocusRequest(InboxFocusRequest request)
+    {
+        switch (request.Target)
+        {
+            case InboxFocusTarget.List:
+                InboxGrid.Focus(FocusState.Programmatic);
+                break;
+            case InboxFocusTarget.Item when request.InboxItemId.HasValue:
+                InboxCardViewModel? item = ViewModel.Items.FirstOrDefault(
+                    card => card.Id == request.InboxItemId.Value);
+                if (item is null)
+                {
+                    InboxTitle.Focus(FocusState.Programmatic);
+                    break;
+                }
+
+                InboxGrid.ScrollIntoView(item);
+                InboxGrid.UpdateLayout();
+                if (InboxGrid.ContainerFromItem(item) is GridViewItem container)
+                {
+                    container.Focus(FocusState.Programmatic);
+                }
+                else
+                {
+                    InboxGrid.Focus(FocusState.Programmatic);
+                }
+
+                break;
+            default:
+                InboxTitle.Focus(FocusState.Programmatic);
+                break;
+        }
     }
 
     private void OnAuthorSelectionChanged(object? sender, EventArgs args)

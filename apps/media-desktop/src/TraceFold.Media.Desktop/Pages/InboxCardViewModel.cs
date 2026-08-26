@@ -10,12 +10,14 @@ public sealed class InboxCardViewModel
 {
     private readonly Uri? _thumbnailUri;
     private ImageSource? _thumbnailSource;
+    private long _metadataVersion;
 
     public InboxCardViewModel(
         InboxCardDto card,
         string? thumbnailSource = null)
     {
         Card = card;
+        _metadataVersion = card.MetadataVersion;
         _thumbnailUri = thumbnailSource is null
             ? null
             : new Uri(thumbnailSource);
@@ -24,6 +26,10 @@ public sealed class InboxCardViewModel
     public InboxCardDto Card { get; }
 
     public Guid Id => Card.Id;
+
+    public long MetadataVersion => _metadataVersion;
+
+    public InboxAction AllowedActions => Card.AllowedActions;
 
     public string AutomationId => $"InboxCard_{Id:N}";
 
@@ -63,4 +69,17 @@ public sealed class InboxCardViewModel
     public string FallbackGlyph => Card.MediaKind == MediaKind.Image
         ? "\uEB9F"
         : "\uE714";
+
+    public InboxSelectionEntry SelectionEntry(int ordinal) =>
+        new(Id, MetadataVersion, ordinal);
+
+    public void UpdateMetadataVersion(long version)
+    {
+        if (version < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(version));
+        }
+
+        _metadataVersion = Math.Max(_metadataVersion, version);
+    }
 }

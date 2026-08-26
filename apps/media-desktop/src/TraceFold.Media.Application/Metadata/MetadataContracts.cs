@@ -86,12 +86,16 @@ public interface ITaxonomyStore
         CancellationToken cancellationToken);
 }
 
-public interface ITaxonomyService
+public interface ITaxonomySearchService
 {
     Task<IReadOnlyList<TaxonomyTermDto>> SearchAsync(
         TaxonomyKind kind,
         string? query,
         CancellationToken cancellationToken);
+}
+
+public interface ITaxonomyService : ITaxonomySearchService
+{
 
     Task<TaxonomyTermDto> CreateAsync(
         TaxonomyKind kind,

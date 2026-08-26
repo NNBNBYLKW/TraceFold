@@ -32,6 +32,10 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<IDebounceScheduler, ProductionDebounceScheduler>();
                 services.AddSingleton<IMetadataEditorRegistry, MetadataEditorRegistry>();
                 services.AddSingleton<IConflictDialogService, WindowsConflictDialogService>();
+                services.AddSingleton<IBatchMetadataDialogService,
+                    WindowsBatchMetadataDialogService>();
+                services.AddSingleton<IBatchIngestConfirmationService,
+                    WindowsBatchIngestConfirmationService>();
                 services.AddSingleton<IUiDispatcher>(_ => new DispatcherQueueAdapter(
                     DispatcherQueue.GetForCurrentThread()
                     ?? throw new InvalidOperationException(
@@ -40,6 +44,8 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<SettingsViewModel>();
                 services.AddTransient<MetadataEditorViewModel>();
                 services.AddSingleton<InboxInspectorViewModel>();
+                services.AddSingleton<InboxSelectionViewModel>();
+                services.AddSingleton<InboxBatchSummaryViewModel>();
                 services.AddSingleton<InboxViewModel>();
                 services.AddSingleton<LibraryInspectorViewModel>();
                 services.AddSingleton<LibraryViewModel>();

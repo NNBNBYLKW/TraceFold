@@ -18,39 +18,8 @@ public sealed class InboxItem
 
     public bool IsRetryable { get; private set; }
 
-    public InboxAction AllowedActions => State switch
-    {
-        InboxItemState.WaitingForStability => InboxAction.Preview,
-        InboxItemState.ReadyToTag =>
-            InboxAction.Preview | InboxAction.EditMetadata |
-            InboxAction.Ingest | InboxAction.OpenFolder,
-        InboxItemState.RequiresProcessing =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
-            InboxAction.StartProcessing,
-        InboxItemState.ProcessingQueued =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
-            InboxAction.CancelProcessing,
-        InboxItemState.Processing =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
-            InboxAction.StopProcessing,
-        InboxItemState.ProcessingInterrupted =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
-            InboxAction.RetryProcessing,
-        InboxItemState.ConflictBlocked =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
-            InboxAction.ResolveConflict,
-        InboxItemState.RecoveryBlocked =>
-            InboxAction.Preview | InboxAction.OpenFolder | InboxAction.RecheckRecovery,
-        InboxItemState.CleanupPending =>
-            InboxAction.Preview | InboxAction.RetryCleanup | InboxAction.OpenFolder,
-        InboxItemState.Failed when IsRetryable && RequiredCapability is not null =>
-            InboxAction.Preview | InboxAction.EditMetadata | InboxAction.OpenFolder |
-            InboxAction.RetryProcessing,
-        InboxItemState.Failed when IsRetryable =>
-            InboxAction.Preview | InboxAction.Retry | InboxAction.OpenFolder,
-        InboxItemState.SourceMissing => InboxAction.ClearMissing,
-        _ => InboxAction.None
-    };
+    public InboxAction AllowedActions =>
+        InboxActionPolicy.For(State, IsRetryable, RequiredCapability);
 
     public static InboxItem Discover(Guid id) => new(id);
 

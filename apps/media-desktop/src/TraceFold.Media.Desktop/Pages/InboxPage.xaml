@@ -5,10 +5,16 @@
     xmlns:controls="using:TraceFold.Media.Desktop.Controls"
     xmlns:pages="using:TraceFold.Media.Desktop.Pages">
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" ColumnDefinitions="*,360">
-        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,*">
+        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,*">
             <Grid Margin="24,18,20,8" ColumnDefinitions="*,Auto">
                 <StackPanel>
-                    <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="待入库" />
+                    <TextBlock
+                        x:Name="InboxTitle"
+                        AutomationProperties.AutomationId="InboxTitle"
+                        AutomationProperties.Name="待入库页面标题"
+                        IsTabStop="True"
+                        Style="{ThemeResource TitleTextBlockStyle}"
+                        Text="待入库" />
                     <TextBlock
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Text="检查下载文件、补充资料，然后安全转入正式文件库。" />
@@ -40,16 +46,68 @@
                     Content="立即刷新" />
             </Grid>
 
+            <Border
+                Grid.Row="2"
+                Margin="24,0,20,12"
+                Padding="12,8"
+                AutomationProperties.AutomationId="InboxBatchBar"
+                AutomationProperties.Name="待入库批量操作栏"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                CornerRadius="6"
+                Visibility="{x:Bind ViewModel.BatchBarVisibility, Mode=OneWay}">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="6">
+                    <TextBlock VerticalAlignment="Center" Text="已选择" />
+                    <TextBlock
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        FontWeight="SemiBold"
+                        Text="{x:Bind ViewModel.Selection.SelectedCount, Mode=OneWay}" />
+                    <StackPanel
+                        Grid.Column="2"
+                        HorizontalAlignment="Right"
+                        Orientation="Horizontal"
+                        Spacing="6">
+                        <Button
+                            AutomationProperties.AutomationId="InboxBatchMetadataButton"
+                            AutomationProperties.Name="批量编辑所选文件的资料"
+                            Command="{x:Bind ViewModel.BatchEditMetadataCommand}"
+                            Content="批量编辑资料" />
+                        <Button
+                            AutomationProperties.AutomationId="InboxBatchStartProcessingButton"
+                            AutomationProperties.Name="仅将适用的所选文件加入前置处理队列"
+                            Command="{x:Bind ViewModel.BatchStartProcessingCommand}"
+                            Content="开始前置处理" />
+                        <Button
+                            AutomationProperties.AutomationId="InboxBatchIngestButton"
+                            AutomationProperties.Name="预览并确认批量入库"
+                            Command="{x:Bind ViewModel.BatchIngestCommand}"
+                            Content="批量入库"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
+                    <Button
+                        Grid.Column="3"
+                        AutomationProperties.AutomationId="InboxCancelSelectionButton"
+                        AutomationProperties.Name="取消所有待入库选择"
+                        Click="OnCancelSelectionClick"
+                        Content="取消选择" />
+                </Grid>
+            </Border>
+
             <GridView
                 x:Name="InboxGrid"
-                Grid.Row="2"
+                Grid.Row="3"
                 Margin="16,0,12,16"
                 Padding="8"
                 AutomationProperties.AutomationId="InboxGrid"
+                AutomationProperties.Name="待入库文件列表"
                 IsItemClickEnabled="True"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
                 SelectionChanged="OnSelectionChanged"
-                SelectionMode="Single">
+                SelectionMode="Extended">
+                <GridView.KeyboardAccelerators>
+                    <KeyboardAccelerator Modifiers="Control" Key="A" Invoked="OnSelectAllAccelerator" />
+                    <KeyboardAccelerator Key="Escape" Invoked="OnClearSelectionAccelerator" />
+                </GridView.KeyboardAccelerators>
                 <GridView.ItemsPanel>
                     <ItemsPanelTemplate>
                         <ItemsWrapGrid Orientation="Horizontal" />
@@ -119,7 +177,10 @@
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1,0,0,0">
             <ScrollViewer>
-                <StackPanel Spacing="12">
+                <Grid RowDefinitions="Auto,Auto,Auto">
+                <StackPanel
+                    Spacing="12"
+                    Visibility="{x:Bind ViewModel.InspectorVisibility, Mode=OneWay}">
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="资料" />
                         <TextBlock
@@ -272,6 +333,77 @@
                             Content="清除失效记录" />
                     </Grid>
                 </StackPanel>
+                <StackPanel
+                    Spacing="14"
+                    AutomationProperties.AutomationId="InboxBatchSummary"
+                    AutomationProperties.Name="所选待入库文件的批量摘要"
+                    Visibility="{x:Bind ViewModel.BatchSummaryVisibility, Mode=OneWay}">
+                    <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="批量摘要" />
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                        <TextBlock Text="已选择" />
+                        <TextBlock
+                            Grid.Column="1"
+                            FontWeight="SemiBold"
+                            Text="{x:Bind ViewModel.BatchSummary.SelectedCount, Mode=OneWay}" />
+                    </Grid>
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.BatchSummary.MediaCountText, Mode=OneWay}"
+                        TextWrapping="Wrap" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.BatchSummary.StateCountText, Mode=OneWay}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel
+                    Grid.Row="1"
+                    Margin="0,18,0,0"
+                    Spacing="8"
+                    Visibility="{x:Bind ViewModel.BatchSummary.IngestProgressVisibility, Mode=OneWay}">
+                    <TextBlock
+                        FontWeight="SemiBold"
+                        Text="{x:Bind ViewModel.BatchSummary.CurrentItemText, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                    <ProgressBar
+                        AutomationProperties.AutomationId="InboxBatchIngestProgress"
+                        AutomationProperties.Name="批量入库总进度"
+                        Maximum="100"
+                        Value="{x:Bind ViewModel.BatchSummary.ProgressPercent, Mode=OneWay}" />
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="InboxBatchStopAfterCurrentButton"
+                        AutomationProperties.Name="当前项目安全完成后停止后续入库"
+                        Command="{x:Bind ViewModel.StopBatchIngestCommand}"
+                        Content="当前项完成后停止" />
+                </StackPanel>
+                <StackPanel
+                    Grid.Row="2"
+                    Margin="0,18,0,0"
+                    Spacing="8"
+                    AutomationProperties.AutomationId="InboxBatchIngestResult"
+                    AutomationProperties.Name="批量入库结果"
+                    Visibility="{x:Bind ViewModel.BatchSummary.FinalResultVisibility, Mode=OneWay}">
+                    <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="批量入库结果" />
+                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="5">
+                        <TextBlock Text="已完成" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.BatchSummary.CompletedCount, Mode=OneWay}" />
+                        <TextBlock Grid.Row="1" Text="存在冲突" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind ViewModel.BatchSummary.ConflictCount, Mode=OneWay}" />
+                        <TextBlock Grid.Row="2" Text="需要前置处理" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{x:Bind ViewModel.BatchSummary.RequiresProcessingCount, Mode=OneWay}" />
+                        <TextBlock Grid.Row="3" Text="失败或已变化" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{x:Bind ViewModel.BatchSummary.FailedOrChangedCount, Mode=OneWay}" />
+                        <TextBlock Grid.Row="4" Text="未开始" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{x:Bind ViewModel.BatchSummary.NotStartedCount, Mode=OneWay}" />
+                    </Grid>
+                    <Button
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.AutomationId="InboxBatchShowIncompleteButton"
+                        AutomationProperties.Name="只显示本次批量入库中未完成的项目"
+                        Command="{x:Bind ViewModel.ShowBatchIncompleteOnlyCommand}"
+                        Content="只显示未完成项" />
+                </StackPanel>
+                </Grid>
             </ScrollViewer>
         </Border>
     </Grid>

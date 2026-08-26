@@ -42,6 +42,7 @@ public static class DependencyInjection
         services.AddSingleton<IInboxFileCatalog, LocalInboxFileCatalog>();
         services.AddSingleton<IInboxScanStore, EfInboxScanStore>();
         services.AddSingleton<IInboxQueryStore, EfInboxQueryStore>();
+        services.AddSingleton<IInboxSelectionStore, EfInboxSelectionStore>();
         services.AddSingleton<EfIngestStore>();
         services.AddSingleton<IIngestStore>(provider =>
             provider.GetRequiredService<EfIngestStore>());
@@ -57,6 +58,7 @@ public static class DependencyInjection
         services.AddSingleton<ITaxonomyLookup>(provider =>
             provider.GetRequiredService<EfTaxonomyStore>());
         services.AddSingleton<IMetadataStore, EfMetadataStore>();
+        services.AddSingleton<IBatchMetadataStore, EfBatchMetadataStore>();
         services.AddSingleton<ILibraryQueryStore, EfLibraryQueryStore>();
         services.AddSingleton<IPreviewPathStore, EfPreviewPathStore>();
         services.AddSingleton<IFileHasher, Sha256FileHasher>();

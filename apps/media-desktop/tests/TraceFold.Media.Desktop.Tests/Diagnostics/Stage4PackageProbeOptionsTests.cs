@@ -361,100 +361,21 @@ public sealed class Stage4PackageProbeOptionsTests
 
     private sealed class ProbeRoot : IDisposable
     {
-        private ProbeRoot(string path, Guid token, string tokenText)
-        {
-            Path = path;
-            Token = token;
-            TokenText = tokenText;
-        }
+        private readonly OwnedProbeRoot root;
 
-        public string Path { get; }
+        private ProbeRoot(OwnedProbeRoot root) => this.root = root;
 
-        public Guid Token { get; }
+        public string Path => root.Path;
 
-        public string TokenText { get; }
+        public Guid Token => root.Token;
 
-        public static ProbeRoot Create()
-        {
-            Guid token = Guid.NewGuid();
-            string tokenText = token.ToString("D");
-            string path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                $"tracefold-media-desktop-stage4-probe-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(path);
-            File.WriteAllText(
-                System.IO.Path.Combine(path, "probe-owner.txt"),
-                tokenText);
-            string fixtures = Directory.CreateDirectory(
-                System.IO.Path.Combine(path, "fixtures")).FullName;
-            foreach (string filename in new[]
-            {
-                "paired.mp4",
-                "paired.m4a",
-                "photo.jpg"
-            })
-            {
-                File.Copy(
-                    Fixture(filename),
-                    System.IO.Path.Combine(fixtures, filename));
-            }
+        public string TokenText => root.TokenText;
 
-            return new ProbeRoot(
-                System.IO.Path.GetFullPath(path),
-                token,
-                tokenText);
-        }
+        public static ProbeRoot Create() => new(OwnedProbeRoot.CreateWithFixtures());
 
-        public void PrepareCrashResume(IngestFaultPoint point)
-        {
-            foreach (string name in new[] { "data", "inbox", "library", "work" })
-            {
-                Directory.CreateDirectory(System.IO.Path.Combine(Path, name));
-            }
+        public void PrepareCrashResume(IngestFaultPoint point) =>
+            root.PrepareCrashResume(point);
 
-            Stage4CrashProbeManifest.CreateForTest(TokenText, point).WriteTo(
-                System.IO.Path.Combine(
-                    Path,
-                    Stage4PackageProbeOptions.CrashManifestFilename));
-        }
-
-        public void Dispose()
-        {
-            string temp = System.IO.Path.TrimEndingDirectorySeparator(
-                System.IO.Path.GetFullPath(System.IO.Path.GetTempPath()));
-            string? parent = System.IO.Path.GetDirectoryName(Path);
-            if (parent is not null
-                && StringComparer.OrdinalIgnoreCase.Equals(
-                    System.IO.Path.TrimEndingDirectorySeparator(parent),
-                    temp)
-                && Directory.Exists(Path))
-            {
-                Directory.Delete(Path, recursive: true);
-            }
-        }
-    }
-
-    private static string Fixture(string filename)
-    {
-        DirectoryInfo? current = new(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            string candidate = Path.Combine(
-                current.FullName,
-                "apps",
-                "media-api",
-                "tests",
-                "fixtures",
-                "media",
-                filename);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            current = current.Parent;
-        }
-
-        throw new FileNotFoundException($"Repository fixture is missing: {filename}");
+        public void Dispose() => root.Dispose();
     }
 }

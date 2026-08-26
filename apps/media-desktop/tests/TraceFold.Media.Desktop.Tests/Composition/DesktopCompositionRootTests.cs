@@ -35,6 +35,10 @@ public sealed class DesktopCompositionRootTests
                 service => service is ProcessingQueueWorker);
             Assert.IsType<WindowsConflictDialogService>(
                 host.Services.GetRequiredService<IConflictDialogService>());
+            Assert.IsType<WindowsBatchMetadataDialogService>(
+                host.Services.GetRequiredService<IBatchMetadataDialogService>());
+            Assert.IsType<WindowsBatchIngestConfirmationService>(
+                host.Services.GetRequiredService<IBatchIngestConfirmationService>());
         }
         finally
         {

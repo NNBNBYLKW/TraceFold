@@ -161,6 +161,19 @@ public sealed class InboxItemTests
     }
 
     [Fact]
+    public void Policy_keeps_conflict_resolution_and_metadata_actions_together()
+    {
+        InboxAction actions = InboxActionPolicy.For(
+            InboxItemState.ConflictBlocked,
+            isRetryable: false,
+            requiredCapability: null);
+
+        Assert.True(actions.HasFlag(InboxAction.EditMetadata));
+        Assert.True(actions.HasFlag(InboxAction.ResolveConflict));
+        Assert.False(actions.HasFlag(InboxAction.Ingest));
+    }
+
+    [Fact]
     public void Chosen_conflict_can_begin_the_shared_ingest_pipeline()
     {
         InboxItem item = ReadyItem();

@@ -25,6 +25,99 @@ public sealed class MediaWorkspaceStructureTests
             "AutomationProperties.AutomationId=\"InboxGrid\"",
             inboxXaml,
             StringComparison.Ordinal);
+        Assert.Contains("SelectionMode=\"Extended\"", inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxBatchBar\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxBatchSummary\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxCancelSelectionButton\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains("Modifiers=\"Control\" Key=\"A\"", inboxXaml,
+            StringComparison.Ordinal);
+        Assert.Contains("Key=\"Escape\"", inboxXaml, StringComparison.Ordinal);
+        string batchDialogXaml = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "BatchMetadataDialog.xaml"),
+            TestContext.Current.CancellationToken);
+        string confirmationXaml = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "BatchIngestConfirmationDialog.xaml"),
+            TestContext.Current.CancellationToken);
+        foreach (string id in new[]
+        {
+            "BatchMetadataDialog",
+            "BatchMetadataAddTab",
+            "BatchMetadataRemoveTab",
+            "BatchMetadataReplaceTab",
+            "BatchReplaceAuthorsEnabled",
+            "BatchReplaceAuthorsClear",
+            "BatchReplaceSeriesEnabled",
+            "BatchReplaceSeriesClear",
+            "BatchReplaceTagsEnabled",
+            "BatchReplaceTagsClear",
+            "BatchMetadataSubmitButton",
+            "InboxBatchMetadataButton",
+            "InboxBatchStartProcessingButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                batchDialogXaml + inboxXaml,
+                StringComparison.Ordinal);
+        }
+        foreach (string id in new[]
+        {
+            "InboxGrid",
+            "InboxBatchBar",
+            "InboxBatchSummary",
+            "InboxCancelSelectionButton",
+            "InboxBatchMetadataButton",
+            "InboxBatchStartProcessingButton",
+            "InboxBatchIngestButton",
+            "InboxBatchIngestProgress",
+            "InboxBatchStopAfterCurrentButton",
+            "InboxBatchIngestResult",
+            "InboxBatchShowIncompleteButton",
+            "BatchMetadataDialog",
+            "BatchMetadataSubmitButton",
+            "BatchIngestConfirmationDialog",
+            "BatchIngestConfirmButton"
+        })
+        {
+            AssertElementHasAccessibleName(
+                inboxXaml + batchDialogXaml + confirmationXaml,
+                id);
+        }
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"InboxTitle\"",
+            inboxXaml,
+            StringComparison.Ordinal);
+        string inboxCode = await File.ReadAllTextAsync(
+            DesktopSource("Pages", "InboxPage.xaml.cs"),
+            TestContext.Current.CancellationToken);
+        Assert.Contains("OnFocusRequested", inboxCode, StringComparison.Ordinal);
+        Assert.Contains("ApplyFocusRequest", inboxCode, StringComparison.Ordinal);
+        foreach (string id in new[]
+        {
+            "InboxBatchIngestButton",
+            "BatchIngestConfirmationDialog",
+            "BatchIngestConfirmButton",
+            "InboxBatchIngestProgress",
+            "InboxBatchStopAfterCurrentButton",
+            "InboxBatchIngestResult",
+            "InboxBatchShowIncompleteButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                inboxXaml + confirmationXaml,
+                StringComparison.Ordinal);
+        }
         Assert.Contains(
             "AutomationProperties.AutomationId=\"InspectorPane\"",
             inboxXaml,
@@ -51,6 +144,16 @@ public sealed class MediaWorkspaceStructureTests
         }
 
         Assert.Contains("MediaPlayerElement", previewXaml, StringComparison.Ordinal);
+
+        XDocument document = XDocument.Parse(inboxXaml);
+        XElement progress = Assert.Single(document.Descendants(), element =>
+            element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.AutomationId"
+                && attribute.Value == "InboxBatchIngestProgress"));
+        Assert.DoesNotContain(progress.Ancestors(), element =>
+            element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.AutomationId"
+                && attribute.Value == "InboxBatchSummary"));
     }
 
     [Fact]
@@ -217,5 +320,20 @@ public sealed class MediaWorkspaceStructureTests
         }
 
         return count;
+    }
+
+    private static void AssertElementHasAccessibleName(string xaml, string id)
+    {
+        string marker = $"AutomationProperties.AutomationId=\"{id}\"";
+        int markerIndex = xaml.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(markerIndex >= 0, $"Missing {id}.");
+        int elementStart = xaml.LastIndexOf('<', markerIndex);
+        int elementEnd = xaml.IndexOf('>', markerIndex);
+        Assert.True(elementStart >= 0 && elementEnd > markerIndex);
+        string element = xaml[elementStart..(elementEnd + 1)];
+        Assert.Contains(
+            "AutomationProperties.Name=\"",
+            element,
+            StringComparison.Ordinal);
     }
 }

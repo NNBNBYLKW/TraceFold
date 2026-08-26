@@ -121,6 +121,27 @@ public sealed class ArchitectureTests
         }
     }
 
+    [Fact]
+    public void Stage5A_desktop_does_not_know_specific_processor_or_batch_rows()
+    {
+        string desktopRoot = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "src", "TraceFold.Media.Desktop"));
+        string desktop = string.Join('\n', Directory.GetFiles(
+                desktopRoot,
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Select(File.ReadAllText));
+
+        Assert.DoesNotContain("Mp4M4a", desktop, StringComparison.Ordinal);
+        Assert.DoesNotContain("BatchJobRow", desktop, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "BatchIngestOperationRow",
+            desktop,
+            StringComparison.Ordinal);
+    }
+
     private static string[] ProjectReferences(Assembly assembly) => assembly
         .GetReferencedAssemblies()
         .Select(item => item.Name ?? string.Empty)

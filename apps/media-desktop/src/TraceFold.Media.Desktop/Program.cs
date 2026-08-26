@@ -10,16 +10,15 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        Stage4PackageProbeOptionResult probe =
-            Stage4PackageProbeOptions.Parse(args);
-        if (probe.State == Stage4PackageProbeOptionState.Invalid)
+        PackageProbeOptionResult probe = PackageProbeOptions.Parse(args);
+        if (probe.State == PackageProbeOptionState.Invalid)
         {
             return 2;
         }
 
-        if (probe.State == Stage4PackageProbeOptionState.Ready)
+        if (probe.State == PackageProbeOptionState.Ready)
         {
-            return Stage4PackageProbe.RunAsync(probe.Options!)
+            return PackageProbeRunner.RunAsync(probe.Request!)
                 .GetAwaiter()
                 .GetResult();
         }
