@@ -3,32 +3,315 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:TraceFold.Media.Desktop.Controls"
+    xmlns:metadata="using:TraceFold.Media.Application.Metadata"
     xmlns:pages="using:TraceFold.Media.Desktop.Pages">
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" ColumnDefinitions="*,360">
-        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,*">
+        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto,*">
             <StackPanel Margin="24,18,20,8">
                 <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="正式文件库" />
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="按显示名称管理资料，同时保留文件原始命名。" />
+                    Text="筛选并整理软件资料；实际文件名和文件内容保持不变。" />
             </StackPanel>
-            <AutoSuggestBox
+
+            <Grid
                 Grid.Row="1"
-                Margin="24,8,20,14"
-                AutomationProperties.AutomationId="LibrarySearchBox"
-                PlaceholderText="搜索文件名或显示名称"
-                QueryIcon="Find"
-                Text="{x:Bind ViewModel.SearchText, Mode=TwoWay}" />
+                Margin="24,8,20,10"
+                ColumnDefinitions="*,150,112,Auto"
+                ColumnSpacing="8">
+                <AutoSuggestBox
+                    AutomationProperties.AutomationId="LibrarySearchBox"
+                    AutomationProperties.Name="搜索正式文件库"
+                    PlaceholderText="搜索文件名或显示名称"
+                    QueryIcon="Find"
+                    Text="{x:Bind ViewModel.SearchText, Mode=TwoWay}" />
+                <ComboBox
+                    x:Name="SortFieldSelector"
+                    Grid.Column="1"
+                    AutomationProperties.AutomationId="LibrarySortField"
+                    AutomationProperties.Name="正式文件库排序字段"
+                    SelectionChanged="OnSortSelectionChanged">
+                    <ComboBoxItem Content="入库时间" Tag="CreatedAt" />
+                    <ComboBoxItem Content="显示名称" Tag="DisplayName" />
+                    <ComboBoxItem Content="实际文件名" Tag="ActualFilename" />
+                    <ComboBoxItem Content="媒体类型" Tag="MediaKind" />
+                </ComboBox>
+                <ComboBox
+                    x:Name="SortDirectionSelector"
+                    Grid.Column="2"
+                    AutomationProperties.AutomationId="LibrarySortDirection"
+                    AutomationProperties.Name="正式文件库排序方向"
+                    SelectionChanged="OnSortSelectionChanged">
+                    <ComboBoxItem Content="升序" Tag="Ascending" />
+                    <ComboBoxItem Content="降序" Tag="Descending" />
+                </ComboBox>
+                <Button
+                    Grid.Column="3"
+                    AutomationProperties.AutomationId="LibraryFilterButton"
+                    AutomationProperties.Name="打开正式文件库筛选"
+                    Click="OnFilterButtonClick">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE71C;" />
+                        <TextBlock Text="筛选" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind ViewModel.Filter.ActiveFilterCount, Mode=OneWay}" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout
+                            x:Name="FilterFlyout"
+                            AutomationProperties.AutomationId="LibraryFilterFlyout"
+                            AutomationProperties.Name="正式文件库筛选面板">
+                            <Flyout.FlyoutPresenterStyle>
+                                <Style TargetType="FlyoutPresenter">
+                                    <Setter Property="MinWidth" Value="560" />
+                                    <Setter Property="MaxWidth" Value="640" />
+                                </Style>
+                            </Flyout.FlyoutPresenterStyle>
+                            <ScrollViewer MaxHeight="620">
+                                <StackPanel Padding="4" Spacing="14">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock
+                                            Style="{ThemeResource SubtitleTextBlockStyle}"
+                                            Text="筛选正式文件" />
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="全部条件取交集" />
+                                    </Grid>
+
+                                    <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                        <StackPanel Spacing="5">
+                                            <TextBlock FontWeight="SemiBold" Text="媒体类型" />
+                                            <ComboBox
+                                                x:Name="MediaFilterSelector"
+                                                AutomationProperties.AutomationId="LibraryMediaFilter"
+                                                AutomationProperties.Name="按媒体类型筛选"
+                                                HorizontalAlignment="Stretch">
+                                                <ComboBoxItem Content="全部" Tag="All" />
+                                                <ComboBoxItem Content="图片" Tag="Image" />
+                                                <ComboBoxItem Content="视频" Tag="Video" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="5">
+                                            <TextBlock FontWeight="SemiBold" Text="显示名称" />
+                                            <ComboBox
+                                                x:Name="DisplayNameFilterSelector"
+                                                AutomationProperties.AutomationId="LibraryDisplayNameFilter"
+                                                AutomationProperties.Name="按显示名称状态筛选"
+                                                HorizontalAlignment="Stretch">
+                                                <ComboBoxItem Content="全部" Tag="All" />
+                                                <ComboBoxItem Content="已自定义" Tag="Customized" />
+                                                <ComboBoxItem Content="仍使用实际文件名" Tag="ActualFilename" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <StackPanel Spacing="6">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock FontWeight="SemiBold" Text="作者（全部包含）" />
+                                            <CheckBox
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="LibraryMissingAuthorFilter"
+                                                AutomationProperties.Name="只显示缺少作者的文件"
+                                                Content="缺少作者"
+                                                IsChecked="{x:Bind ViewModel.Filter.MissingAuthors, Mode=TwoWay}" />
+                                        </Grid>
+                                        <AutoSuggestBox
+                                            x:Name="AuthorFilterSearch"
+                                            AutomationProperties.AutomationId="LibraryAuthorFilter"
+                                            AutomationProperties.Name="搜索已有作者作为筛选条件"
+                                            DisplayMemberPath="DisplayName"
+                                            ItemsSource="{x:Bind ViewModel.Filter.Authors.Suggestions, Mode=OneWay}"
+                                            PlaceholderText="搜索已有作者"
+                                            SuggestionChosen="OnAuthorFilterSuggestionChosen"
+                                            TextChanged="OnAuthorFilterTextChanged" />
+                                        <ItemsControl ItemsSource="{x:Bind ViewModel.Filter.Authors.SelectedTerms, Mode=OneWay}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <ItemsWrapGrid Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="metadata:TaxonomyTermDto">
+                                                    <Button
+                                                        Margin="0,0,6,4"
+                                                        AutomationProperties.Name="移除作者筛选条件"
+                                                        Click="OnRemoveAuthorFilterTerm"
+                                                        Content="{x:Bind DisplayName}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="6">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock FontWeight="SemiBold" Text="系列" />
+                                            <CheckBox
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="LibraryMissingSeriesFilter"
+                                                AutomationProperties.Name="只显示缺少系列的文件"
+                                                Content="缺少系列"
+                                                IsChecked="{x:Bind ViewModel.Filter.MissingSeries, Mode=TwoWay}" />
+                                        </Grid>
+                                        <AutoSuggestBox
+                                            x:Name="SeriesFilterSearch"
+                                            AutomationProperties.AutomationId="LibrarySeriesFilter"
+                                            AutomationProperties.Name="搜索已有系列作为筛选条件"
+                                            DisplayMemberPath="DisplayName"
+                                            ItemsSource="{x:Bind ViewModel.Filter.Series.Suggestions, Mode=OneWay}"
+                                            PlaceholderText="搜索已有系列"
+                                            SuggestionChosen="OnSeriesFilterSuggestionChosen"
+                                            TextChanged="OnSeriesFilterTextChanged" />
+                                        <ItemsControl ItemsSource="{x:Bind ViewModel.Filter.Series.SelectedTerms, Mode=OneWay}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="metadata:TaxonomyTermDto">
+                                                    <Button
+                                                        Margin="0,0,6,4"
+                                                        AutomationProperties.Name="移除系列筛选条件"
+                                                        Click="OnRemoveSeriesFilterTerm"
+                                                        Content="{x:Bind DisplayName}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+
+                                    <StackPanel Spacing="6">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock FontWeight="SemiBold" Text="内容标签（全部包含）" />
+                                            <CheckBox
+                                                Grid.Column="1"
+                                                AutomationProperties.AutomationId="LibraryMissingTagFilter"
+                                                AutomationProperties.Name="只显示缺少内容标签的文件"
+                                                Content="缺少标签"
+                                                IsChecked="{x:Bind ViewModel.Filter.MissingTags, Mode=TwoWay}" />
+                                        </Grid>
+                                        <AutoSuggestBox
+                                            x:Name="TagFilterSearch"
+                                            AutomationProperties.AutomationId="LibraryTagFilter"
+                                            AutomationProperties.Name="搜索已有内容标签作为筛选条件"
+                                            DisplayMemberPath="DisplayName"
+                                            ItemsSource="{x:Bind ViewModel.Filter.Tags.Suggestions, Mode=OneWay}"
+                                            PlaceholderText="搜索已有内容标签"
+                                            SuggestionChosen="OnTagFilterSuggestionChosen"
+                                            TextChanged="OnTagFilterTextChanged" />
+                                        <ItemsControl ItemsSource="{x:Bind ViewModel.Filter.Tags.SelectedTerms, Mode=OneWay}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <ItemsWrapGrid Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="metadata:TaxonomyTermDto">
+                                                    <Button
+                                                        Margin="0,0,6,4"
+                                                        AutomationProperties.Name="移除内容标签筛选条件"
+                                                        Click="OnRemoveTagFilterTerm"
+                                                        Content="{x:Bind DisplayName}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+
+                                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                        <TextBlock
+                                            VerticalAlignment="Center"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="修改只在点击应用后刷新列表" />
+                                        <Button
+                                            Grid.Column="1"
+                                            AutomationProperties.AutomationId="LibraryFilterCancelButton"
+                                            AutomationProperties.Name="取消正式文件库筛选草稿"
+                                            Click="OnFilterCancelClick"
+                                            Content="取消" />
+                                        <Button
+                                            Grid.Column="2"
+                                            AutomationProperties.AutomationId="LibraryFilterApplyButton"
+                                            AutomationProperties.Name="应用正式文件库筛选条件"
+                                            Click="OnFilterApplyClick"
+                                            Content="应用"
+                                            Style="{StaticResource AccentButtonStyle}" />
+                                    </Grid>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+            </Grid>
+
+            <Grid
+                Grid.Row="2"
+                Margin="24,0,20,10"
+                ColumnDefinitions="*,Auto"
+                Visibility="{x:Bind ViewModel.ActiveFiltersVisibility, Mode=OneWay}">
+                <ItemsControl
+                    AutomationProperties.AutomationId="LibraryActiveFilters"
+                    AutomationProperties.Name="已应用的正式文件库筛选条件"
+                    ItemsSource="{x:Bind ViewModel.Filter.ActiveChips, Mode=OneWay}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="pages:LibraryFilterChipViewModel">
+                            <Button
+                                Margin="0,0,6,4"
+                                AutomationProperties.Name="移除此筛选条件"
+                                Click="OnRemoveActiveFilterClick"
+                                Content="{x:Bind Label}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button
+                    Grid.Column="1"
+                    AutomationProperties.AutomationId="LibraryClearFiltersButton"
+                    AutomationProperties.Name="清除全部正式文件库筛选条件"
+                    Click="OnClearFiltersClick"
+                    Content="全部清除" />
+            </Grid>
+
+            <Border
+                Grid.Row="3"
+                Margin="24,0,20,10"
+                Padding="12,8"
+                AutomationProperties.AutomationId="LibraryBatchBar"
+                AutomationProperties.Name="正式文件库多选操作栏"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                CornerRadius="6"
+                Visibility="{x:Bind ViewModel.BatchBarVisibility, Mode=OneWay}">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="6">
+                    <TextBlock VerticalAlignment="Center" Text="已选择" />
+                    <TextBlock
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        FontWeight="SemiBold"
+                        Text="{x:Bind ViewModel.Selection.SelectedCount, Mode=OneWay}" />
+                    <Button
+                        Grid.Column="3"
+                        AutomationProperties.AutomationId="LibraryClearSelectionButton"
+                        AutomationProperties.Name="取消所有正式文件选择"
+                        Click="OnClearSelectionClick"
+                        Content="取消选择" />
+                </Grid>
+            </Border>
+
             <GridView
                 x:Name="LibraryGrid"
-                Grid.Row="2"
+                Grid.Row="4"
                 Margin="16,0,12,16"
                 Padding="8"
                 AutomationProperties.AutomationId="LibraryGrid"
+                AutomationProperties.Name="正式文件列表"
                 IsItemClickEnabled="True"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
                 SelectionChanged="OnSelectionChanged"
-                SelectionMode="Single">
+                SelectionMode="Extended">
+                <GridView.KeyboardAccelerators>
+                    <KeyboardAccelerator Modifiers="Control" Key="A" Invoked="OnSelectAllAccelerator" />
+                    <KeyboardAccelerator Key="Escape" Invoked="OnClearSelectionAccelerator" />
+                </GridView.KeyboardAccelerators>
                 <GridView.ItemsPanel>
                     <ItemsPanelTemplate>
                         <ItemsWrapGrid Orientation="Horizontal" />
@@ -87,45 +370,104 @@
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1,0,0,0">
             <ScrollViewer>
-                <StackPanel Spacing="12">
-                    <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="资料" />
-                    <controls:MediaPreviewControl
-                        x:Name="PreviewControl"
-                        Descriptor="{x:Bind ViewModel.Inspector.Preview, Mode=OneWay}" />
-                    <TextBlock
-                        FontWeight="SemiBold"
-                        Text="{x:Bind ViewModel.Inspector.ActualFilename, Mode=OneWay}"
-                        TextTrimming="CharacterEllipsis" />
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="{x:Bind ViewModel.Inspector.TechnicalSummary, Mode=OneWay}"
-                        TextTrimming="CharacterEllipsis" />
-                    <TextBox
-                        Header="显示名称"
-                        PlaceholderText="不修改实际文件名"
-                        Text="{x:Bind ViewModel.Inspector.Metadata.DisplayName, Mode=TwoWay}" />
-                    <TextBlock FontWeight="SemiBold" Text="作者" />
-                    <controls:TaxonomyPickerControl
-                        x:Name="AuthorPicker"
-                        SelectionChanged="OnAuthorSelectionChanged" />
-                    <TextBlock FontWeight="SemiBold" Text="系列" />
-                    <controls:TaxonomyPickerControl
-                        x:Name="SeriesPicker"
-                        SelectionChanged="OnSeriesSelectionChanged" />
-                    <TextBlock FontWeight="SemiBold" Text="内容标签" />
-                    <controls:TaxonomyPickerControl
-                        x:Name="TagPicker"
-                        SelectionChanged="OnTagSelectionChanged" />
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
-                        TextWrapping="Wrap" />
-                    <Button
-                        HorizontalAlignment="Stretch"
-                        AutomationProperties.AutomationId="RevealAssetButton"
-                        Command="{x:Bind ViewModel.RevealSelectedCommand}"
-                        Content="打开所在目录" />
-                </StackPanel>
+                <Grid>
+                    <StackPanel
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="10"
+                        Visibility="{x:Bind ViewModel.EmptySelectionVisibility, Mode=OneWay}">
+                        <FontIcon FontSize="34" Glyph="&#xEB9F;" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="选择文件以查看资料" />
+                    </StackPanel>
+
+                    <StackPanel
+                        Spacing="12"
+                        Visibility="{x:Bind ViewModel.SingleSelectionVisibility, Mode=OneWay}">
+                        <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="资料" />
+                        <controls:MediaPreviewControl
+                            x:Name="PreviewControl"
+                            Descriptor="{x:Bind ViewModel.Inspector.Preview, Mode=OneWay}" />
+                        <TextBlock
+                            FontWeight="SemiBold"
+                            Text="{x:Bind ViewModel.Inspector.ActualFilename, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind ViewModel.Inspector.TechnicalSummary, Mode=OneWay}"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBox
+                            Header="显示名称"
+                            PlaceholderText="不修改实际文件名"
+                            Text="{x:Bind ViewModel.Inspector.Metadata.DisplayName, Mode=TwoWay}" />
+                        <TextBlock FontWeight="SemiBold" Text="作者" />
+                        <controls:TaxonomyPickerControl
+                            x:Name="AuthorPicker"
+                            SelectionChanged="OnAuthorSelectionChanged" />
+                        <TextBlock FontWeight="SemiBold" Text="系列" />
+                        <controls:TaxonomyPickerControl
+                            x:Name="SeriesPicker"
+                            SelectionChanged="OnSeriesSelectionChanged" />
+                        <TextBlock FontWeight="SemiBold" Text="内容标签" />
+                        <controls:TaxonomyPickerControl
+                            x:Name="TagPicker"
+                            SelectionChanged="OnTagSelectionChanged" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+                            TextWrapping="Wrap" />
+                        <Button
+                            HorizontalAlignment="Stretch"
+                            AutomationProperties.AutomationId="RevealAssetButton"
+                            AutomationProperties.Name="在资源管理器中打开所选正式文件"
+                            Command="{x:Bind ViewModel.RevealSelectedCommand}"
+                            Content="打开所在目录" />
+                    </StackPanel>
+
+                    <StackPanel
+                        AutomationProperties.AutomationId="LibrarySelectionSummary"
+                        AutomationProperties.Name="正式文件多选摘要"
+                        Spacing="16"
+                        Visibility="{x:Bind ViewModel.MultiSelectionVisibility, Mode=OneWay}">
+                        <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="已选择文件" />
+                        <Border
+                            Padding="16"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            CornerRadius="8">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="总计" />
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        FontWeight="SemiBold"
+                                        Text="{x:Bind ViewModel.SelectionSummary.TotalCount, Mode=OneWay}" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="图片" />
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        Text="{x:Bind ViewModel.SelectionSummary.ImageCount, Mode=OneWay}" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="视频" />
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        Text="{x:Bind ViewModel.SelectionSummary.VideoCount, Mode=OneWay}" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="批量编辑入口将在完整预览与原子提交就绪后启用。"
+                            TextWrapping="Wrap" />
+                        <Button
+                            AutomationProperties.AutomationId="LibrarySummaryClearSelectionButton"
+                            AutomationProperties.Name="取消正式文件多选"
+                            Click="OnClearSelectionClick"
+                            Content="取消选择" />
+                    </StackPanel>
+                </Grid>
             </ScrollViewer>
         </Border>
     </Grid>

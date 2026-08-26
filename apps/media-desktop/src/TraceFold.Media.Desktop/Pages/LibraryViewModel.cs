@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
@@ -37,6 +38,7 @@ public sealed partial class LibraryViewModel : ObservableObject
         _reveal = reveal;
         _previewResolver = previewResolver;
         Inspector.Metadata.Saved += OnMetadataSaved;
+        Selection.PropertyChanged += OnSelectionPropertyChanged;
     }
 
     public ObservableCollection<LibraryCardViewModel> Items { get; } = [];
@@ -46,6 +48,31 @@ public sealed partial class LibraryViewModel : ObservableObject
     public LibrarySelectionViewModel Selection { get; }
 
     public LibraryFilterViewModel Filter { get; }
+
+    public LibrarySelectionSummaryViewModel SelectionSummary { get; private set; } =
+        LibrarySelectionSummaryViewModel.Empty;
+
+    public Visibility EmptySelectionVisibility => Selection.SelectedCount == 0
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public Visibility SingleSelectionVisibility => Selection.IsSingleSelection
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public Visibility MultiSelectionVisibility => Selection.IsBatchSelection
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public Visibility BatchBarVisibility => MultiSelectionVisibility;
+
+    public Visibility ActiveFiltersVisibility => Filter.ActiveFilterCount > 0
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public event EventHandler? GridItemsReplacing;
+
+    public event EventHandler? GridItemsReplaced;
 
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
@@ -91,6 +118,7 @@ public sealed partial class LibraryViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(query);
         LibraryQuery previous = Filter.AppliedQuery;
         Filter.SetAppliedQuery(query);
+        NotifyFilterPresentation();
         _settingSearch = true;
         try
         {
@@ -106,6 +134,13 @@ public sealed partial class LibraryViewModel : ObservableObject
             await ClearSelectionForQueryChangeAsync(cancellationToken);
         }
 
+        await ReloadAsync(cancellationToken);
+    }
+
+    public async Task ApplyCurrentFilterAsync(CancellationToken cancellationToken)
+    {
+        NotifyFilterPresentation();
+        await ClearSelectionForQueryChangeAsync(cancellationToken);
         await ReloadAsync(cancellationToken);
     }
 
@@ -266,20 +301,31 @@ public sealed partial class LibraryViewModel : ObservableObject
                 refreshed.Add(new LibraryCardViewModel(card, thumbnail));
             }
 
-            Items.Clear();
-            foreach (LibraryCardViewModel item in refreshed)
+            GridItemsReplacing?.Invoke(this, EventArgs.Empty);
+            try
             {
-                Items.Add(item);
-            }
+                Items.Clear();
+                foreach (LibraryCardViewModel item in refreshed)
+                {
+                    Items.Add(item);
+                }
 
-            Selection.Reconcile(Items);
-            LibraryCardViewModel? selected = Selection.SingleSelectedItem;
-            if (selected is null && selectedId.HasValue && Selection.SelectedCount == 0)
+                Selection.Reconcile(Items);
+                LibraryCardViewModel? selected = Selection.SingleSelectedItem;
+                if (selected is null
+                    && selectedId.HasValue
+                    && Selection.SelectedCount == 0)
+                {
+                    selected = Items.FirstOrDefault(
+                        item => item.Id == selectedId.Value);
+                }
+
+                SetSelectedItemSilently(selected);
+            }
+            finally
             {
-                selected = Items.FirstOrDefault(item => item.Id == selectedId.Value);
+                GridItemsReplaced?.Invoke(this, EventArgs.Empty);
             }
-
-            SetSelectedItemSilently(selected);
         }
         finally
         {
@@ -329,6 +375,34 @@ public sealed partial class LibraryViewModel : ObservableObject
         {
             _ = ReloadSafeAsync();
         }
+    }
+
+    private void OnSelectionPropertyChanged(
+        object? sender,
+        System.ComponentModel.PropertyChangedEventArgs args)
+    {
+        _ = sender;
+        if (args.PropertyName == nameof(Selection.SelectedCount))
+        {
+            UpdateSelectionPresentation();
+        }
+    }
+
+    private void UpdateSelectionPresentation()
+    {
+        HashSet<Guid> selectedIds = Selection.SelectedIds.ToHashSet();
+        SelectionSummary = LibrarySelectionSummaryViewModel.From(
+            Items.Where(item => selectedIds.Contains(item.Id)));
+        OnPropertyChanged(nameof(SelectionSummary));
+        OnPropertyChanged(nameof(EmptySelectionVisibility));
+        OnPropertyChanged(nameof(SingleSelectionVisibility));
+        OnPropertyChanged(nameof(MultiSelectionVisibility));
+        OnPropertyChanged(nameof(BatchBarVisibility));
+    }
+
+    private void NotifyFilterPresentation()
+    {
+        OnPropertyChanged(nameof(ActiveFiltersVisibility));
     }
 
     private async Task ClearSelectionForQueryChangeAsync(

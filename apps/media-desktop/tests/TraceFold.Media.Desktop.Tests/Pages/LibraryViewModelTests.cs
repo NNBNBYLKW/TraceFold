@@ -108,6 +108,29 @@ public sealed class LibraryViewModelTests
         Assert.Equal(LibrarySortField.DisplayName, viewModel.Filter.AppliedQuery.SortField);
     }
 
+    [Fact]
+    public void Multi_selection_summary_counts_images_and_videos()
+    {
+        LibrarySelectionSummaryViewModel summary =
+            LibrarySelectionSummaryViewModel.From([
+                SummaryCard(MediaKind.Image),
+                SummaryCard(MediaKind.Image),
+                SummaryCard(MediaKind.Video)
+            ]);
+
+        Assert.Equal(3, summary.TotalCount);
+        Assert.Equal(2, summary.ImageCount);
+        Assert.Equal(1, summary.VideoCount);
+    }
+
+    private static LibraryCardViewModel SummaryCard(MediaKind kind) =>
+        new(new LibraryAssetDto(
+            Guid.NewGuid(),
+            kind == MediaKind.Image ? "image.jpg" : "video.mp4",
+            "Asset",
+            kind,
+            DateTimeOffset.Parse("2026-08-26T00:00:00Z")));
+
     private static LibraryViewModel CreateViewModel(
         ILibraryQueryService library,
         IAssetRevealService? reveal = null,

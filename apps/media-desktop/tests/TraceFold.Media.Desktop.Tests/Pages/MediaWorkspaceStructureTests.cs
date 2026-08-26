@@ -242,6 +242,35 @@ public sealed class MediaWorkspaceStructureTests
     }
 
     [Fact]
+    public void Library_page_exposes_filter_sort_and_extended_selection_automation_ids()
+    {
+        string xaml = File.ReadAllText(
+            DesktopSource("Pages", "LibraryPage.xaml"));
+
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LibraryFilterButton\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LibrarySortField\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LibrarySortDirection\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AutomationProperties.AutomationId=\"LibraryActiveFilters\"",
+            xaml,
+            StringComparison.Ordinal);
+        Assert.Contains("SelectionMode=\"Extended\"", xaml,
+            StringComparison.Ordinal);
+        Assert.Contains("Modifiers=\"Control\" Key=\"A\"", xaml,
+            StringComparison.Ordinal);
+        Assert.Contains("Key=\"Escape\"", xaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Taxonomy_and_settings_pages_expose_stable_stage_two_controls()
     {
         string taxonomy = await File.ReadAllTextAsync(
