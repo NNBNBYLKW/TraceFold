@@ -28,7 +28,13 @@ merge base is `c9599690da4c52e44277a30f028bc92aaa12a9a7`. The current functional
 and packaged source commit is
 `721cef070afcca43d2a3f23ef2b286d2e0544756`. Automated package checks pass,
 and the targeted manual retest of items 8, 9, and 10 passed. The current branch
-and package are accepted on the combined evidence stated above.
+and package are accepted on the combined evidence stated above. The acceptance
+decision was documented by commit
+`496c8ed8fb6bf6a961f85f84473c931c24799855`, a documentation-only descendant
+of the functional/package source; it did not change the binary or ZIP. Any
+later traceability-only correction—including the commit containing this
+lineage statement—does not change that source, binary/ZIP, or acceptance
+decision, and its own hash is intentionally not self-embedded.
 
 ## Manual acceptance state
 
