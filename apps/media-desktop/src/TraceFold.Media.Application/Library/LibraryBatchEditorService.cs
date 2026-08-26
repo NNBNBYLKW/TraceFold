@@ -9,7 +9,25 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
     private readonly ILibraryBatchPreviewService _previewService;
     private readonly ILibraryActivityNotifier _notifier;
     private readonly ILogger<LibraryBatchEditorService>? _logger;
+    private readonly object _undoLock = new();
     private LibraryBatchUndoReceipt? _lastUndoReceipt;
+
+    public event EventHandler? UndoStateChanged;
+
+    public LibraryBatchUndoState UndoState
+    {
+        get
+        {
+            lock (_undoLock)
+            {
+                return _lastUndoReceipt is null
+                    ? LibraryBatchUndoState.Unavailable
+                    : new LibraryBatchUndoState(
+                        true,
+                        _lastUndoReceipt.Items.Count);
+            }
+        }
+    }
 
     public LibraryBatchEditorService(
         ILibraryBatchEditStore store,
@@ -66,7 +84,7 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
                     0,
                     selection.Count,
                     0,
-                    _lastUndoReceipt is not null,
+                    UndoState.IsAvailable,
                     prepared.ErrorCode ?? "library.batch.prepare_failed"),
                 operationId,
                 started);
@@ -85,7 +103,7 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
                     0,
                     selection.Count,
                     0,
-                    _lastUndoReceipt is not null,
+                    UndoState.IsAvailable,
                     "library.batch.selection_invalid"),
                 operationId,
                 started);
@@ -99,7 +117,7 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
                     0,
                     selection.Count,
                     preview.WarningCount,
-                    _lastUndoReceipt is not null,
+                    UndoState.IsAvailable,
                     preview.ErrorCode ?? "library.batch.preview_invalid"),
                 operationId,
                 started);
@@ -117,13 +135,13 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
                     stored.ChangedCount,
                     stored.UnchangedCount,
                     stored.WarningCount,
-                    _lastUndoReceipt is not null,
+                    UndoState.IsAvailable,
                     stored.ErrorCode ?? "library.batch.persistence_failed"),
                 operationId,
                 started);
         }
 
-        _lastUndoReceipt = stored.UndoReceipt;
+        ReplaceUndoReceipt(stored.UndoReceipt);
         if (stored.ChangedCount > 0 && stored.UndoReceipt is not null)
         {
             _notifier.Publish(
@@ -137,10 +155,77 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
                 stored.ChangedCount,
                 stored.UnchangedCount,
                 stored.WarningCount,
-                _lastUndoReceipt is not null,
+                UndoState.IsAvailable,
                 null),
             operationId,
             started);
+    }
+
+    public async Task<LibraryBatchUndoResult> UndoLastAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        LibraryBatchUndoReceipt? receipt;
+        lock (_undoLock)
+        {
+            receipt = _lastUndoReceipt;
+            _lastUndoReceipt = null;
+        }
+
+        if (receipt is null)
+        {
+            return new LibraryBatchUndoResult(
+                false,
+                0,
+                "library.batch.undo.unavailable");
+        }
+
+        UndoStateChanged?.Invoke(this, EventArgs.Empty);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            RestoreReceiptIfEmpty(receipt);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        LibraryBatchUndoResult result;
+        try
+        {
+            result = await _store.UndoAsync(receipt, cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
+        {
+            RestoreReceiptIfEmpty(receipt);
+            throw;
+        }
+
+        if (result.Succeeded)
+        {
+            _notifier.Publish(
+                LibraryActivityKind.UndoCompleted,
+                receipt.Items.Select(item => item.AssetId).ToArray());
+        }
+
+        return result;
+    }
+
+    public void InvalidateUndoFor(Guid assetId)
+    {
+        bool invalidated = false;
+        lock (_undoLock)
+        {
+            if (_lastUndoReceipt?.Items.Any(
+                    item => item.AssetId == assetId) == true)
+            {
+                _lastUndoReceipt = null;
+                invalidated = true;
+            }
+        }
+
+        if (invalidated)
+        {
+            UndoStateChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private LibraryBatchApplyResult Finish(
@@ -165,16 +250,42 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
         object? sender,
         LibraryActivityEventArgs args)
     {
-        if (args.Kind != LibraryActivityKind.SingleMetadataChanged
-            || _lastUndoReceipt is null)
+        if (args.Kind != LibraryActivityKind.SingleMetadataChanged)
         {
             return;
         }
 
-        HashSet<Guid> changed = args.AssetIds.ToHashSet();
-        if (_lastUndoReceipt.Items.Any(item => changed.Contains(item.AssetId)))
+        foreach (Guid assetId in args.AssetIds)
         {
-            _lastUndoReceipt = null;
+            InvalidateUndoFor(assetId);
+        }
+    }
+
+    private void ReplaceUndoReceipt(LibraryBatchUndoReceipt? receipt)
+    {
+        lock (_undoLock)
+        {
+            _lastUndoReceipt = receipt;
+        }
+
+        UndoStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void RestoreReceiptIfEmpty(LibraryBatchUndoReceipt receipt)
+    {
+        bool restored = false;
+        lock (_undoLock)
+        {
+            if (_lastUndoReceipt is null)
+            {
+                _lastUndoReceipt = receipt;
+                restored = true;
+            }
+        }
+
+        if (restored)
+        {
+            UndoStateChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 }

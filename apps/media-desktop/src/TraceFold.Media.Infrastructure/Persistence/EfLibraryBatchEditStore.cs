@@ -184,6 +184,226 @@ public sealed class EfLibraryBatchEditStore(
         }
     }
 
+    public async Task<LibraryBatchUndoResult> UndoAsync(
+        LibraryBatchUndoReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        string? receiptError = ValidateUndoReceipt(receipt);
+        if (receiptError is not null)
+        {
+            return UndoFailure(receiptError);
+        }
+
+        await using MediaDesktopDbContext context =
+            await contextFactory.CreateDbContextAsync(cancellationToken);
+        await using IDbContextTransaction transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            IReadOnlyDictionary<Guid, long> versions =
+                await LoadVersionsAsync(
+                    context,
+                    receipt.Items.Select(item => item.AssetId),
+                    cancellationToken);
+            foreach (LibraryBatchUndoItem item in receipt.Items)
+            {
+                if (!versions.TryGetValue(item.AssetId, out long version))
+                {
+                    throw new LibraryBatchStoreException(
+                        "library.batch.undo.selection_missing");
+                }
+
+                if (version != item.ExpectedPostVersion)
+                {
+                    throw new LibraryBatchStoreException(
+                        "library.batch.undo.version_conflict");
+                }
+            }
+
+            await ValidateUndoTaxonomyAsync(
+                context,
+                receipt.Items,
+                cancellationToken);
+            foreach (LibraryBatchUndoItem[] chunk in
+                     receipt.Items.Chunk(BatchSize))
+            {
+                await RestoreChunkAsync(context, chunk, cancellationToken);
+                await context.SaveChangesAsync(cancellationToken);
+                context.ChangeTracker.Clear();
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return new LibraryBatchUndoResult(
+                true,
+                receipt.Items.Count,
+                null);
+        }
+        catch (LibraryBatchStoreException error)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return UndoFailure(error.ErrorCode);
+        }
+        catch (Exception error) when (error is DbUpdateException
+            or SqliteException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return UndoFailure("library.batch.undo.persistence_failed");
+        }
+    }
+
+    private async Task RestoreChunkAsync(
+        MediaDesktopDbContext context,
+        IReadOnlyList<LibraryBatchUndoItem> items,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        foreach (LibraryBatchUndoItem item in items)
+        {
+            int updated = await context.MediaAssets
+                .Where(row => row.Id == item.AssetId
+                    && row.MetadataVersion == item.ExpectedPostVersion)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(
+                            row => row.DisplayName,
+                            item.PreviousDisplayName)
+                        .SetProperty(
+                            row => row.SeriesId,
+                            item.PreviousSeriesId)
+                        .SetProperty(
+                            row => row.MetadataVersion,
+                            item.ExpectedPostVersion + 1)
+                        .SetProperty(row => row.UpdatedAtUtc, now),
+                    cancellationToken);
+            if (updated != 1)
+            {
+                throw new LibraryBatchStoreException(
+                    "library.batch.undo.version_conflict");
+            }
+
+            await context.MediaAssetAuthors
+                .Where(row => row.MediaAssetId == item.AssetId)
+                .ExecuteDeleteAsync(cancellationToken);
+            await context.MediaAssetTags
+                .Where(row => row.MediaAssetId == item.AssetId)
+                .ExecuteDeleteAsync(cancellationToken);
+            context.MediaAssetAuthors.AddRange(
+                item.PreviousAuthorIds.Select(
+                    (id, ordinal) => new MediaAssetAuthorRow
+                    {
+                        MediaAssetId = item.AssetId,
+                        AuthorId = id,
+                        Ordinal = ordinal
+                    }));
+            context.MediaAssetTags.AddRange(
+                item.PreviousTagIds.Select(
+                    (id, ordinal) => new MediaAssetTagRow
+                    {
+                        MediaAssetId = item.AssetId,
+                        TagId = id,
+                        Ordinal = ordinal
+                    }));
+        }
+    }
+
+    private static async Task<IReadOnlyDictionary<Guid, long>> LoadVersionsAsync(
+        MediaDesktopDbContext context,
+        IEnumerable<Guid> assetIds,
+        CancellationToken cancellationToken)
+    {
+        Guid[] ids = assetIds.Distinct().ToArray();
+        var versions = new Dictionary<Guid, long>();
+        foreach (Guid[] chunk in ids.Chunk(BatchSize))
+        {
+            VersionRow[] loaded = await context.MediaAssets
+                .AsNoTracking()
+                .Where(row => chunk.Contains(row.Id))
+                .Select(row => new VersionRow(row.Id, row.MetadataVersion))
+                .ToArrayAsync(cancellationToken);
+            foreach (VersionRow item in loaded)
+            {
+                versions[item.AssetId] = item.MetadataVersion;
+            }
+        }
+
+        return versions;
+    }
+
+    private static async Task ValidateUndoTaxonomyAsync(
+        MediaDesktopDbContext context,
+        IReadOnlyList<LibraryBatchUndoItem> items,
+        CancellationToken cancellationToken)
+    {
+        Guid[] authorIds = items
+            .SelectMany(item => item.PreviousAuthorIds)
+            .Distinct()
+            .ToArray();
+        Guid[] tagIds = items
+            .SelectMany(item => item.PreviousTagIds)
+            .Distinct()
+            .ToArray();
+        Guid[] seriesIds = items
+            .Where(item => item.PreviousSeriesId.HasValue)
+            .Select(item => item.PreviousSeriesId!.Value)
+            .Distinct()
+            .ToArray();
+        Guid[] requested = authorIds.Concat(tagIds).Concat(seriesIds)
+            .Distinct()
+            .ToArray();
+        var kinds = new Dictionary<Guid, string>();
+        foreach (Guid[] chunk in requested.Chunk(BatchSize))
+        {
+            TaxonomyKindRow[] loaded = await context.TaxonomyTerms
+                .AsNoTracking()
+                .Where(row => chunk.Contains(row.Id))
+                .Select(row => new TaxonomyKindRow(row.Id, row.Kind))
+                .ToArrayAsync(cancellationToken);
+            foreach (TaxonomyKindRow item in loaded)
+            {
+                kinds[item.TermId] = item.Kind;
+            }
+        }
+
+        bool invalid = kinds.Count != requested.Length
+            || authorIds.Any(id => kinds[id] != "author")
+            || tagIds.Any(id => kinds[id] != "tag")
+            || seriesIds.Any(id => kinds[id] != "series");
+        if (invalid)
+        {
+            throw new LibraryBatchStoreException(
+                "library.batch.undo.taxonomy_missing");
+        }
+    }
+
+    private static string? ValidateUndoReceipt(LibraryBatchUndoReceipt? receipt)
+    {
+        if (receipt is null
+            || receipt.OperationId == Guid.Empty
+            || receipt.Items is null
+            || receipt.Items.Count == 0
+            || receipt.Items.Any(item => item is null
+                || item.AssetId == Guid.Empty
+                || item.ExpectedPostVersion < 0
+                || item.PreviousAuthorIds is null
+                || item.PreviousTagIds is null
+                || item.PreviousAuthorIds.Any(id => id == Guid.Empty)
+                || item.PreviousTagIds.Any(id => id == Guid.Empty)
+                || item.PreviousAuthorIds.Distinct().Count()
+                    != item.PreviousAuthorIds.Count
+                || item.PreviousTagIds.Distinct().Count()
+                    != item.PreviousTagIds.Count)
+            || receipt.Items.Select(item => item.AssetId).Distinct().Count()
+                != receipt.Items.Count)
+        {
+            return "library.batch.undo.invalid_receipt";
+        }
+
+        return null;
+    }
+
+    private static LibraryBatchUndoResult UndoFailure(string errorCode) =>
+        new(false, 0, errorCode);
+
     private async Task ApplyChunkAsync(
         MediaDesktopDbContext context,
         IReadOnlyList<ProposedWrite> writes,
@@ -574,6 +794,10 @@ public sealed class EfLibraryBatchEditStore(
         Guid AssetId,
         string ActualFilename,
         string? ExplicitDisplayName);
+
+    private sealed record VersionRow(Guid AssetId, long MetadataVersion);
+
+    private sealed record TaxonomyKindRow(Guid TermId, string Kind);
 
     private sealed record AssetSnapshot(
         Guid AssetId,

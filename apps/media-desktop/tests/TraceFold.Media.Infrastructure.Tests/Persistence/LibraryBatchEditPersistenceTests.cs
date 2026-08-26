@@ -258,6 +258,109 @@ public sealed class LibraryBatchEditPersistenceTests
             result.Editor.UnselectedDisplayNames);
     }
 
+    [Fact]
+    public async Task Undo_restores_names_terms_and_versions_atomically()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        Guid oldAuthor = await database.SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Old author");
+        Guid oldSeries = await database.SeedTaxonomyAsync(
+            TaxonomyKind.Series,
+            "Old series");
+        Guid oldTag = await database.SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Old tag");
+        Guid first = await database.SeedFormalAssetAsync(
+            "first.jpg",
+            "First old",
+            0,
+            authorIds: [oldAuthor],
+            seriesId: oldSeries,
+            tagIds: [oldTag]);
+        Guid second = await database.SeedFormalAssetAsync(
+            "second.jpg",
+            null,
+            0,
+            authorIds: [oldAuthor],
+            seriesId: oldSeries,
+            tagIds: [oldTag]);
+        Guid[] assetIds = [first, second];
+        LibrarySelectionEntry[] selection =
+        [
+            new(first, 0, 0),
+            new(second, 0, 1)
+        ];
+        IReadOnlyList<PersistedLibraryAssetSnapshot> before =
+            await database.ReadFormalAssetsAsync(assetIds);
+        EfLibraryBatchEditStore store = CreateStore(database);
+        LibraryBatchStoreResult applied = await store.ApplyAsync(
+            selection,
+            Draft(
+                ReplaceAuthors("Created during batch"),
+                Definition(new MetadataTemplateNamingRule(
+                    "{authors}-{number}"))),
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(applied.UndoReceipt);
+
+        LibraryBatchUndoResult undone = await store.UndoAsync(
+            applied.UndoReceipt,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(undone.Succeeded);
+        Assert.Equal(2, undone.RestoredCount);
+        IReadOnlyList<PersistedLibraryAssetSnapshot> restored =
+            await database.ReadFormalAssetsAsync(assetIds);
+        Assert.Equal(
+            before.Select(item => item.DisplayName),
+            restored.Select(item => item.DisplayName));
+        Assert.Equal(
+            before.Select(item => string.Join('|', item.AuthorNames)),
+            restored.Select(item => string.Join('|', item.AuthorNames)));
+        Assert.Equal(
+            before.Select(item => item.SeriesId),
+            restored.Select(item => item.SeriesId));
+        Assert.Equal(
+            before.Select(item => string.Join('|', item.TagNames)),
+            restored.Select(item => string.Join('|', item.TagNames)));
+        Assert.All(restored, item => Assert.Equal(2, item.MetadataVersion));
+        Assert.Equal(1, await database.CountTaxonomyTermsAsync(
+            TaxonomyKind.Author,
+            "Created during batch"));
+    }
+
+    [Fact]
+    public async Task One_changed_post_version_rejects_the_entire_undo()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        LibraryBatchFixture fixture = await database.SeedLibraryBatchFixtureAsync(3);
+        EfLibraryBatchEditStore store = CreateStore(database);
+        LibraryBatchStoreResult applied = await store.ApplyAsync(
+            fixture.Selection,
+            Draft(null, Definition(new PrefixNamingRule("Applied-"))),
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(applied.UndoReceipt);
+        await database.SetFormalAssetVersionAsync(fixture.AssetIds[1], 99);
+
+        LibraryBatchUndoResult undone = await store.UndoAsync(
+            applied.UndoReceipt,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(undone.Succeeded);
+        Assert.Equal(
+            "library.batch.undo.version_conflict",
+            undone.ErrorCode);
+        IReadOnlyList<PersistedLibraryAssetSnapshot> current =
+            await database.ReadFormalAssetsAsync(fixture.AssetIds);
+        Assert.All(current, item => Assert.StartsWith(
+            "Applied-",
+            item.DisplayName,
+            StringComparison.Ordinal));
+        Assert.Equal([1L, 99L, 1L], current.Select(item => item.MetadataVersion));
+    }
+
     private static EfLibraryBatchEditStore CreateStore(
         TestMediaDatabase database) =>
         new(database.CreateContextFactory(), new NamingRuleEngine());

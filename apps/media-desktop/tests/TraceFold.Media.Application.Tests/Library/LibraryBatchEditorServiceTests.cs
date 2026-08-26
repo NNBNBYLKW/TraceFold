@@ -109,6 +109,134 @@ public sealed class LibraryBatchEditorServiceTests
         Assert.Empty(notifier.Events);
     }
 
+    [Fact]
+    public async Task Successful_apply_replaces_previous_receipt_and_exposes_one_undo()
+    {
+        LibraryBatchEditorDto editor = Editor(Asset());
+        LibrarySelectionEntry assetA = editor.Assets[0].Selection;
+        LibrarySelectionEntry assetB = new(Guid.NewGuid(), 0, 0);
+        var store = new RecordingLibraryBatchEditStore(editor);
+        store.ApplyResults.Enqueue(Success(Receipt(assetA)));
+        store.ApplyResults.Enqueue(Success(Receipt(assetB)));
+        var notifier = new RecordingLibraryActivityNotifier();
+        LibraryBatchEditorService service = CreateService(store, notifier);
+        int stateChangeCount = 0;
+        service.UndoStateChanged += (_, _) => stateChangeCount++;
+        LibraryBatchEditDraft draft = LibraryBatchEditDraft.Create(
+            null,
+            Definition(new PrefixNamingRule("X-")));
+
+        await service.ApplyAsync([assetA], draft, CancellationToken.None);
+        await service.ApplyAsync([assetB], draft, CancellationToken.None);
+
+        Assert.True(service.UndoState.IsAvailable);
+        Assert.Equal(1, service.UndoState.AffectedCount);
+        LibraryBatchUndoResult undone = await service.UndoLastAsync(
+            CancellationToken.None);
+        Assert.True(undone.Succeeded);
+        Assert.Equal(assetB.AssetId, Assert.Single(
+            store.LastUndoReceipt!.Items).AssetId);
+        Assert.False(service.UndoState.IsAvailable);
+        Assert.True(stateChangeCount >= 3);
+        Assert.Contains(
+            notifier.Events,
+            item => item.Kind == LibraryActivityKind.UndoCompleted);
+    }
+
+    [Fact]
+    public async Task Related_single_edit_invalidates_but_unrelated_edit_does_not()
+    {
+        LibraryBatchEditorDto editor = Editor(Asset());
+        LibrarySelectionEntry assetA = editor.Assets[0].Selection;
+        Guid assetB = Guid.NewGuid();
+        var store = new RecordingLibraryBatchEditStore(editor);
+        store.ApplyResults.Enqueue(Success(Receipt(assetA)));
+        LibraryBatchEditorService service = CreateService(
+            store,
+            new RecordingLibraryActivityNotifier());
+        await service.ApplyAsync(
+            [assetA],
+            LibraryBatchEditDraft.Create(
+                null,
+                Definition(new PrefixNamingRule("X-"))),
+            CancellationToken.None);
+
+        service.InvalidateUndoFor(assetB);
+        Assert.True(service.UndoState.IsAvailable);
+        service.InvalidateUndoFor(assetA.AssetId);
+        Assert.False(service.UndoState.IsAvailable);
+    }
+
+    [Fact]
+    public async Task Failed_new_batch_preserves_prior_receipt_and_second_undo_is_unavailable()
+    {
+        LibraryBatchEditorDto editor = Editor(Asset());
+        LibrarySelectionEntry selection = editor.Assets[0].Selection;
+        var store = new RecordingLibraryBatchEditStore(editor);
+        LibraryBatchUndoReceipt receipt = Receipt(selection);
+        store.ApplyResults.Enqueue(Success(receipt));
+        store.ApplyResults.Enqueue(new LibraryBatchStoreResult(
+            false,
+            0,
+            1,
+            0,
+            null,
+            "library.batch.persistence_failed"));
+        LibraryBatchEditorService service = CreateService(
+            store,
+            new RecordingLibraryActivityNotifier());
+        LibraryBatchEditDraft draft = LibraryBatchEditDraft.Create(
+            null,
+            Definition(new PrefixNamingRule("X-")));
+
+        await service.ApplyAsync([selection], draft, CancellationToken.None);
+        await service.ApplyAsync([selection], draft, CancellationToken.None);
+        LibraryBatchUndoResult first = await service.UndoLastAsync(
+            CancellationToken.None);
+        LibraryBatchUndoResult second = await service.UndoLastAsync(
+            CancellationToken.None);
+
+        Assert.True(first.Succeeded);
+        Assert.Same(receipt, store.LastUndoReceipt);
+        Assert.False(second.Succeeded);
+        Assert.Equal("library.batch.undo.unavailable", second.ErrorCode);
+        Assert.Equal(1, store.UndoCallCount);
+    }
+
+    [Fact]
+    public async Task Stable_undo_conflict_consumes_the_receipt()
+    {
+        LibraryBatchEditorDto editor = Editor(Asset());
+        LibrarySelectionEntry selection = editor.Assets[0].Selection;
+        var store = new RecordingLibraryBatchEditStore(editor)
+        {
+            UndoResult = new LibraryBatchUndoResult(
+                false,
+                0,
+                "library.batch.undo.version_conflict")
+        };
+        store.ApplyResults.Enqueue(Success(Receipt(selection)));
+        LibraryBatchEditorService service = CreateService(
+            store,
+            new RecordingLibraryActivityNotifier());
+        await service.ApplyAsync(
+            [selection],
+            LibraryBatchEditDraft.Create(
+                null,
+                Definition(new PrefixNamingRule("X-"))),
+            CancellationToken.None);
+
+        LibraryBatchUndoResult conflict = await service.UndoLastAsync(
+            CancellationToken.None);
+        LibraryBatchUndoResult unavailable = await service.UndoLastAsync(
+            CancellationToken.None);
+
+        Assert.Equal("library.batch.undo.version_conflict", conflict.ErrorCode);
+        Assert.False(service.UndoState.IsAvailable);
+        Assert.Equal("library.batch.undo.unavailable", unavailable.ErrorCode);
+        Assert.Equal(1, store.UndoCallCount);
+    }
+
     private static LibraryBatchEditorService CreateService(
         ILibraryBatchEditStore store,
         ILibraryActivityNotifier notifier) =>
@@ -148,6 +276,10 @@ public sealed class LibraryBatchEditorServiceTests
                     [])
             ]);
 
+    private static LibraryBatchStoreResult Success(
+        LibraryBatchUndoReceipt receipt) =>
+        new(true, receipt.Items.Count, 0, 0, receipt, null);
+
     private sealed class RecordingLibraryBatchEditStore(
         LibraryBatchEditorDto? editor) : ILibraryBatchEditStore
     {
@@ -157,6 +289,15 @@ public sealed class LibraryBatchEditorServiceTests
 
         public LibraryBatchStoreResult ApplyResult { get; init; } =
             new(false, 0, 0, 0, null, "not_configured");
+
+        public Queue<LibraryBatchStoreResult> ApplyResults { get; } = [];
+
+        public LibraryBatchUndoReceipt? LastUndoReceipt { get; private set; }
+
+        public int UndoCallCount { get; private set; }
+
+        public LibraryBatchUndoResult UndoResult { get; set; } =
+            new(true, 1, null);
 
         public Task<LibraryBatchPrepareResult> PrepareAsync(
             IReadOnlyList<LibrarySelectionEntry> selection,
@@ -172,7 +313,23 @@ public sealed class LibraryBatchEditorServiceTests
             CancellationToken cancellationToken)
         {
             ApplyCallCount++;
-            return Task.FromResult(ApplyResult);
+            return Task.FromResult(ApplyResults.Count > 0
+                ? ApplyResults.Dequeue()
+                : ApplyResult);
+        }
+
+        public Task<LibraryBatchUndoResult> UndoAsync(
+            LibraryBatchUndoReceipt receipt,
+            CancellationToken cancellationToken)
+        {
+            UndoCallCount++;
+            LastUndoReceipt = receipt;
+            return Task.FromResult(UndoResult with
+            {
+                RestoredCount = UndoResult.Succeeded
+                    ? receipt.Items.Count
+                    : 0
+            });
         }
     }
 

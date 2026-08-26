@@ -96,6 +96,18 @@ public sealed record LibraryBatchApplyResult(
     bool CanUndo,
     string? ErrorCode);
 
+public sealed record LibraryBatchUndoState(
+    bool IsAvailable,
+    int AffectedCount)
+{
+    public static LibraryBatchUndoState Unavailable { get; } = new(false, 0);
+}
+
+public sealed record LibraryBatchUndoResult(
+    bool Succeeded,
+    int RestoredCount,
+    string? ErrorCode);
+
 public interface ILibraryBatchEditStore
 {
     Task<LibraryBatchPrepareResult> PrepareAsync(
@@ -106,10 +118,18 @@ public interface ILibraryBatchEditStore
         IReadOnlyList<LibrarySelectionEntry> selection,
         LibraryBatchEditDraft draft,
         CancellationToken cancellationToken);
+
+    Task<LibraryBatchUndoResult> UndoAsync(
+        LibraryBatchUndoReceipt receipt,
+        CancellationToken cancellationToken);
 }
 
 public interface ILibraryBatchEditorService
 {
+    LibraryBatchUndoState UndoState { get; }
+
+    event EventHandler? UndoStateChanged;
+
     Task<LibraryBatchPrepareResult> PrepareAsync(
         IReadOnlyList<LibrarySelectionEntry> selection,
         CancellationToken cancellationToken);
@@ -122,6 +142,11 @@ public interface ILibraryBatchEditorService
         IReadOnlyList<LibrarySelectionEntry> selection,
         LibraryBatchEditDraft draft,
         CancellationToken cancellationToken);
+
+    Task<LibraryBatchUndoResult> UndoLastAsync(
+        CancellationToken cancellationToken);
+
+    void InvalidateUndoFor(Guid assetId);
 }
 
 public enum LibraryActivityKind
