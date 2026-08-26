@@ -49,21 +49,30 @@ public sealed record BatchMetadataSeriesEdit(
         new(BatchMetadataFieldOperation.Unchanged, null);
 }
 
-public sealed record BatchMetadataCommand(
-    IReadOnlyList<InboxSelectionEntry> Selection,
+public sealed record BatchMetadataDraft(
     BatchMetadataMode Mode,
     BatchMetadataSetEdit Authors,
     BatchMetadataSeriesEdit Series,
     BatchMetadataSetEdit Tags)
 {
-    public static BatchMetadataCommand Create(
-        IReadOnlyList<InboxSelectionEntry> selection,
+    public static BatchMetadataDraft Create(
         BatchMetadataMode mode,
         BatchMetadataSetEdit authors,
         BatchMetadataSeriesEdit series,
         BatchMetadataSetEdit tags)
     {
-        ValidateSelection(selection);
+        var draft = new BatchMetadataDraft(mode, authors, series, tags);
+        Validate(draft);
+        return draft;
+    }
+
+    internal static void Validate(BatchMetadataDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        BatchMetadataMode mode = draft.Mode;
+        BatchMetadataSetEdit authors = draft.Authors;
+        BatchMetadataSeriesEdit series = draft.Series;
+        BatchMetadataSetEdit tags = draft.Tags;
         ArgumentNullException.ThrowIfNull(authors);
         ArgumentNullException.ThrowIfNull(series);
         ArgumentNullException.ThrowIfNull(tags);
@@ -76,33 +85,6 @@ public sealed record BatchMetadataCommand(
             && tags.Operation == BatchMetadataFieldOperation.Unchanged)
         {
             throw new ArgumentException("At least one metadata field must change.");
-        }
-
-        return new BatchMetadataCommand(selection, mode, authors, series, tags);
-    }
-
-    private static void ValidateSelection(
-        IReadOnlyList<InboxSelectionEntry> selection)
-    {
-        ArgumentNullException.ThrowIfNull(selection);
-        if (selection.Count == 0)
-        {
-            throw new ArgumentException("At least one inbox item is required.");
-        }
-
-        var ids = new HashSet<Guid>();
-        var ordinals = new HashSet<int>();
-        foreach (InboxSelectionEntry entry in selection)
-        {
-            if (entry is null
-                || entry.InboxItemId == Guid.Empty
-                || entry.ExpectedMetadataVersion < 0
-                || entry.Ordinal < 0
-                || !ids.Add(entry.InboxItemId)
-                || !ordinals.Add(entry.Ordinal))
-            {
-                throw new ArgumentException("The inbox selection is invalid.");
-            }
         }
     }
 
@@ -196,6 +178,83 @@ public sealed record BatchMetadataCommand(
         else if (edit.Value is not null)
         {
             throw new ArgumentException("This series operation cannot carry a value.");
+        }
+    }
+}
+
+public sealed record BatchMetadataCommand
+{
+    public BatchMetadataCommand(
+        IReadOnlyList<InboxSelectionEntry> selection,
+        BatchMetadataMode mode,
+        BatchMetadataSetEdit authors,
+        BatchMetadataSeriesEdit series,
+        BatchMetadataSetEdit tags)
+        : this(selection, new BatchMetadataDraft(mode, authors, series, tags))
+    {
+    }
+
+    private BatchMetadataCommand(
+        IReadOnlyList<InboxSelectionEntry> selection,
+        BatchMetadataDraft draft)
+    {
+        Selection = selection;
+        Draft = draft;
+    }
+
+    public IReadOnlyList<InboxSelectionEntry> Selection { get; }
+
+    public BatchMetadataDraft Draft { get; }
+
+    public BatchMetadataMode Mode => Draft.Mode;
+
+    public BatchMetadataSetEdit Authors => Draft.Authors;
+
+    public BatchMetadataSeriesEdit Series => Draft.Series;
+
+    public BatchMetadataSetEdit Tags => Draft.Tags;
+
+    public static BatchMetadataCommand Create(
+        IReadOnlyList<InboxSelectionEntry> selection,
+        BatchMetadataMode mode,
+        BatchMetadataSetEdit authors,
+        BatchMetadataSeriesEdit series,
+        BatchMetadataSetEdit tags) =>
+        Create(
+            selection,
+            BatchMetadataDraft.Create(mode, authors, series, tags));
+
+    public static BatchMetadataCommand Create(
+        IReadOnlyList<InboxSelectionEntry> selection,
+        BatchMetadataDraft draft)
+    {
+        ValidateSelection(selection);
+        BatchMetadataDraft.Validate(draft);
+        return new BatchMetadataCommand(selection, draft);
+    }
+
+    private static void ValidateSelection(
+        IReadOnlyList<InboxSelectionEntry> selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        if (selection.Count == 0)
+        {
+            throw new ArgumentException("At least one inbox item is required.");
+        }
+
+        var ids = new HashSet<Guid>();
+        var ordinals = new HashSet<int>();
+        foreach (InboxSelectionEntry entry in selection)
+        {
+            if (entry is null
+                || entry.InboxItemId == Guid.Empty
+                || entry.ExpectedMetadataVersion < 0
+                || entry.Ordinal < 0
+                || !ids.Add(entry.InboxItemId)
+                || !ordinals.Add(entry.Ordinal))
+            {
+                throw new ArgumentException("The inbox selection is invalid.");
+            }
         }
     }
 }

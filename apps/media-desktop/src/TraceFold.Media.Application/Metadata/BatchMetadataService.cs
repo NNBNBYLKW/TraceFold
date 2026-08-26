@@ -33,10 +33,7 @@ public sealed class BatchMetadataService(
         {
             validated = BatchMetadataCommand.Create(
                 command.Selection!,
-                command.Mode,
-                command.Authors,
-                command.Series,
-                command.Tags);
+                command.Draft);
         }
         catch (ArgumentException)
         {

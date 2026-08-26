@@ -8,6 +8,27 @@ namespace TraceFold.Media.Application.Tests.Metadata;
 public sealed class BatchMetadataMutationTests
 {
     [Fact]
+    public void Inbox_command_wraps_the_same_validated_metadata_draft()
+    {
+        BatchMetadataDraft draft = BatchMetadataDraft.Create(
+            BatchMetadataMode.Replace,
+            new(BatchMetadataFieldOperation.Clear, []),
+            BatchMetadataSeriesEdit.Unchanged,
+            BatchMetadataSetEdit.Unchanged);
+
+        BatchMetadataCommand command = BatchMetadataCommand.Create(
+            [new InboxSelectionEntry(Guid.NewGuid(), 2, 0)],
+            draft);
+
+        Assert.Same(draft, command.Draft);
+        Assert.Equal(
+            BatchMetadataFieldOperation.Clear,
+            command.Draft.Authors.Operation);
+        Assert.Equal(draft.Mode, command.Mode);
+        Assert.Same(draft.Authors, command.Authors);
+    }
+
+    [Fact]
     public void Add_preserves_existing_order_and_appends_only_new_ids()
     {
         Guid a = Guid.NewGuid();
