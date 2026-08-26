@@ -1,6 +1,7 @@
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Desktop.Dialogs;
+using TraceFold.Media.Domain.Metadata;
 using Xunit;
 
 namespace TraceFold.Media.Desktop.Tests.Dialogs;
@@ -194,6 +195,37 @@ public sealed class LibraryNamingDraftViewModelTests
         Assert.True(naming.CanApply);
     }
 
+    [Fact]
+    public async Task Existing_term_outside_selection_still_feeds_preview_by_name()
+    {
+        LibraryBatchEditorDto editor = LibraryDialogTestData.Editor();
+        var term = new TaxonomyTermDto(
+            Guid.NewGuid(),
+            TaxonomyKind.Author,
+            "Alice",
+            TaxonomyName.Create("Alice").Normalized,
+            0);
+        var metadata = new LibraryMetadataDraftViewModel(
+            new FixedTaxonomySearchService(term));
+        metadata.Load(editor);
+        LibraryNamingDraftViewModel naming = CreateNamingDraft(
+            editor,
+            metadataProvider: () =>
+            {
+                metadata.TryBuildDraft(out BatchMetadataDraft? draft, out _);
+                return draft;
+            });
+        metadata.DraftChanged += (_, _) => naming.RefreshPreview();
+        naming.AddRule(new MetadataTemplateNamingRule("{authors}-{name}"));
+
+        metadata.AddAuthorPicker.InputText = "Alice";
+        await metadata.AddAuthorPicker.CommitInputAsync(
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("Alice-photo", naming.PreviewRows[0].GeneratedDisplayName);
+        Assert.True(naming.CanApply);
+    }
+
     private static LibraryNamingDraftViewModel CreateNamingDraft(
         LibraryBatchEditorDto? editor = null,
         LibraryDialogTestData.FakeNamingPresetService? presets = null,
@@ -215,4 +247,15 @@ public sealed class LibraryNamingDraftViewModelTests
             null,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow);
+
+    private sealed class FixedTaxonomySearchService(TaxonomyTermDto term)
+        : ITaxonomySearchService
+    {
+        public Task<IReadOnlyList<TaxonomyTermDto>> SearchAsync(
+            TaxonomyKind kind,
+            string? query,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<TaxonomyTermDto>>(
+                kind == term.Kind ? [term] : []);
+    }
 }

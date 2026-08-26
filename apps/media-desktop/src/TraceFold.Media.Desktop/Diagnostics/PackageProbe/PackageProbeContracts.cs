@@ -9,7 +9,8 @@ public enum PackageProbeScenarioKind
     Stage4Conflict,
     Stage4CrashSeed,
     Stage4CrashResume,
-    Stage5ABatch
+    Stage5ABatch,
+    Stage5BLibrary
 }
 
 public sealed record PackageProbeRequest(

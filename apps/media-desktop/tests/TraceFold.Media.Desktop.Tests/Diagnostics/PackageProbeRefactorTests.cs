@@ -6,6 +6,24 @@ namespace TraceFold.Media.Desktop.Tests.Diagnostics;
 
 public sealed class PackageProbeRefactorTests
 {
+    [Theory]
+    [InlineData("stage5a-batch-extra")]
+    [InlineData("stage5b-library-extra")]
+    [InlineData("Stage5B-Library")]
+    public void Generic_probe_rejects_every_non_exact_scenario(string scenario)
+    {
+        using OwnedProbeRoot root = OwnedProbeRoot.CreateWithFixtures(
+            "tracefold-media-desktop-stage5b-probe-");
+
+        PackageProbeOptionResult result = PackageProbeOptions.Parse([
+            "--package-probe-root", root.Path,
+            "--package-probe-token", root.TokenText,
+            "--package-probe-scenario", scenario]);
+
+        Assert.Equal(PackageProbeOptionState.Invalid, result.State);
+        Assert.Equal("probe.invalid_arguments", result.ErrorCode);
+    }
+
     [Fact]
     public void Legacy_stage4_arguments_map_to_the_common_request_without_value_changes()
     {

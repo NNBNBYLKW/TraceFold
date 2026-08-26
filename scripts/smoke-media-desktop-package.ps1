@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $PackageDirectory,
-    [Parameter(Mandatory)][ValidateSet('4A','4B','5A')][string] $StageCheckpoint
+    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B')][string] $StageCheckpoint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,6 +43,9 @@ $probeProcess = $null
 $probeToken = [Guid]::NewGuid().ToString('D')
 $probePrefix = if ($StageCheckpoint -eq '5A') {
     'tracefold-media-desktop-stage5a-probe-'
+}
+elseif ($StageCheckpoint -eq '5B') {
+    'tracefold-media-desktop-stage5b-probe-'
 }
 else {
     'tracefold-media-desktop-stage4-probe-'
@@ -294,6 +297,17 @@ try {
         $probeNameLabel = 'Stage 5A'
         $probeResultFilename = 'stage5a-probe-result.json'
     }
+    elseif ($StageCheckpoint -eq '5B') {
+        $probeArguments = @(
+            '--package-probe-root',
+            ('"{0}"' -f $probeRoot),
+            '--package-probe-token',
+            $probeToken,
+            '--package-probe-scenario',
+            'stage5b-library')
+        $probeNameLabel = 'Stage 5B'
+        $probeResultFilename = 'stage5b-probe-result.json'
+    }
     else {
         $probeArguments = @(
             '--stage4-package-probe-root',
@@ -347,6 +361,32 @@ try {
         foreach ($formalFile in @('photo.jpg', 'ordinary.mp4', 'paired.mp4')) {
             if (-not (Test-Path -LiteralPath (Join-Path $probeRoot "library\$formalFile"))) {
                 throw 'Stage 5A probe formal asset is missing.'
+            }
+        }
+    }
+    elseif ($StageCheckpoint -eq '5B') {
+        foreach ($caseProperty in @(
+                'Succeeded',
+                'StrictIntersectionPassed',
+                'AtomicBatchPassed',
+                'NamingPreviewMatchedApply',
+                'UndoPassed',
+                'PhysicalFilesUnchanged',
+                'InternalStorageClean')) {
+            if (-not [bool]$result.$caseProperty) {
+                throw "Stage 5B package probe case failed: $caseProperty"
+            }
+        }
+        if (-not [string]::IsNullOrEmpty([string]$result.ErrorCode)) {
+            throw 'Stage 5B package probe reported an unexpected error code.'
+        }
+        foreach ($formalFile in @(
+                'stage5b-asset-1.jpg',
+                'stage5b-asset-2.jpg',
+                'stage5b-asset-3.jpg',
+                'stage5b-asset-4.jpg')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $probeRoot "library\$formalFile"))) {
+                throw 'Stage 5B probe formal asset is missing.'
             }
         }
     }
@@ -439,6 +479,10 @@ try {
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
     if ($StageCheckpoint -eq '5A') {
         Write-Output 'PASS: Stage 5A batch metadata, processing, partial ingest, and clean storage verified'
+    }
+    elseif ($StageCheckpoint -eq '5B') {
+        Write-Output 'PASS: Stage 5B strict filter, atomic apply, matching preview, and undo verified'
+        Write-Output 'PASS: Stage 5B physical-file invariance and clean internal storage verified'
     }
     else {
         Write-Output 'PASS: Stage 4A registered replace, Keep Both, unmanaged replace, and reopen flows verified'

@@ -10,6 +10,9 @@ public static class PackageProbeOptions
     public const string Stage5ABatchScenario = "stage5a-batch";
     public const string Stage5ARootNamePrefix = "tracefold-media-desktop-stage5a-probe-";
     public const string Stage5AResultFilename = "stage5a-probe-result.json";
+    public const string Stage5BLibraryScenario = "stage5b-library";
+    public const string Stage5BRootNamePrefix = "tracefold-media-desktop-stage5b-probe-";
+    public const string Stage5BResultFilename = "stage5b-probe-result.json";
 
     public static PackageProbeOptionResult Parse(IReadOnlyList<string> arguments)
     {
@@ -32,7 +35,7 @@ public static class PackageProbeOptions
         }
 
         return hasGenericArgument
-            ? ParseStage5A(arguments)
+            ? ParseGeneric(arguments)
             : hasLegacyArgument
                 ? ParseStage4(arguments)
                 : Invalid("probe.invalid_arguments");
@@ -154,7 +157,7 @@ public static class PackageProbeOptions
         }
     }
 
-    private static PackageProbeOptionResult ParseStage5A(IReadOnlyList<string> arguments)
+    private static PackageProbeOptionResult ParseGeneric(IReadOnlyList<string> arguments)
     {
         if (arguments.Count != 6)
         {
@@ -177,8 +180,18 @@ public static class PackageProbeOptions
             || !values.TryGetValue(ScenarioArgument, out string? scenarioText)
             || string.IsNullOrWhiteSpace(rootValue)
             || string.IsNullOrWhiteSpace(tokenText)
-            || !Guid.TryParse(tokenText, out _)
-            || !StringComparer.Ordinal.Equals(scenarioText, Stage5ABatchScenario))
+            || !Guid.TryParse(tokenText, out _))
+        {
+            return Invalid("probe.invalid_arguments");
+        }
+
+        PackageProbeScenarioKind scenario = scenarioText switch
+        {
+            Stage5ABatchScenario => PackageProbeScenarioKind.Stage5ABatch,
+            Stage5BLibraryScenario => PackageProbeScenarioKind.Stage5BLibrary,
+            _ => default
+        };
+        if (scenarioText is not (Stage5ABatchScenario or Stage5BLibraryScenario))
         {
             return Invalid("probe.invalid_arguments");
         }
@@ -186,7 +199,7 @@ public static class PackageProbeOptions
         try
         {
             string root = PackageProbeEnvironment.ValidateRootOwnership(
-                rootValue, tokenText, PackageProbeScenarioKind.Stage5ABatch);
+                rootValue, tokenText, scenario);
             if (!PackageProbeEnvironment.ValidateFixtures(
                     Path.Combine(root, Stage4PackageProbeOptions.FixturesDirectoryName)))
             {
@@ -200,7 +213,7 @@ public static class PackageProbeOptions
 
             return new(
                 PackageProbeOptionState.Ready,
-                new(root, tokenText, PackageProbeScenarioKind.Stage5ABatch, null, null),
+                new(root, tokenText, scenario, null, null),
                 null);
         }
         catch (PackageProbeEnvironment.ProbeOptionValidationException error)

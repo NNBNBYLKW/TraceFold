@@ -202,8 +202,8 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
     private BatchMetadataDraft? BuildAddDraft()
     {
         BatchTaxonomyReference[] authors =
-            AddAuthorPicker.SelectedValues.ToArray();
-        BatchTaxonomyReference[] tags = AddTagPicker.SelectedValues.ToArray();
+            PreviewableValues(AddAuthorPicker);
+        BatchTaxonomyReference[] tags = PreviewableValues(AddTagPicker);
         if (authors.Length == 0 && tags.Length == 0)
         {
             return null;
@@ -256,12 +256,12 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
             ReplaceSetEdit(
                 ReplaceAuthorsEnabled,
                 ClearAuthors,
-                ReplaceAuthorPicker.SelectedValues),
+                PreviewableValues(ReplaceAuthorPicker)),
             ReplaceSeriesEdit(),
             ReplaceSetEdit(
                 ReplaceTagsEnabled,
                 ClearTags,
-                ReplaceTagPicker.SelectedValues));
+                PreviewableValues(ReplaceTagPicker)));
     }
 
     private BatchMetadataSeriesEdit ReplaceSeriesEdit()
@@ -277,7 +277,7 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
         }
 
         BatchTaxonomyReference? selected =
-            ReplaceSeriesPicker.SelectedValues.SingleOrDefault();
+            PreviewableValues(ReplaceSeriesPicker).SingleOrDefault();
         return selected is null
             ? throw new MetadataDraftValidationException(
                 "已启用的替换字段必须选择资料或明确清空。")
@@ -312,8 +312,18 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
             ? BatchMetadataSetEdit.Unchanged
             : new(operation, values);
 
+    private static BatchTaxonomyReference[] PreviewableValues(
+        BatchTaxonomyPickerViewModel picker) =>
+        picker.SelectedChoices
+            .Select(choice => choice.Value.ExistingId.HasValue
+                ? BatchTaxonomyReference.New(
+                    choice.Value.Kind,
+                    choice.DisplayText)
+                : choice.Value)
+            .ToArray();
+
     private void Observe(BatchTaxonomyPickerViewModel picker) =>
-        picker.SelectedValues.CollectionChanged += (_, _) => RaiseDraftChanged();
+        picker.SelectedChoices.CollectionChanged += (_, _) => RaiseDraftChanged();
 
     private void ObserveOptions(
         IEnumerable<BatchTermCoverageOptionViewModel> options)

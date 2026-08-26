@@ -64,7 +64,18 @@ internal sealed class OwnedProbeRoot : IDisposable
                 temp)
             && Directory.Exists(Path))
         {
-            Directory.Delete(Path, recursive: true);
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(Path, recursive: true);
+                    break;
+                }
+                catch (IOException) when (attempt < 9)
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100));
+                }
+            }
         }
     }
 
@@ -108,6 +119,14 @@ internal static class PackageProbeRequests
             root.Path,
             root.TokenText,
             PackageProbeScenarioKind.Stage5ABatch,
+            null,
+            null);
+
+    public static PackageProbeRequest Stage5BLibrary(OwnedProbeRoot root) =>
+        new(
+            root.Path,
+            root.TokenText,
+            PackageProbeScenarioKind.Stage5BLibrary,
             null,
             null);
 }
