@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Application.Library;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Metadata;
 using TraceFold.Media.Infrastructure.Persistence;
@@ -37,6 +38,13 @@ internal sealed record PersistedIngestSnapshot(
     Guid? SeriesId,
     int AuthorCount,
     int TagCount);
+
+internal sealed record LibraryFixture(
+    Guid AuthorA,
+    Guid AuthorB,
+    Guid TagA,
+    Guid TagB,
+    Guid AssetWithEveryTerm);
 
 internal sealed class TestMediaDatabase : IAsyncDisposable
 {
@@ -180,6 +188,87 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         return id;
     }
 
+    public async Task<LibraryFixture> SeedLibraryFilterFixtureAsync()
+    {
+        Guid authorA = await SeedTaxonomyAsync(TaxonomyKind.Author, "Author A");
+        Guid authorB = await SeedTaxonomyAsync(TaxonomyKind.Author, "Author B");
+        Guid tagA = await SeedTaxonomyAsync(TaxonomyKind.Tag, "Tag A");
+        Guid tagB = await SeedTaxonomyAsync(TaxonomyKind.Tag, "Tag B");
+
+        Guid everyTerm = await SeedFormalAssetAsync(
+            "every.jpg",
+            displayName: null,
+            metadataVersion: 7,
+            authorIds: [authorA, authorB],
+            tagIds: [tagA, tagB]);
+        await SeedFormalAssetAsync(
+            "missing-author.jpg",
+            displayName: null,
+            metadataVersion: 0,
+            authorIds: [authorA],
+            tagIds: [tagA, tagB]);
+        await SeedFormalAssetAsync(
+            "missing-tag.jpg",
+            displayName: null,
+            metadataVersion: 0,
+            authorIds: [authorA, authorB],
+            tagIds: [tagA]);
+
+        return new LibraryFixture(authorA, authorB, tagA, tagB, everyTerm);
+    }
+
+    public async Task<Guid> SeedFormalAssetAsync(
+        string actualFilename,
+        string? displayName,
+        long metadataVersion,
+        MediaKind mediaKind = MediaKind.Image,
+        IReadOnlyList<Guid>? authorIds = null,
+        Guid? seriesId = null,
+        IReadOnlyList<Guid>? tagIds = null)
+    {
+        Guid id = Guid.NewGuid();
+        await using var context = new MediaDesktopDbContext(_options);
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        await InsertFormalAssetAsync(
+            context,
+            id,
+            actualFilename,
+            displayName,
+            metadataVersion,
+            mediaKind,
+            authorIds ?? [],
+            seriesId,
+            tagIds ?? []);
+        await transaction.CommitAsync();
+        return id;
+    }
+
+    public async Task<Guid[]> SeedFormalAssetsAsync(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        var ids = new Guid[count];
+        await using var context = new MediaDesktopDbContext(_options);
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        for (int index = 0; index < count; index++)
+        {
+            Guid id = Guid.NewGuid();
+            ids[index] = id;
+            await InsertFormalAssetAsync(
+                context,
+                id,
+                $"asset-{count - index:D4}.jpg",
+                displayName: null,
+                metadataVersion: index,
+                MediaKind.Image,
+                [],
+                seriesId: null,
+                []);
+        }
+
+        await transaction.CommitAsync();
+        return ids;
+    }
+
     public async Task<int> CountTaxonomyTermsAsync(
         TaxonomyKind kind,
         string displayName)
@@ -317,6 +406,7 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
             "ingest_cleanup_entries" => "ingest_cleanup_entries",
             "conflict_cases" => "conflict_cases",
             "conflict_matches" => "conflict_matches",
+            "app_settings" => "app_settings",
             _ => throw new ArgumentOutOfRangeException(
                 nameof(table),
                 table,
@@ -437,6 +527,51 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         command.CommandText = "SELECT COUNT(*) FROM ingest_operations";
         object? value = await command.ExecuteScalarAsync();
         return Convert.ToInt32(value);
+    }
+
+    private static async Task InsertFormalAssetAsync(
+        MediaDesktopDbContext context,
+        Guid id,
+        string actualFilename,
+        string? displayName,
+        long metadataVersion,
+        MediaKind mediaKind,
+        IReadOnlyList<Guid> authorIds,
+        Guid? seriesId,
+        IReadOnlyList<Guid> tagIds)
+    {
+        string relativePath = $"{id:N}/{actualFilename}";
+        string normalizedRelativePath = relativePath.ToUpperInvariant();
+        string sha256 = id.ToString("N").PadRight(64, 'A');
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-24T00:00:00Z");
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO media_assets
+                (id, media_kind, actual_filename, relative_path,
+                 normalized_relative_path, display_name, size, sha256,
+                 series_id, metadata_version, created_at_utc, updated_at_utc)
+            VALUES
+                ({id}, {mediaKind.ToString().ToLowerInvariant()}, {actualFilename},
+                 {relativePath}, {normalizedRelativePath}, {displayName}, 1,
+                 {sha256}, {seriesId}, {metadataVersion}, {now}, {now})
+            """);
+
+        for (int index = 0; index < authorIds.Count; index++)
+        {
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO media_asset_authors
+                    (media_asset_id, author_id, ordinal)
+                VALUES ({id}, {authorIds[index]}, {index})
+                """);
+        }
+
+        for (int index = 0; index < tagIds.Count; index++)
+        {
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO media_asset_tags
+                    (media_asset_id, tag_id, ordinal)
+                VALUES ({id}, {tagIds[index]}, {index})
+                """);
+        }
     }
 
     public async Task<string?> ReadInboxStateAsync(Guid inboxItemId)

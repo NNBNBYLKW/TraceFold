@@ -16,5 +16,9 @@ internal sealed class AppSettingsRow
 
     public string? LastScanSummary { get; set; }
 
+    public string LibrarySortField { get; set; } = "created_at";
+
+    public bool LibrarySortDescending { get; set; } = true;
+
     public DateTimeOffset UpdatedAtUtc { get; set; }
 }

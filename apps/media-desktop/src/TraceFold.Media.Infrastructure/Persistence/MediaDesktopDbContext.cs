@@ -89,6 +89,14 @@ public sealed class MediaDesktopDbContext(
             .HasDefaultValue(false);
         row.Property(item => item.LastScanSummary)
             .HasMaxLength(1024);
+        row.Property(item => item.LibrarySortField)
+            .HasColumnName("library_sort_field")
+            .IsRequired()
+            .HasMaxLength(32)
+            .HasDefaultValue("created_at");
+        row.Property(item => item.LibrarySortDescending)
+            .HasColumnName("library_sort_descending")
+            .HasDefaultValue(true);
     }
 
     private static void ConfigureInboxItem(EntityTypeBuilder<InboxItemRow> row)

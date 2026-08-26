@@ -60,6 +60,8 @@ public static class DependencyInjection
         services.AddSingleton<IMetadataStore, EfMetadataStore>();
         services.AddSingleton<IBatchMetadataStore, EfBatchMetadataStore>();
         services.AddSingleton<ILibraryQueryStore, EfLibraryQueryStore>();
+        services.AddSingleton<ILibrarySortPreferenceStore,
+            EfLibrarySortPreferenceStore>();
         services.AddSingleton<IPreviewPathStore, EfPreviewPathStore>();
         services.AddSingleton<IFileHasher, Sha256FileHasher>();
         services.AddSingleton<IControlledMediaStorage, ControlledMediaStorage>();

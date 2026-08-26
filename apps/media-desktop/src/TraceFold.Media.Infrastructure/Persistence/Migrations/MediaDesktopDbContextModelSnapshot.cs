@@ -45,6 +45,20 @@ namespace TraceFold.Media.Infrastructure.Persistence.Migrations
                         .HasMaxLength(4096)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("LibrarySortDescending")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true)
+                        .HasColumnName("library_sort_descending");
+
+                    b.Property<string>("LibrarySortField")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("created_at")
+                        .HasColumnName("library_sort_field");
+
                     b.Property<DateTimeOffset>("UpdatedAtUtc")
                         .HasColumnType("TEXT");
 
