@@ -47,6 +47,9 @@ public static class DependencyInjection
                 provider.GetRequiredService<ILibrarySortPreferenceStore>()));
         services.AddSingleton<ILibrarySortPreferenceService>(provider =>
             provider.GetRequiredService<LibrarySortPreferenceService>());
+        services.AddSingleton<NamingRuleEngine>();
+        services.AddSingleton<INamingRuleEngine>(provider =>
+            provider.GetRequiredService<NamingRuleEngine>());
         services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IMediaPreviewResolver>(provider =>
             provider.GetRequiredService<MediaPreviewResolver>());
