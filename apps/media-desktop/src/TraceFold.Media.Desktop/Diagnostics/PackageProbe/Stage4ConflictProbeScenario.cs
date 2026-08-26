@@ -147,7 +147,8 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
             processedMedia = true;
 
             IReadOnlyList<LibraryAssetDto> assets = await host.Services
-                .GetRequiredService<ILibraryQueryService>().SearchAsync(null, cancellationToken);
+                .GetRequiredService<ILibraryQueryService>()
+                .SearchAsync(LibraryQuery.Default, cancellationToken);
             int imageAssets = assets.Count(asset => asset.MediaKind == MediaKind.Image);
             int videoAssets = assets.Count(asset => asset.MediaKind == MediaKind.Video);
             PackageProbeEnvironment.Require(
@@ -209,7 +210,8 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
         IHost host, string first, string? second, CancellationToken cancellationToken)
     {
         IReadOnlyList<LibraryAssetDto> assets = await host.Services
-            .GetRequiredService<ILibraryQueryService>().SearchAsync(null, cancellationToken);
+            .GetRequiredService<ILibraryQueryService>()
+            .SearchAsync(LibraryQuery.Default, cancellationToken);
         return assets.Count(asset => asset.ActualFilename.Equals(first, StringComparison.OrdinalIgnoreCase)
             || second is not null && asset.ActualFilename.Equals(second, StringComparison.OrdinalIgnoreCase));
     }

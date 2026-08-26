@@ -62,7 +62,7 @@ public sealed class OrdinaryMediaFlowTests
             fixture.Folders.LibraryDirectory,
             "photo.png")));
         LibraryAssetDto asset = Assert.Single(await fixture.Library.SearchAsync(
-            null,
+            LibraryQuery.Default,
             TestContext.Current.CancellationToken));
         Assert.Equal("封面", asset.DisplayName);
         Assert.Equal("photo.png", asset.ActualFilename);

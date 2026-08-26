@@ -105,7 +105,9 @@ public sealed class Stage4RecoveryProbeScenario : IPackageProbeScenario
             await environment.StartHostAsync(host, saveFolders: false, cancellationToken);
 
             ILibraryQueryService libraryQuery = host.Services.GetRequiredService<ILibraryQueryService>();
-            IReadOnlyList<LibraryAssetDto> assets = await libraryQuery.SearchAsync(null, cancellationToken);
+            IReadOnlyList<LibraryAssetDto> assets = await libraryQuery.SearchAsync(
+                LibraryQuery.Default,
+                cancellationToken);
             LibraryAssetDto asset = assets.Single(candidate => candidate.Id == manifest.AssetId
                 && candidate.ActualFilename.Equals(manifest.TargetFilename, StringComparison.OrdinalIgnoreCase));
             LibraryAssetDetailsDto details = (await libraryQuery.GetDetailsAsync(

@@ -148,7 +148,18 @@ public sealed partial class LibraryViewModel : ObservableObject
         {
             Guid? selectedId = SelectedItem?.Id;
             IReadOnlyList<LibraryAssetDto> cards = await _library.SearchAsync(
-                string.IsNullOrWhiteSpace(SearchText) ? null : SearchText,
+                LibraryQuery.Create(
+                    SearchText,
+                    LibraryMediaFilter.All,
+                    [],
+                    null,
+                    [],
+                    false,
+                    false,
+                    false,
+                    LibraryDisplayNameFilter.All,
+                    LibrarySortField.CreatedAt,
+                    LibrarySortDirection.Descending),
                 cancellationToken);
             var refreshed = new List<LibraryCardViewModel>(cards.Count);
             foreach (LibraryAssetDto card in cards)

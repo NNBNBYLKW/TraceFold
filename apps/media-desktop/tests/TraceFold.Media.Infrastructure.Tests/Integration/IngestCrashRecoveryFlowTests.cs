@@ -65,7 +65,7 @@ public sealed class IngestCrashRecoveryFlowTests
         ILibraryQueryService library = fixture.Provider
             .GetRequiredService<ILibraryQueryService>();
         LibraryAssetDto asset = Assert.Single(await library.SearchAsync(
-            null,
+            LibraryQuery.Default,
             TestContext.Current.CancellationToken));
         Assert.Equal(originalAssetId, asset.Id);
         Assert.Equal(

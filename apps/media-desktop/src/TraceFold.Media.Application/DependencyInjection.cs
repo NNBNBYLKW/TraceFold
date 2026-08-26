@@ -42,6 +42,11 @@ public static class DependencyInjection
         services.AddSingleton<LibraryQueryService>();
         services.AddSingleton<ILibraryQueryService>(provider =>
             provider.GetRequiredService<LibraryQueryService>());
+        services.AddSingleton<LibrarySortPreferenceService>(provider =>
+            new LibrarySortPreferenceService(
+                provider.GetRequiredService<ILibrarySortPreferenceStore>()));
+        services.AddSingleton<ILibrarySortPreferenceService>(provider =>
+            provider.GetRequiredService<LibrarySortPreferenceService>());
         services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IMediaPreviewResolver>(provider =>
             provider.GetRequiredService<MediaPreviewResolver>());

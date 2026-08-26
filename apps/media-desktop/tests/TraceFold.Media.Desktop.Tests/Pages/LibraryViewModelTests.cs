@@ -28,7 +28,7 @@ public sealed class LibraryViewModelTests
             viewModel.Items[0],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("杭州", library.LastQuery);
+        Assert.Equal("杭州", library.LastQuery?.SearchText);
         Assert.Equal(
             new MetadataOwner(MetadataOwnerKind.MediaAsset, library.Result[0].Id),
             metadataGateway.LoadedOwner);
@@ -72,10 +72,10 @@ public sealed class LibraryViewModelTests
                 DateTimeOffset.Parse("2026-08-22T10:00:00Z"))
         ];
 
-        public string? LastQuery { get; private set; }
+        public LibraryQuery? LastQuery { get; private set; }
 
         public Task<IReadOnlyList<LibraryAssetDto>> SearchAsync(
-            string? query,
+            LibraryQuery query,
             CancellationToken cancellationToken)
         {
             LastQuery = query;

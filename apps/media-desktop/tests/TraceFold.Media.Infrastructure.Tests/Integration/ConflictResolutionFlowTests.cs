@@ -113,7 +113,7 @@ public sealed class ConflictResolutionFlowTests
             fixture.LibraryPath("photo.jpg"),
             TestContext.Current.CancellationToken));
         Assert.Single(await fixture.Library.SearchAsync(
-            null,
+            LibraryQuery.Default,
             TestContext.Current.CancellationToken));
         await fixture.AssertAssetAsync(
             result.AssetId.Value,
@@ -432,7 +432,7 @@ public sealed class ConflictResolutionFlowTests
         public async Task<int> CountAssetsByHashAsync(string hash)
         {
             IReadOnlyList<LibraryAssetDto> assets = await Library.SearchAsync(
-                null,
+                LibraryQuery.Default,
                 TestContext.Current.CancellationToken);
             int count = 0;
             foreach (LibraryAssetDto asset in assets)

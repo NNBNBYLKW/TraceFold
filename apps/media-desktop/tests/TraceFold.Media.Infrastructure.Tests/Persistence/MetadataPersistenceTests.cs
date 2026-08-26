@@ -124,7 +124,18 @@ public sealed class MetadataPersistenceTests
             new EfLibraryQueryStore(database.CreateContextFactory()));
 
         IReadOnlyList<LibraryAssetDto> result = await library.SearchAsync(
-            "杭州",
+            LibraryQuery.Create(
+                "杭州",
+                LibraryMediaFilter.All,
+                [],
+                null,
+                [],
+                false,
+                false,
+                false,
+                LibraryDisplayNameFilter.All,
+                LibrarySortField.CreatedAt,
+                LibrarySortDirection.Descending),
             CancellationToken.None);
 
         LibraryAssetDto asset = Assert.Single(result);

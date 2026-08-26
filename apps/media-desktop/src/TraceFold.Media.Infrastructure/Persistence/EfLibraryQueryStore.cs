@@ -8,15 +8,16 @@ public sealed class EfLibraryQueryStore(
     IDbContextFactory<MediaDesktopDbContext> contextFactory) : ILibraryQueryStore
 {
     public async Task<IReadOnlyList<LibraryAssetDto>> SearchAsync(
-        string? query,
+        LibraryQuery query,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(query);
         await using MediaDesktopDbContext context =
             await contextFactory.CreateDbContextAsync(cancellationToken);
         IQueryable<MediaAssetRow> rows = context.MediaAssets.AsNoTracking();
-        if (!string.IsNullOrWhiteSpace(query))
+        if (query.SearchText is not null)
         {
-            string pattern = $"%{EscapeLike(query.Trim())}%";
+            string pattern = $"%{EscapeLike(query.SearchText)}%";
             rows = rows.Where(row =>
                 EF.Functions.Like(row.ActualFilename, pattern, "\\")
                 || row.DisplayName != null
@@ -32,7 +33,9 @@ public sealed class EfLibraryQueryStore(
                 row.ActualFilename,
                 row.DisplayName ?? row.ActualFilename,
                 row.MediaKind,
-                row.CreatedAtUtc))
+                row.CreatedAtUtc,
+                row.MetadataVersion,
+                row.DisplayName is not null))
             .ToArray();
     }
 
@@ -64,7 +67,9 @@ public sealed class EfLibraryQueryStore(
             row.ActualFilename,
             row.DisplayName ?? row.ActualFilename,
             row.MediaKind,
-            row.CreatedAtUtc);
+            row.CreatedAtUtc,
+            row.MetadataVersion,
+            row.DisplayName is not null);
         return new LibraryAssetDetailsDto(card, metadata, row.Size, row.Sha256);
     }
 

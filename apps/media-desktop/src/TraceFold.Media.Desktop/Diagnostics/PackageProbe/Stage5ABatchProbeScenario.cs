@@ -130,7 +130,7 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
                 "probe.batch_source_cleanup_invalid");
             IReadOnlyList<LibraryAssetDto> assets = await host.Services
                 .GetRequiredService<ILibraryQueryService>()
-                .SearchAsync(null, cancellationToken);
+                .SearchAsync(LibraryQuery.Default, cancellationToken);
             PackageProbeEnvironment.Require(assets.Count == 3
                 && assets.Count(asset => asset.MediaKind == MediaKind.Image) == 1
                 && assets.Count(asset => asset.MediaKind == MediaKind.Video) == 2
