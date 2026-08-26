@@ -2,12 +2,14 @@
 
 ## Decision and scope
 
-Stage 5A is **pending targeted manual retest** for the current branch and its
-next package. Product/UI code changed after the earlier accepted package: the
-batch-processing orchestrator now converts an unexpected single-item command
-exception into stable per-item results, and running batch ingest now shows an
-explicit one-based current/total position. The prior acceptance does not
-certify this later binary.
+Stage 5A is **accepted** for the current package sourced from
+`721cef070afcca43d2a3f23ef2b286d2e0544756`. The final manual basis combines
+the earlier full 13-item pass for source `9dde268` on unchanged scope with the
+user's targeted rerun of affected guide items 8, 9, and 10 on source `721cef0`.
+The user reported all three targeted items **通过**, with no failure or
+specification deviation; the controller captured that confirmation at
+`2026-08-26T10:10:44+08:00` (Asia/Shanghai). This does not imply that all 13
+items were rerun on the new binary.
 
 Historically, the user reported every item in the 13-item manual checklist as
 **通过** on 2026-08-26 (Asia/Shanghai) for the package sourced from
@@ -25,31 +27,32 @@ The feature branch is `codex/native-media-desktop-stage5a-batch-intake`. Its
 merge base is `c9599690da4c52e44277a30f028bc92aaa12a9a7`. The current functional
 and packaged source commit is
 `721cef070afcca43d2a3f23ef2b286d2e0544756`. Automated package checks pass,
-but until items 8, 9, and 10 are rerun on that package, the current branch
-remains pending targeted retest.
+and the targeted manual retest of items 8, 9, and 10 passed. The current branch
+and package are accepted on the combined evidence stated above.
 
 ## Manual acceptance state
 
 Source for the historical result: the user's explicit complete-checklist
 result for source `9dde268`, interpreted against
-`docs/media-desktop-stage5a-test-guide.md`. The current branch retains that
-history but requires targeted retest of the affected items:
+`docs/media-desktop-stage5a-test-guide.md`. For the current package, unchanged
+items inherit that earlier evidence without being represented as rerun; only
+affected items 8, 9, and 10 were rerun on source `721cef0`:
 
 | # | Checklist item | Historical `9dde268` package | Current branch/package |
 | ---: | --- | --- | --- |
-| 1 | Offline native-window and single-instance startup | 通过 (user-reported) | Historical pass retained; unaffected |
-| 2 | Scan test fixtures | 通过 (user-reported) | Historical pass retained; unaffected |
-| 3 | Click/Ctrl/Shift/Ctrl+A/Esc selection and clearing | 通过 (user-reported) | Historical pass retained; unaffected |
-| 4 | Filter/refresh and ID-only selection retention | 通过 (user-reported) | Historical pass retained; unaffected |
-| 5 | Batch metadata add, remove, and replace | 通过 (user-reported) | Historical pass retained; unaffected |
-| 6 | Disabled replacement fields and explicit clear | 通过 (user-reported) | Historical pass retained; unaffected |
-| 7 | Atomic metadata automated-evidence check | 通过 (user-reported) | Historical pass retained; unaffected |
-| 8 | Generic preprocessing and serial FFmpeg | 通过 (user-reported) | **Pending targeted retest** |
-| 9 | Mixed batch ingest, current/total progress, and retained conflict | 通过 (user-reported) | **Pending targeted retest** |
-| 10 | Stop after the current item | 通过 (user-reported) | **Pending targeted retest** |
-| 11 | Show-incomplete focus and filter restoration | 通过 (user-reported) | Historical pass retained; unaffected |
-| 12 | Close during execution and restart recovery | 通过 (user-reported) | Historical pass retained; unaffected |
-| 13 | No residual application or FFmpeg process after exit | 通过 (user-reported) | Historical pass retained; unaffected |
+| 1 | Offline native-window and single-instance startup | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 2 | Scan test fixtures | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 3 | Click/Ctrl/Shift/Ctrl+A/Esc selection and clearing | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 4 | Filter/refresh and ID-only selection retention | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 5 | Batch metadata add, remove, and replace | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 6 | Disabled replacement fields and explicit clear | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 7 | Atomic metadata automated-evidence check | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 8 | Generic preprocessing and serial FFmpeg | 通过 (user-reported) | **通过 — targeted retest on `721cef0`** |
+| 9 | Mixed batch ingest, current/total progress, and retained conflict | 通过 (user-reported) | **通过 — targeted retest on `721cef0`** |
+| 10 | Stop after the current item | 通过 (user-reported) | **通过 — targeted retest on `721cef0`** |
+| 11 | Show-incomplete focus and filter restoration | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 12 | Close during execution and restart recovery | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
+| 13 | No residual application or FFmpeg process after exit | 通过 (user-reported) | Accepted by unchanged-scope inheritance; not rerun |
 
 ## Automated verification
 
@@ -99,7 +102,7 @@ tests passed. All focused runs had 0 failures and 0 skips.
 | Requirement | Evidence |
 | --- | --- |
 | No second batch state machine or persistence table | The automated guard is intentionally narrow: `ArchitectureTests.Stage5A_desktop_does_not_know_specific_processor_or_batch_rows` scans only `TraceFold.Media.Desktop` C# sources and rejects the names `Mp4M4a`, `BatchJobRow`, and `BatchIngestOperationRow`; architecture run: 6/6. The whole-branch conclusion comes from review of production and persistence/schema changes in `c959969...HEAD`; that review is not app-wide automated proof. |
-| No batch conflict-dialog cascade | `InboxViewModelTests.Confirmed_batch_ingest_retains_only_unfinished_ids` verifies one summary confirmation and zero per-item conflict dialogs. Manual item 9 passed on the historical package and is pending targeted retest on the current package. |
+| No batch conflict-dialog cascade | `InboxViewModelTests.Confirmed_batch_ingest_retains_only_unfinished_ids` verifies one summary confirmation and zero per-item conflict dialogs. Manual item 9 passed on the historical package and in the targeted current-package retest. |
 | No automatic processing or ingest | `BatchProcessingServiceTests.Start_calls_the_single_item_command_only_for_actionable_items_in_order` delegates only after an explicit batch-start action; `BatchIngestServiceTests.Preview_reclassifies_current_facts_without_calling_ingest` proves preview does not ingest. |
 | One series field with explicit semantics | `BatchMetadataMutationTests.Replace_can_explicitly_clear_series_without_touching_other_fields` and `BatchMetadataDialogViewModelTests.Explicit_clear_builds_clear_while_disabled_field_stays_unchanged`; manual item 6 passed on the historical package. |
 | No batch display-name or physical-filename change | Batch metadata command/model tests cover authors, series, and tags only; manual item 5 explicitly inspected both display and physical filenames and passed on the historical package. |
@@ -130,7 +133,7 @@ following static inspection returned no matches:
 rg -n "(Log[A-Za-z]*\(|ILogger|Log\.)" apps/media-desktop/src/TraceFold.Media.Desktop/Dialogs -g '*.cs' -g '*.xaml.cs'
 ```
 
-## Current package evidence — pending targeted retest
+## Current accepted package evidence
 
 The current offline Windows x64 package is
 `dist/TraceFold-MediaDesktop-Stage5A-win-x64`; its ZIP is
@@ -141,8 +144,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-media-deskto
 ```
 
 The publisher's built-in verification passed all 561 tests before promotion.
-This automated evidence does not make the package accepted while the targeted
-manual retest remains pending.
+This automated evidence complements the inherited unchanged-scope manual
+evidence and the passed targeted retest of items 8, 9, and 10.
 
 | Item | Verified value |
 | --- | --- |
@@ -179,8 +182,7 @@ PASS: Stage 5A batch metadata, processing, partial ingest, and clean storage ver
 ```
 
 The post-smoke residual-process query found no `TraceFold.Media`, `ffmpeg`, or
-`ffprobe` process. Items 8, 9, and 10 remain pending manual retest on this
-package.
+`ffprobe` process. Items 8, 9, and 10 passed manual retest on this package.
 
 ## Historical accepted package evidence (`9dde268`)
 
@@ -241,12 +243,13 @@ and `ffmpeg` returned no processes.
 ## Evidence sources and disposition
 
 This record preserves the user report and package evidence for the historical
-`9dde268` package. Automated evidence for the current branch does not replace
-the pending manual rerun of items 8, 9, and 10, and the document does not claim
-a clean-VM run.
+`9dde268` package. Final current-package acceptance combines that full-run
+evidence only for unchanged scope with the explicit targeted pass of items 8,
+9, and 10 on `721cef0`; it does not claim that all 13 items were rerun on the
+new binary and does not claim a clean-VM run.
 
 Evidence-verification boundary: the current functional-fix and package
 verification above was run in this worktree. The historical section remains
 explicitly limited to source `9dde268`. This documentation update changes no
-product or package behavior and does not convert current automated evidence
-into manual acceptance.
+product or package behavior. Current acceptance relies on the separately
+recorded user manual evidence in addition to automated/package evidence.
