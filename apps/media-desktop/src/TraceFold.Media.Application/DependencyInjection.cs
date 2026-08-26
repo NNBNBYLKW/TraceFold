@@ -52,6 +52,12 @@ public static class DependencyInjection
             provider.GetRequiredService<NamingRuleEngine>());
         services.AddSingleton<ILibraryBatchPreviewService,
             LibraryBatchPreviewService>();
+        services.AddSingleton<LibraryActivityNotifier>();
+        services.AddSingleton<ILibraryActivityNotifier>(provider =>
+            provider.GetRequiredService<LibraryActivityNotifier>());
+        services.AddSingleton<LibraryBatchEditorService>();
+        services.AddSingleton<ILibraryBatchEditorService>(provider =>
+            provider.GetRequiredService<LibraryBatchEditorService>());
         services.AddSingleton<NamingPresetService>();
         services.AddSingleton<INamingPresetService>(provider =>
             provider.GetRequiredService<NamingPresetService>());

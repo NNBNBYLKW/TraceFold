@@ -62,3 +62,102 @@ public interface ILibraryBatchPreviewService
         LibraryBatchEditorDto editor,
         LibraryBatchEditDraft draft);
 }
+
+public sealed record LibraryBatchPrepareResult(
+    bool Succeeded,
+    LibraryBatchEditorDto? Editor,
+    string? ErrorCode);
+
+public sealed record LibraryBatchStoreResult(
+    bool Succeeded,
+    int ChangedCount,
+    int UnchangedCount,
+    int WarningCount,
+    LibraryBatchUndoReceipt? UndoReceipt,
+    string? ErrorCode);
+
+public sealed record LibraryBatchUndoReceipt(
+    Guid OperationId,
+    IReadOnlyList<LibraryBatchUndoItem> Items);
+
+public sealed record LibraryBatchUndoItem(
+    Guid AssetId,
+    long ExpectedPostVersion,
+    string? PreviousDisplayName,
+    Guid? PreviousSeriesId,
+    IReadOnlyList<Guid> PreviousAuthorIds,
+    IReadOnlyList<Guid> PreviousTagIds);
+
+public sealed record LibraryBatchApplyResult(
+    bool Succeeded,
+    int ChangedCount,
+    int UnchangedCount,
+    int WarningCount,
+    bool CanUndo,
+    string? ErrorCode);
+
+public interface ILibraryBatchEditStore
+{
+    Task<LibraryBatchPrepareResult> PrepareAsync(
+        IReadOnlyList<LibrarySelectionEntry> selection,
+        CancellationToken cancellationToken);
+
+    Task<LibraryBatchStoreResult> ApplyAsync(
+        IReadOnlyList<LibrarySelectionEntry> selection,
+        LibraryBatchEditDraft draft,
+        CancellationToken cancellationToken);
+}
+
+public interface ILibraryBatchEditorService
+{
+    Task<LibraryBatchPrepareResult> PrepareAsync(
+        IReadOnlyList<LibrarySelectionEntry> selection,
+        CancellationToken cancellationToken);
+
+    LibraryBatchPreviewDto Preview(
+        LibraryBatchEditorDto editor,
+        LibraryBatchEditDraft draft);
+
+    Task<LibraryBatchApplyResult> ApplyAsync(
+        IReadOnlyList<LibrarySelectionEntry> selection,
+        LibraryBatchEditDraft draft,
+        CancellationToken cancellationToken);
+}
+
+public enum LibraryActivityKind
+{
+    SingleMetadataChanged,
+    BatchChanged,
+    UndoCompleted
+}
+
+public sealed class LibraryActivityEventArgs(
+    LibraryActivityKind kind,
+    IReadOnlyList<Guid> assetIds) : EventArgs
+{
+    public LibraryActivityKind Kind { get; } = kind;
+
+    public IReadOnlyList<Guid> AssetIds { get; } = assetIds.ToArray();
+}
+
+public interface ILibraryActivityNotifier
+{
+    event EventHandler<LibraryActivityEventArgs>? Changed;
+
+    void Publish(
+        LibraryActivityKind kind,
+        IReadOnlyList<Guid> assetIds);
+}
+
+public sealed class LibraryActivityNotifier : ILibraryActivityNotifier
+{
+    public event EventHandler<LibraryActivityEventArgs>? Changed;
+
+    public void Publish(
+        LibraryActivityKind kind,
+        IReadOnlyList<Guid> assetIds)
+    {
+        ArgumentNullException.ThrowIfNull(assetIds);
+        Changed?.Invoke(this, new LibraryActivityEventArgs(kind, assetIds));
+    }
+}

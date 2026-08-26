@@ -46,6 +46,18 @@ internal sealed record LibraryFixture(
     Guid TagB,
     Guid AssetWithEveryTerm);
 
+internal sealed record LibraryBatchFixture(
+    IReadOnlyList<Guid> AssetIds,
+    IReadOnlyList<LibrarySelectionEntry> Selection);
+
+internal sealed record PersistedLibraryAssetSnapshot(
+    Guid AssetId,
+    string? DisplayName,
+    Guid? SeriesId,
+    IReadOnlyList<string> AuthorNames,
+    IReadOnlyList<string> TagNames,
+    long MetadataVersion);
+
 internal sealed class TestMediaDatabase : IAsyncDisposable
 {
     private readonly TestDirectory _directory;
@@ -267,6 +279,145 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
 
         await transaction.CommitAsync();
         return ids;
+    }
+
+    public async Task<LibraryBatchFixture> SeedLibraryBatchFixtureAsync(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        var ids = new Guid[count];
+        await using var context = new MediaDesktopDbContext(_options);
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        for (int index = 0; index < count; index++)
+        {
+            Guid id = Guid.NewGuid();
+            ids[index] = id;
+            await InsertFormalAssetAsync(
+                context,
+                id,
+                $"batch-{index + 1:D4}.jpg",
+                displayName: null,
+                metadataVersion: 0,
+                MediaKind.Image,
+                [],
+                seriesId: null,
+                []);
+        }
+
+        await transaction.CommitAsync();
+        LibrarySelectionEntry[] selection = ids
+            .Select((id, ordinal) => new LibrarySelectionEntry(id, 0, ordinal))
+            .ToArray();
+        return new LibraryBatchFixture(ids, selection);
+    }
+
+    public async Task<IReadOnlyList<PersistedLibraryAssetSnapshot>>
+        ReadFormalAssetsAsync(IReadOnlyList<Guid> assetIds)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        var snapshots = new List<PersistedLibraryAssetSnapshot>(assetIds.Count);
+        foreach (Guid id in assetIds)
+        {
+            string? displayName;
+            Guid? seriesId;
+            long metadataVersion;
+            await using (DbCommand command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT display_name, series_id, metadata_version
+                    FROM media_assets
+                    WHERE upper(id) = upper($id)
+                    """;
+                AddParameter(command, "$id", id.ToString("D"));
+                await using DbDataReader reader = await command.ExecuteReaderAsync();
+                if (!await reader.ReadAsync())
+                {
+                    throw new InvalidOperationException(
+                        "The formal asset snapshot is missing.");
+                }
+
+                displayName = reader.IsDBNull(0) ? null : reader.GetString(0);
+                seriesId = reader.IsDBNull(1)
+                    ? null
+                    : Guid.Parse(reader.GetString(1));
+                metadataVersion = reader.GetInt64(2);
+            }
+
+            var authors = new List<string>();
+            await using (DbCommand command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT terms.display_name
+                    FROM media_asset_authors links
+                    JOIN taxonomy_terms terms ON terms.id = links.author_id
+                    WHERE upper(links.media_asset_id) = upper($id)
+                    ORDER BY links.ordinal
+                    """;
+                AddParameter(command, "$id", id.ToString("D"));
+                await using DbDataReader reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    authors.Add(reader.GetString(0));
+                }
+            }
+
+            var tags = new List<string>();
+            await using (DbCommand command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT terms.display_name
+                    FROM media_asset_tags links
+                    JOIN taxonomy_terms terms ON terms.id = links.tag_id
+                    WHERE upper(links.media_asset_id) = upper($id)
+                    ORDER BY links.ordinal
+                    """;
+                AddParameter(command, "$id", id.ToString("D"));
+                await using DbDataReader reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    tags.Add(reader.GetString(0));
+                }
+            }
+
+            snapshots.Add(new PersistedLibraryAssetSnapshot(
+                id,
+                displayName,
+                seriesId,
+                authors,
+                tags,
+                metadataVersion));
+        }
+
+        return snapshots;
+    }
+
+    public async Task CreateFormalAssetUpdateFailureTriggerAsync(Guid assetId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        string persistedId = assetId.ToString("D").ToUpperInvariant();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            CREATE TRIGGER test_fail_library_batch
+            BEFORE UPDATE ON media_assets
+            WHEN upper(NEW.id) = '{persistedId}'
+            BEGIN
+                SELECT RAISE(ABORT, 'test library batch failure');
+            END
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task SetFormalAssetVersionAsync(Guid assetId, long version)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE media_assets
+            SET metadata_version = {version}
+            WHERE id = {assetId}
+            """);
     }
 
     public async Task<int> CountTaxonomyTermsAsync(

@@ -1,3 +1,4 @@
+using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
 using Xunit;
@@ -53,6 +54,46 @@ public sealed class MetadataEditorServiceTests
         Assert.Equal([author1, author2], store.LastSelection!.AuthorIds);
         Assert.Equal(series, store.LastSelection.SeriesId);
         Assert.Equal([tag1, tag2], store.LastSelection.TagIds);
+    }
+
+    [Fact]
+    public async Task Successful_formal_asset_save_publishes_one_library_event()
+    {
+        Guid assetId = Guid.NewGuid();
+        var notifier = new RecordingLibraryActivityNotifier();
+        var service = new MetadataEditorService(
+            new InMemoryMetadataStore(version: 0),
+            libraryActivityNotifier: notifier);
+
+        MetadataSaveResult result = await service.SaveAsync(
+            new MetadataOwner(MetadataOwnerKind.MediaAsset, assetId),
+            new MetadataUpdate(null, [], null, [], 0),
+            CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        LibraryActivityEventArgs changed =
+            Assert.Single(notifier.Events);
+        Assert.Equal(
+            LibraryActivityKind.SingleMetadataChanged,
+            changed.Kind);
+        Assert.Equal([assetId], changed.AssetIds);
+    }
+
+    private sealed class RecordingLibraryActivityNotifier
+        : ILibraryActivityNotifier
+    {
+        public event EventHandler<LibraryActivityEventArgs>? Changed;
+
+        public List<LibraryActivityEventArgs> Events { get; } = [];
+
+        public void Publish(
+            LibraryActivityKind kind,
+            IReadOnlyList<Guid> assetIds)
+        {
+            var args = new LibraryActivityEventArgs(kind, assetIds);
+            Events.Add(args);
+            Changed?.Invoke(this, args);
+        }
     }
 
     private sealed class InMemoryMetadataStore(long version) : IMetadataStore
