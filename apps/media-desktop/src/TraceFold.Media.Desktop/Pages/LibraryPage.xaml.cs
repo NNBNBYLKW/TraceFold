@@ -136,6 +136,22 @@ public sealed partial class LibraryPage : Page
         LibraryGrid.SelectedItems.Clear();
     }
 
+    private async void OnBatchEditClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        await ViewModel.BatchEditCommand.ExecuteAsync(null);
+        LibraryGrid.Focus(FocusState.Programmatic);
+    }
+
+    private async void OnUndoBatchClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        await ViewModel.UndoBatchCommand.ExecuteAsync(null);
+        LibraryGrid.Focus(FocusState.Programmatic);
+    }
+
     private async void OnSortSelectionChanged(
         object sender,
         SelectionChangedEventArgs args)

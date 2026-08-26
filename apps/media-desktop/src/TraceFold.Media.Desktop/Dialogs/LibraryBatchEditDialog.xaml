@@ -1,0 +1,446 @@
+<ContentDialog
+    x:Class="TraceFold.Media.Desktop.Dialogs.LibraryBatchEditDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dialogs="using:TraceFold.Media.Desktop.Dialogs"
+    xmlns:library="using:TraceFold.Media.Application.Library"
+    MinWidth="1080"
+    AutomationProperties.AutomationId="LibraryBatchEditDialog"
+    AutomationProperties.Name="正式文件库批量编辑"
+    Closing="OnClosing"
+    DefaultButton="None"
+    Loaded="OnLoaded"
+    Title="批量编辑正式文件">
+    <ContentDialog.Resources>
+        <x:Double x:Key="ContentDialogMaxWidth">1320</x:Double>
+        <x:Double x:Key="ContentDialogMinWidth">1080</x:Double>
+    </ContentDialog.Resources>
+
+    <Grid MaxHeight="760" RowDefinitions="Auto,*,Auto,Auto" RowSpacing="12">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="3">
+                <TextBlock
+                    FontWeight="SemiBold"
+                    Text="{x:Bind ViewModel.SelectedCount, Mode=OneWay}" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="仅修改软件中的资料和显示名称；实际文件名、文件内容和所在位置保持不变。"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+            <Border
+                Grid.Column="1"
+                Padding="10,5"
+                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                CornerRadius="12">
+                <TextBlock Text="原子提交 · 可撤销一次" />
+            </Border>
+        </Grid>
+
+        <TabView
+            x:Name="EditorTabs"
+            Grid.Row="1"
+            CanDragTabs="False"
+            IsAddTabButtonVisible="False"
+            SelectionChanged="OnEditorTabSelectionChanged">
+            <TabViewItem
+                AutomationProperties.AutomationId="LibraryBatchMetadataTab"
+                AutomationProperties.Name="批量编辑资料选项卡"
+                Header="资料">
+                <Grid Padding="4,12" ColumnDefinitions="180,*" ColumnSpacing="16">
+                    <StackPanel Spacing="8">
+                        <TextBlock FontWeight="SemiBold" Text="操作方式" />
+                        <ListView
+                            x:Name="MetadataModeList"
+                            AutomationProperties.Name="选择资料批量操作方式"
+                            SelectedIndex="0"
+                            SelectionChanged="OnMetadataModeSelectionChanged">
+                            <ListViewItem Content="添加作者或标签" />
+                            <ListViewItem Content="移除已有资料" />
+                            <ListViewItem Content="替换或清空" />
+                        </ListView>
+                    </StackPanel>
+
+                    <Grid Grid.Column="1">
+                        <ScrollViewer
+                            x:Name="MetadataAddPanel"
+                            VerticalScrollBarVisibility="Auto">
+                            <StackPanel Spacing="10">
+                                <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="添加资料" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="输入新名称后按 Enter；不存在的名称会在提交时一并创建。"
+                                    TextWrapping="Wrap" />
+                                <TextBlock FontWeight="SemiBold" Text="作者" />
+                                <AutoSuggestBox
+                                    x:Name="MetadataFirstInput"
+                                    AutomationProperties.Name="输入要添加的作者"
+                                    ItemsSource="{x:Bind ViewModel.Metadata.AddAuthorPicker.Suggestions, Mode=OneWay}"
+                                    PlaceholderText="输入作者名后按 Enter"
+                                    QuerySubmitted="OnPickerQuerySubmitted"
+                                    Tag="{x:Bind ViewModel.Metadata.AddAuthorPicker}"
+                                    Text="{x:Bind ViewModel.Metadata.AddAuthorPicker.InputText, Mode=TwoWay}"
+                                    TextChanged="OnPickerTextChanged" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.AddAuthorPicker.SelectedChoices, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto">
+                                                <TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" />
+                                                <Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock FontWeight="SemiBold" Text="内容标签" />
+                                <AutoSuggestBox
+                                    AutomationProperties.Name="输入要添加的内容标签"
+                                    ItemsSource="{x:Bind ViewModel.Metadata.AddTagPicker.Suggestions, Mode=OneWay}"
+                                    PlaceholderText="输入标签后按 Enter"
+                                    QuerySubmitted="OnPickerQuerySubmitted"
+                                    Tag="{x:Bind ViewModel.Metadata.AddTagPicker}"
+                                    Text="{x:Bind ViewModel.Metadata.AddTagPicker.InputText, Mode=TwoWay}"
+                                    TextChanged="OnPickerTextChanged" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.AddTagPicker.SelectedChoices, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto">
+                                                <TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" />
+                                                <Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <ScrollViewer
+                            x:Name="MetadataRemovePanel"
+                            Visibility="Collapsed"
+                            VerticalScrollBarVisibility="Auto">
+                            <StackPanel Spacing="10">
+                                <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="移除已有资料" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="仅列出当前选择中已使用的作者和标签。"
+                                    TextWrapping="Wrap" />
+                                <TextBlock FontWeight="SemiBold" Text="作者" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.RemoveAuthors, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="dialogs:BatchTermCoverageOptionViewModel">
+                                            <CheckBox Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock FontWeight="SemiBold" Text="内容标签" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.RemoveTags, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="dialogs:BatchTermCoverageOptionViewModel">
+                                            <CheckBox Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <ScrollViewer
+                            x:Name="MetadataReplacePanel"
+                            Visibility="Collapsed"
+                            VerticalScrollBarVisibility="Auto">
+                            <StackPanel Spacing="12">
+                                <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="替换或清空资料" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="每个字段必须先启用；空白输入不会被当作清空。"
+                                    TextWrapping="Wrap" />
+
+                                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="12">
+                                    <CheckBox Content="替换作者" IsChecked="{x:Bind ViewModel.Metadata.ReplaceAuthorsEnabled, Mode=TwoWay}" />
+                                    <CheckBox Grid.Column="1" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearAuthors, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceAuthorsEnabled, Mode=OneWay}" />
+                                </Grid>
+                                <AutoSuggestBox
+                                    AutomationProperties.Name="输入替换后的作者"
+                                    IsEnabled="{x:Bind ViewModel.Metadata.ReplaceAuthorsInputEnabled, Mode=OneWay}"
+                                    ItemsSource="{x:Bind ViewModel.Metadata.ReplaceAuthorPicker.Suggestions, Mode=OneWay}"
+                                    PlaceholderText="输入作者名后按 Enter"
+                                    QuerySubmitted="OnPickerQuerySubmitted"
+                                    Tag="{x:Bind ViewModel.Metadata.ReplaceAuthorPicker}"
+                                    Text="{x:Bind ViewModel.Metadata.ReplaceAuthorPicker.InputText, Mode=TwoWay}"
+                                    TextChanged="OnPickerTextChanged" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.ReplaceAuthorPicker.SelectedChoices, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="12">
+                                    <CheckBox Content="替换系列" IsChecked="{x:Bind ViewModel.Metadata.ReplaceSeriesEnabled, Mode=TwoWay}" />
+                                    <CheckBox Grid.Column="1" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearSeries, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceSeriesEnabled, Mode=OneWay}" />
+                                </Grid>
+                                <AutoSuggestBox
+                                    AutomationProperties.Name="输入替换后的系列"
+                                    IsEnabled="{x:Bind ViewModel.Metadata.ReplaceSeriesInputEnabled, Mode=OneWay}"
+                                    ItemsSource="{x:Bind ViewModel.Metadata.ReplaceSeriesPicker.Suggestions, Mode=OneWay}"
+                                    PlaceholderText="输入系列名后按 Enter"
+                                    QuerySubmitted="OnPickerQuerySubmitted"
+                                    Tag="{x:Bind ViewModel.Metadata.ReplaceSeriesPicker}"
+                                    Text="{x:Bind ViewModel.Metadata.ReplaceSeriesPicker.InputText, Mode=TwoWay}"
+                                    TextChanged="OnPickerTextChanged" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.ReplaceSeriesPicker.SelectedChoices, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="12">
+                                    <CheckBox Content="替换内容标签" IsChecked="{x:Bind ViewModel.Metadata.ReplaceTagsEnabled, Mode=TwoWay}" />
+                                    <CheckBox Grid.Column="1" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearTags, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceTagsEnabled, Mode=OneWay}" />
+                                </Grid>
+                                <AutoSuggestBox
+                                    AutomationProperties.Name="输入替换后的内容标签"
+                                    IsEnabled="{x:Bind ViewModel.Metadata.ReplaceTagsInputEnabled, Mode=OneWay}"
+                                    ItemsSource="{x:Bind ViewModel.Metadata.ReplaceTagPicker.Suggestions, Mode=OneWay}"
+                                    PlaceholderText="输入标签后按 Enter"
+                                    QuerySubmitted="OnPickerQuerySubmitted"
+                                    Tag="{x:Bind ViewModel.Metadata.ReplaceTagPicker}"
+                                    Text="{x:Bind ViewModel.Metadata.ReplaceTagPicker.InputText, Mode=TwoWay}"
+                                    TextChanged="OnPickerTextChanged" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.ReplaceTagPicker.SelectedChoices, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+            </TabViewItem>
+
+            <TabViewItem
+                AutomationProperties.AutomationId="LibraryBatchNamingTab"
+                AutomationProperties.Name="批量编辑显示名称选项卡"
+                Header="命名">
+                <Grid Padding="4,12" ColumnDefinitions="240,420,*" ColumnSpacing="14">
+                    <Border
+                        Padding="12"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8">
+                        <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
+                            <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="预设与来源" />
+                            <StackPanel Grid.Row="1" Spacing="6">
+                                <TextBlock FontWeight="SemiBold" Text="名称来源" />
+                                <ComboBox
+                                    x:Name="NamingSourceSelector"
+                                    AutomationProperties.Name="选择命名来源"
+                                    SelectedIndex="0"
+                                    SelectionChanged="OnNamingSourceChanged">
+                                    <ComboBoxItem Content="实际文件名" />
+                                    <ComboBoxItem Content="当前显示名称" />
+                                </ComboBox>
+                            </StackPanel>
+                            <ListView
+                                x:Name="PresetList"
+                                Grid.Row="2"
+                                AutomationProperties.AutomationId="LibraryNamingPresetList"
+                                AutomationProperties.Name="命名预设列表"
+                                ContainerContentChanging="OnPresetContainerContentChanging"
+                                ItemsSource="{x:Bind ViewModel.Naming.Presets, Mode=OneWay}"
+                                SelectionChanged="OnPresetSelectionChanged">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="library:NamingPresetDto">
+                                        <Grid Padding="2,6" ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
+                                            <FontIcon Grid.Column="1" FontSize="12" Glyph="&#xE783;" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <StackPanel Grid.Row="3" Spacing="6">
+                                <TextBox
+                                    Header="预设名称"
+                                    PlaceholderText="另存为新预设"
+                                    Text="{x:Bind ViewModel.Naming.PresetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                    <Button Command="{x:Bind ViewModel.Naming.SavePresetCommand}" Content="保存预设" />
+                                    <Button Grid.Column="1" Command="{x:Bind ViewModel.Naming.DeletePresetCommand}" Content="删除" />
+                                </Grid>
+                                <Button
+                                    Command="{x:Bind ViewModel.Naming.OverwritePresetCommand}"
+                                    Content="确认覆盖同名预设" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border
+                        Grid.Column="1"
+                        Padding="12"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8">
+                        <Grid RowDefinitions="Auto,Auto,220,*" RowSpacing="10">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="操作规则" />
+                                <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按顺序执行" />
+                            </Grid>
+                            <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <ComboBox x:Name="RuleKindSelector" AutomationProperties.Name="选择要添加的命名规则" SelectedIndex="0">
+                                    <ComboBoxItem Content="添加前缀" Tag="prefix" />
+                                    <ComboBoxItem Content="添加后缀" Tag="suffix" />
+                                    <ComboBoxItem Content="替换文本" Tag="replace" />
+                                    <ComboBoxItem Content="移除文本" Tag="remove_text" />
+                                    <ComboBoxItem Content="移除括号内容" Tag="remove_brackets" />
+                                    <ComboBoxItem Content="字母大小写" Tag="case" />
+                                    <ComboBoxItem Content="添加序号" Tag="sequence" />
+                                    <ComboBoxItem Content="资料模板" Tag="metadata_template" />
+                                </ComboBox>
+                                <Button Grid.Column="1" Click="OnAddRuleClicked" Content="添加规则" />
+                            </Grid>
+                            <ListView
+                                x:Name="RuleList"
+                                Grid.Row="2"
+                                AutomationProperties.AutomationId="LibraryNamingRuleList"
+                                AutomationProperties.Name="有序命名规则列表"
+                                ItemsSource="{x:Bind ViewModel.Naming.Rules, Mode=OneWay}"
+                                SelectionChanged="OnRuleSelectionChanged">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="dialogs:NamingRuleRowViewModel">
+                                        <Grid
+                                            Padding="4,5"
+                                            AutomationProperties.AutomationId="{x:Bind AutomationId}"
+                                            ColumnDefinitions="Auto,*,Auto,Auto,Auto"
+                                            ColumnSpacing="5">
+                                            <CheckBox AutomationProperties.Name="启用或停用命名规则" IsChecked="{x:Bind IsEnabled, Mode=TwoWay}" />
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind DisplayName}" />
+                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ParameterSummary}" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <Button Grid.Column="2" AutomationProperties.Name="上移命名规则" Click="OnMoveRuleUpClicked" Content="↑" Tag="{Binding}" />
+                                            <Button Grid.Column="3" AutomationProperties.Name="下移命名规则" Click="OnMoveRuleDownClicked" Content="↓" Tag="{Binding}" />
+                                            <Button Grid.Column="4" AutomationProperties.Name="删除命名规则" Click="OnDeleteRuleClicked" Content="×" Tag="{Binding}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+
+                            <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
+                                <Border
+                                    x:Name="RuleEditor"
+                                    Padding="10"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="6"
+                                    DataContext="{x:Bind ViewModel.Naming.SelectedRule, Mode=OneWay}"
+                                    Visibility="Collapsed">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock FontWeight="SemiBold" Text="所选规则参数" />
+                                        <StackPanel x:Name="TextRuleEditor" Spacing="5">
+                                            <TextBox Header="文本" Text="{Binding TextParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel x:Name="ReplaceRuleEditor" Spacing="5" Visibility="Collapsed">
+                                            <TextBox Header="查找" Text="{Binding SearchParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Header="替换为" Text="{Binding ReplacementParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <CheckBox Content="区分大小写" IsChecked="{Binding CaseSensitiveParameter, Mode=TwoWay}" />
+                                        </StackPanel>
+                                        <StackPanel x:Name="BracketRuleEditor" Spacing="5" Visibility="Collapsed">
+                                            <ComboBox x:Name="BracketPairSelector" Header="括号类型" SelectedIndex="0" SelectionChanged="OnBracketPairChanged">
+                                                <ComboBoxItem Content="( )" /><ComboBoxItem Content="[ ]" /><ComboBoxItem Content="{}{ }" /><ComboBoxItem Content="（ ）" /><ComboBoxItem Content="【 】" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel x:Name="CaseRuleEditor" Spacing="5" Visibility="Collapsed">
+                                            <ComboBox x:Name="CaseModeSelector" Header="字母形式" SelectedIndex="0" SelectionChanged="OnCaseModeChanged">
+                                                <ComboBoxItem Content="大写" /><ComboBoxItem Content="小写" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel x:Name="SequenceRuleEditor" Spacing="5" Visibility="Collapsed">
+                                            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6">
+                                                <NumberBox Header="起始" Minimum="0" Value="{Binding SequenceStartParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="1" Header="步长" Minimum="1" Value="{Binding SequenceStepParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="2" Header="最少位数" Minimum="1" Maximum="10" Value="{Binding SequenceMinimumDigitsParameter, Mode=TwoWay}" />
+                                            </Grid>
+                                            <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                                                <ComboBox x:Name="SequencePlacementSelector" Header="位置" SelectedIndex="1" SelectionChanged="OnSequencePlacementChanged"><ComboBoxItem Content="前缀" /><ComboBoxItem Content="后缀" /></ComboBox>
+                                                <TextBox Grid.Column="1" Header="分隔符" Text="{Binding SequenceSeparatorParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            </Grid>
+                                        </StackPanel>
+                                        <StackPanel x:Name="TemplateRuleEditor" Spacing="5" Visibility="Collapsed">
+                                            <TextBox Header="模板" PlaceholderText="{}{authors}-{series}-{name}-{number}" Text="{Binding TemplateParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Header="多值分隔符" Text="{Binding MultiValueSeparatorParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6">
+                                                <NumberBox Header="序号起始" Minimum="0" Value="{Binding SequenceStartParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="1" Header="序号步长" Minimum="1" Value="{Binding SequenceStepParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="2" Header="序号位数" Minimum="1" Maximum="10" Value="{Binding SequenceMinimumDigitsParameter, Mode=TwoWay}" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
+                    <Border
+                        Grid.Column="2"
+                        Padding="12"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8">
+                        <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
+                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="逐项预览" />
+                                <TextBlock Grid.Column="1" Foreground="{ThemeResource SystemFillColorCautionBrush}" Text="{x:Bind ViewModel.WarningCount, Mode=OneWay}" />
+                                <TextBlock Grid.Column="2" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Text="{x:Bind ViewModel.ErrorCount, Mode=OneWay}" />
+                            </Grid>
+                            <Grid Grid.Row="1" ColumnDefinitions="1.2*,1.2*,1.2*" ColumnSpacing="8">
+                                <TextBlock FontWeight="SemiBold" Text="实际文件" />
+                                <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="当前显示" />
+                                <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="生成预览" />
+                            </Grid>
+                            <ListView
+                                x:Name="PreviewList"
+                                Grid.Row="2"
+                                AutomationProperties.AutomationId="LibraryNamingPreviewList"
+                                AutomationProperties.Name="批量命名逐项预览"
+                                ItemsSource="{x:Bind ViewModel.PreviewRows, Mode=OneWay}">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="library:LibraryBatchPreviewRowDto">
+                                        <Grid Padding="2,7" ColumnDefinitions="1.2*,1.2*,1.2*" ColumnSpacing="8">
+                                            <TextBlock Text="{x:Bind ActualFilename}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind CurrentDisplayName}" TextTrimming="CharacterEllipsis" />
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind GeneratedDisplayName}" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Issues.Count}" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabViewItem>
+        </TabView>
+
+        <TextBlock
+            x:Name="DialogStatus"
+            Grid.Row="2"
+            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+            Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+            TextWrapping="Wrap" />
+
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <TextBlock
+                VerticalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="关闭或按 Esc 不会修改任何资料。" />
+            <Button Grid.Column="1" Click="OnCancelClicked" Content="取消" />
+            <Button
+                Grid.Column="2"
+                AutomationProperties.AutomationId="LibraryBatchApplyButton"
+                AutomationProperties.Name="应用正式文件库批量修改"
+                Click="OnApplyClicked"
+                Content="应用修改"
+                IsEnabled="{x:Bind ViewModel.CanApply, Mode=OneWay}"
+                Style="{StaticResource AccentButtonStyle}" />
+        </Grid>
+    </Grid>
+</ContentDialog>

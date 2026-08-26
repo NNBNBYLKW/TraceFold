@@ -6,6 +6,7 @@ using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Services;
 
 namespace TraceFold.Media.Desktop.Pages;
@@ -16,10 +17,15 @@ public sealed partial class LibraryViewModel : ObservableObject
     private readonly ILibrarySortPreferenceService _sortPreferences;
     private readonly IAssetRevealService _reveal;
     private readonly IMediaPreviewResolver _previewResolver;
+    private readonly ILibraryBatchEditDialogService _batchDialog;
+    private readonly ILibraryBatchEditorService _batchEditor;
+    private readonly ILibraryActivityNotifier _activityNotifier;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private bool _settingSelection;
     private bool _settingSearch;
     private bool _sortLoaded;
+    private bool _coalescingBatchActivity;
+    private bool _batchActivityPending;
 
     public LibraryViewModel(
         ILibraryQueryService library,
@@ -28,7 +34,10 @@ public sealed partial class LibraryViewModel : ObservableObject
         LibraryFilterViewModel filter,
         LibraryInspectorViewModel inspector,
         IAssetRevealService reveal,
-        IMediaPreviewResolver previewResolver)
+        IMediaPreviewResolver previewResolver,
+        ILibraryBatchEditDialogService batchDialog,
+        ILibraryBatchEditorService batchEditor,
+        ILibraryActivityNotifier activityNotifier)
     {
         _library = library;
         _sortPreferences = sortPreferences;
@@ -37,8 +46,13 @@ public sealed partial class LibraryViewModel : ObservableObject
         Inspector = inspector;
         _reveal = reveal;
         _previewResolver = previewResolver;
+        _batchDialog = batchDialog;
+        _batchEditor = batchEditor;
+        _activityNotifier = activityNotifier;
         Inspector.Metadata.Saved += OnMetadataSaved;
         Selection.PropertyChanged += OnSelectionPropertyChanged;
+        _batchEditor.UndoStateChanged += OnUndoStateChanged;
+        _activityNotifier.Changed += OnLibraryActivityChanged;
     }
 
     public ObservableCollection<LibraryCardViewModel> Items { get; } = [];
@@ -65,6 +79,15 @@ public sealed partial class LibraryViewModel : ObservableObject
         : Visibility.Collapsed;
 
     public Visibility BatchBarVisibility => MultiSelectionVisibility;
+
+    public bool CanUndoBatch =>
+        !IsBusy && _batchEditor.UndoState.IsAvailable;
+
+    public int UndoAffectedCount => _batchEditor.UndoState.AffectedCount;
+
+    public Visibility UndoBannerVisibility => CanUndoBatch
+        ? Visibility.Visible
+        : Visibility.Collapsed;
 
     public Visibility ActiveFiltersVisibility => Filter.ActiveFilterCount > 0
         ? Visibility.Visible
@@ -245,6 +268,90 @@ public sealed partial class LibraryViewModel : ObservableObject
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanBatchEdit))]
+    private async Task BatchEditAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<LibrarySelectionEntry> selection = Selection.Capture();
+        if (selection.Count < 2 || IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        BeginActivityCoalescing();
+        try
+        {
+            LibraryBatchEditDialogResult result = await _batchDialog.ShowAsync(
+                selection,
+                cancellationToken);
+            if (result.Applied || _batchActivityPending)
+            {
+                await ReloadAsync(cancellationToken);
+            }
+
+            if (result.Applied && result.Result is not null)
+            {
+                StatusMessage =
+                    $"已批量修改 {result.Result.ChangedCount} 项正式文件。";
+            }
+            else if (result.Result is { Succeeded: false } failed)
+            {
+                StatusMessage = BatchEditError(failed.ErrorCode);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            StatusMessage = "批量修改已取消，当前选择已保留。";
+        }
+        catch (Exception)
+        {
+            StatusMessage = "无法打开或提交批量编辑，当前选择已保留。";
+        }
+        finally
+        {
+            EndActivityCoalescing();
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanUndoBatch))]
+    private async Task UndoBatchAsync(CancellationToken cancellationToken)
+    {
+        if (!CanUndoBatch)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        BeginActivityCoalescing();
+        try
+        {
+            LibraryBatchUndoResult result = await _batchEditor.UndoLastAsync(
+                cancellationToken);
+            if (result.Succeeded || _batchActivityPending)
+            {
+                await ReloadAsync(cancellationToken);
+            }
+
+            StatusMessage = result.Succeeded
+                ? $"已撤销上一批修改，恢复 {result.RestoredCount} 项。"
+                : UndoError(result.ErrorCode);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            StatusMessage = "撤销已取消。";
+        }
+        catch (Exception)
+        {
+            StatusMessage = "无法撤销上一批修改。";
+        }
+        finally
+        {
+            EndActivityCoalescing();
+            IsBusy = false;
+        }
+    }
+
     partial void OnSearchTextChanged(string value)
     {
         _ = value;
@@ -266,6 +373,9 @@ public sealed partial class LibraryViewModel : ObservableObject
     {
         _ = value;
         RevealSelectedCommand.NotifyCanExecuteChanged();
+        BatchEditCommand.NotifyCanExecuteChanged();
+        UndoBatchCommand.NotifyCanExecuteChanged();
+        NotifyUndoPresentation();
     }
 
     private async Task ReloadAsync(CancellationToken cancellationToken)
@@ -373,8 +483,37 @@ public sealed partial class LibraryViewModel : ObservableObject
     {
         if (owner.Kind == MetadataOwnerKind.MediaAsset)
         {
+            _batchEditor.InvalidateUndoFor(owner.Id);
             _ = ReloadSafeAsync();
         }
+    }
+
+    private void OnUndoStateChanged(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        NotifyUndoPresentation();
+    }
+
+    private void OnLibraryActivityChanged(
+        object? sender,
+        LibraryActivityEventArgs args)
+    {
+        _ = sender;
+        if (args.Kind is not (
+            LibraryActivityKind.BatchChanged
+            or LibraryActivityKind.UndoCompleted))
+        {
+            return;
+        }
+
+        if (_coalescingBatchActivity)
+        {
+            _batchActivityPending = true;
+            return;
+        }
+
+        _ = ReloadSafeAsync();
     }
 
     private void OnSelectionPropertyChanged(
@@ -385,6 +524,7 @@ public sealed partial class LibraryViewModel : ObservableObject
         if (args.PropertyName == nameof(Selection.SelectedCount))
         {
             UpdateSelectionPresentation();
+            BatchEditCommand.NotifyCanExecuteChanged();
         }
     }
 
@@ -444,4 +584,43 @@ public sealed partial class LibraryViewModel : ObservableObject
         && left.SortDirection == right.SortDirection;
 
     private bool CanRevealSelected() => !IsBusy && SelectedItem is not null;
+
+    private bool CanBatchEdit() => !IsBusy && Selection.IsBatchSelection;
+
+    private void NotifyUndoPresentation()
+    {
+        OnPropertyChanged(nameof(CanUndoBatch));
+        OnPropertyChanged(nameof(UndoAffectedCount));
+        OnPropertyChanged(nameof(UndoBannerVisibility));
+        UndoBatchCommand.NotifyCanExecuteChanged();
+    }
+
+    private void BeginActivityCoalescing()
+    {
+        _coalescingBatchActivity = true;
+        _batchActivityPending = false;
+    }
+
+    private void EndActivityCoalescing()
+    {
+        _coalescingBatchActivity = false;
+        _batchActivityPending = false;
+    }
+
+    private static string BatchEditError(string? errorCode) => errorCode switch
+    {
+        "library.batch.version_conflict" =>
+            "选择中的资料已变化，请刷新后重试。",
+        "library.batch.selection_missing" =>
+            "选择中的资料已不存在，请刷新后重试。",
+        _ => "批量修改未完成，当前选择已保留。"
+    };
+
+    private static string UndoError(string? errorCode) => errorCode switch
+    {
+        "library.batch.undo_conflict" =>
+            "资料已在撤销后发生变化，无法撤销上一批修改。",
+        "library.batch.undo_unavailable" => "当前没有可撤销的批量修改。",
+        _ => "无法撤销上一批修改。"
+    };
 }

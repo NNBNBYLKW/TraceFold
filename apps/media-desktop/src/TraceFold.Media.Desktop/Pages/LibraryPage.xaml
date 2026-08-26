@@ -12,6 +12,30 @@
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Text="筛选并整理软件资料；实际文件名和文件内容保持不变。" />
+                <Border
+                    Margin="0,8,0,0"
+                    Padding="12,8"
+                    AutomationProperties.AutomationId="LibraryBatchUndoBanner"
+                    AutomationProperties.Name="可撤销的正式文件库批量修改"
+                    Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+                    CornerRadius="6"
+                    Visibility="{x:Bind ViewModel.UndoBannerVisibility, Mode=OneWay}">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                        <FontIcon VerticalAlignment="Center" FontSize="16" Glyph="&#xE7A7;" />
+                        <StackPanel Grid.Column="1">
+                            <TextBlock FontWeight="SemiBold" Text="上一批修改可以撤销" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.UndoAffectedCount, Mode=OneWay}" />
+                        </StackPanel>
+                        <Button
+                            Grid.Column="2"
+                            AutomationProperties.AutomationId="LibraryBatchUndoButton"
+                            AutomationProperties.Name="撤销上一批正式文件库修改"
+                            Click="OnUndoBatchClick"
+                            Content="撤销" />
+                    </Grid>
+                </Border>
             </StackPanel>
 
             <Grid
@@ -281,7 +305,7 @@
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 CornerRadius="6"
                 Visibility="{x:Bind ViewModel.BatchBarVisibility, Mode=OneWay}">
-                <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="6">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="6">
                     <TextBlock VerticalAlignment="Center" Text="已选择" />
                     <TextBlock
                         Grid.Column="1"
@@ -290,6 +314,13 @@
                         Text="{x:Bind ViewModel.Selection.SelectedCount, Mode=OneWay}" />
                     <Button
                         Grid.Column="3"
+                        AutomationProperties.AutomationId="LibraryBatchEditButton"
+                        AutomationProperties.Name="批量编辑所选正式文件"
+                        Click="OnBatchEditClick"
+                        Content="批量编辑"
+                        Style="{StaticResource AccentButtonStyle}" />
+                    <Button
+                        Grid.Column="4"
                         AutomationProperties.AutomationId="LibraryClearSelectionButton"
                         AutomationProperties.Name="取消所有正式文件选择"
                         Click="OnClearSelectionClick"
@@ -459,7 +490,7 @@
                         </Border>
                         <TextBlock
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="批量编辑入口将在完整预览与原子提交就绪后启用。"
+                            Text="使用上方“批量编辑”统一修改资料与显示名称；提交前会逐项预览。"
                             TextWrapping="Wrap" />
                         <Button
                             AutomationProperties.AutomationId="LibrarySummaryClearSelectionButton"

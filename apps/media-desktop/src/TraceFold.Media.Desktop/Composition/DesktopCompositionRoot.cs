@@ -34,6 +34,8 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<IConflictDialogService, WindowsConflictDialogService>();
                 services.AddSingleton<IBatchMetadataDialogService,
                     WindowsBatchMetadataDialogService>();
+                services.AddSingleton<ILibraryBatchEditDialogService,
+                    WindowsLibraryBatchEditDialogService>();
                 services.AddSingleton<IBatchIngestConfirmationService,
                     WindowsBatchIngestConfirmationService>();
                 services.AddSingleton<IUiDispatcher>(_ => new DispatcherQueueAdapter(

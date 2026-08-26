@@ -2,6 +2,7 @@ using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Application.Preview;
+using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Desktop.Services;
 using Xunit;
@@ -123,6 +124,157 @@ public sealed class LibraryViewModelTests
         Assert.Equal(1, summary.VideoCount);
     }
 
+    [Fact]
+    public async Task Batch_edit_passes_only_versioned_selection_and_refreshes_once()
+    {
+        var dialog = new RecordingLibraryBatchEditDialogService(applied: true);
+        var library = new RecordingLibraryQueryService();
+        LibraryViewModel viewModel = CreateViewModel(
+            library,
+            dialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        viewModel.Selection.ReplaceFromGrid(
+            viewModel.Items.Take(2),
+            viewModel.Items);
+
+        await viewModel.BatchEditCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, dialog.Selection.Count);
+        Assert.All(dialog.Selection, entry =>
+            Assert.True(entry.ExpectedMetadataVersion >= 0));
+        Assert.Equal(2, library.SearchCallCount);
+    }
+
+    [Fact]
+    public async Task Batch_result_and_activity_notification_are_coalesced_to_one_refresh()
+    {
+        var notifier = new LibraryActivityNotifier();
+        var library = new RecordingLibraryQueryService();
+        var dialog = new RecordingLibraryBatchEditDialogService(
+            applied: true,
+            onShow: () => notifier.Publish(
+                LibraryActivityKind.BatchChanged,
+                library.Result.Select(item => item.Id).ToArray()));
+        LibraryViewModel viewModel = CreateViewModel(
+            library,
+            dialog: dialog,
+            notifier: notifier);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        viewModel.Selection.ReplaceFromGrid(viewModel.Items, viewModel.Items);
+
+        await viewModel.BatchEditCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, library.SearchCallCount);
+    }
+
+    [Fact]
+    public async Task Failed_batch_dialog_preserves_selection_without_reload()
+    {
+        var dialog = new RecordingLibraryBatchEditDialogService(applied: false);
+        var library = new RecordingLibraryQueryService();
+        LibraryViewModel viewModel = CreateViewModel(library, dialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        viewModel.Selection.ReplaceFromGrid(viewModel.Items, viewModel.Items);
+
+        await viewModel.BatchEditCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, viewModel.Selection.SelectedCount);
+        Assert.Equal(1, library.SearchCallCount);
+    }
+
+    [Fact]
+    public async Task Successful_batch_refresh_drops_assets_no_longer_matching_query()
+    {
+        var library = new RecordingLibraryQueryService();
+        var dialog = new RecordingLibraryBatchEditDialogService(
+            applied: true,
+            onShow: () => library.Result.RemoveAt(1));
+        LibraryViewModel viewModel = CreateViewModel(library, dialog: dialog);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        viewModel.Selection.ReplaceFromGrid(viewModel.Items, viewModel.Items);
+
+        await viewModel.BatchEditCommand.ExecuteAsync(null);
+
+        Assert.Single(viewModel.Items);
+        Assert.Equal(1, viewModel.Selection.SelectedCount);
+    }
+
+    [Fact]
+    public void Undo_state_change_hides_the_banner()
+    {
+        var batchEditor = new RecordingLibraryBatchEditorService(
+            new LibraryBatchUndoState(true, 2));
+        LibraryViewModel viewModel = CreateViewModel(
+            new RecordingLibraryQueryService(),
+            batchEditor: batchEditor);
+
+        batchEditor.PublishUndoState(LibraryBatchUndoState.Unavailable);
+
+        Assert.False(viewModel.CanUndoBatch);
+    }
+
+    [Fact]
+    public async Task Undo_success_refreshes_once_and_reports_restored_count()
+    {
+        var library = new RecordingLibraryQueryService();
+        var batchEditor = new RecordingLibraryBatchEditorService(
+            new LibraryBatchUndoState(true, 2),
+            new LibraryBatchUndoResult(true, 2, null));
+        LibraryViewModel viewModel = CreateViewModel(
+            library,
+            batchEditor: batchEditor);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+
+        await viewModel.UndoBatchCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, library.SearchCallCount);
+        Assert.Contains("已撤销", viewModel.StatusMessage, StringComparison.Ordinal);
+        Assert.False(viewModel.CanUndoBatch);
+    }
+
+    [Fact]
+    public async Task Undo_conflict_consumes_and_hides_the_banner()
+    {
+        var batchEditor = new RecordingLibraryBatchEditorService(
+            new LibraryBatchUndoState(true, 2),
+            new LibraryBatchUndoResult(
+                false,
+                0,
+                "library.batch.undo_conflict"));
+        LibraryViewModel viewModel = CreateViewModel(
+            new RecordingLibraryQueryService(),
+            batchEditor: batchEditor);
+
+        await viewModel.UndoBatchCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.CanUndoBatch);
+        Assert.Contains("无法撤销", viewModel.StatusMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Unrelated_single_save_preserves_batch_undo()
+    {
+        var library = new RecordingLibraryQueryService();
+        Guid protectedAssetId = library.Result[1].Id;
+        var batchEditor = new RecordingLibraryBatchEditorService(
+            new LibraryBatchUndoState(true, 1),
+            protectedAssetId: protectedAssetId);
+        LibraryViewModel viewModel = CreateViewModel(
+            library,
+            batchEditor: batchEditor);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        await viewModel.SelectAsync(
+            viewModel.Items[0],
+            TestContext.Current.CancellationToken);
+
+        viewModel.Inspector.Metadata.DisplayName = "单项修改";
+        await viewModel.Inspector.Metadata.FlushAsync(
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(library.Result[0].Id, batchEditor.InvalidatedAssetIds);
+        Assert.True(viewModel.CanUndoBatch);
+    }
+
     private static LibraryCardViewModel SummaryCard(MediaKind kind) =>
         new(new LibraryAssetDto(
             Guid.NewGuid(),
@@ -135,7 +287,10 @@ public sealed class LibraryViewModelTests
         ILibraryQueryService library,
         IAssetRevealService? reveal = null,
         ILibrarySortPreferenceService? sortPreferences = null,
-        IMetadataEditorService? metadataService = null)
+        IMetadataEditorService? metadataService = null,
+        ILibraryBatchEditDialogService? dialog = null,
+        ILibraryBatchEditorService? batchEditor = null,
+        ILibraryActivityNotifier? notifier = null)
     {
         var preview = new FixedPreviewResolver();
         return new LibraryViewModel(
@@ -148,7 +303,11 @@ public sealed class LibraryViewModelTests
                 CreateEditor(metadataService ?? new RecordingMetadataGateway()),
                 preview),
             reveal ?? new FakeRevealService(),
-            preview);
+            preview,
+            dialog ?? new RecordingLibraryBatchEditDialogService(false),
+            batchEditor ?? new RecordingLibraryBatchEditorService(
+                LibraryBatchUndoState.Unavailable),
+            notifier ?? new LibraryActivityNotifier());
     }
 
     private static MetadataEditorViewModel CreateEditor(
@@ -157,24 +316,36 @@ public sealed class LibraryViewModelTests
 
     private sealed class RecordingLibraryQueryService : ILibraryQueryService
     {
-        public IReadOnlyList<LibraryAssetDto> Result { get; } =
+        public List<LibraryAssetDto> Result { get; } =
         [
             new LibraryAssetDto(
                 Guid.Parse("11111111-1111-1111-1111-111111111111"),
                 "photo.jpg",
                 "杭州夜景",
                 MediaKind.Image,
-                DateTimeOffset.Parse("2026-08-22T10:00:00Z"))
+                DateTimeOffset.Parse("2026-08-22T10:00:00Z"),
+                3),
+            new LibraryAssetDto(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                "video.mp4",
+                "杭州延时",
+                MediaKind.Video,
+                DateTimeOffset.Parse("2026-08-23T10:00:00Z"),
+                4)
         ];
 
         public LibraryQuery? LastQuery { get; private set; }
+
+        public int SearchCallCount { get; private set; }
 
         public Task<IReadOnlyList<LibraryAssetDto>> SearchAsync(
             LibraryQuery query,
             CancellationToken cancellationToken)
         {
+            SearchCallCount++;
             LastQuery = query;
-            return Task.FromResult(Result);
+            return Task.FromResult<IReadOnlyList<LibraryAssetDto>>(
+                Result.ToArray());
         }
 
         public Task<LibraryAssetDetailsDto?> GetDetailsAsync(
@@ -276,5 +447,85 @@ public sealed class LibraryViewModelTests
             TimeSpan delay,
             CancellationToken cancellationToken) =>
             Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+    }
+
+    private sealed class RecordingLibraryBatchEditDialogService(
+        bool applied,
+        Action? onShow = null) : ILibraryBatchEditDialogService
+    {
+        public IReadOnlyList<LibrarySelectionEntry> Selection { get; private set; } = [];
+
+        public Task<LibraryBatchEditDialogResult> ShowAsync(
+            IReadOnlyList<LibrarySelectionEntry> selection,
+            CancellationToken cancellationToken)
+        {
+            Selection = selection.ToArray();
+            onShow?.Invoke();
+            LibraryBatchApplyResult? result = applied
+                ? new(true, selection.Count, 0, 0, true, null)
+                : null;
+            return Task.FromResult(new LibraryBatchEditDialogResult(
+                applied,
+                result));
+        }
+    }
+
+    private sealed class RecordingLibraryBatchEditorService : ILibraryBatchEditorService
+    {
+        private LibraryBatchUndoState _undoState;
+        private readonly LibraryBatchUndoResult _undoResult;
+        private readonly Guid? _protectedAssetId;
+
+        public RecordingLibraryBatchEditorService(
+            LibraryBatchUndoState undoState,
+            LibraryBatchUndoResult? undoResult = null,
+            Guid? protectedAssetId = null)
+        {
+            _undoState = undoState;
+            _undoResult = undoResult
+                ?? new LibraryBatchUndoResult(false, 0, "library.batch.undo_unavailable");
+            _protectedAssetId = protectedAssetId;
+        }
+
+        public LibraryBatchUndoState UndoState => _undoState;
+
+        public List<Guid> InvalidatedAssetIds { get; } = [];
+
+        public event EventHandler? UndoStateChanged;
+
+        public void PublishUndoState(LibraryBatchUndoState state)
+        {
+            _undoState = state;
+            UndoStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public Task<LibraryBatchPrepareResult> PrepareAsync(
+            IReadOnlyList<LibrarySelectionEntry> selection,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public LibraryBatchPreviewDto Preview(
+            LibraryBatchEditorDto editor,
+            LibraryBatchEditDraft draft) => throw new NotSupportedException();
+
+        public Task<LibraryBatchApplyResult> ApplyAsync(
+            IReadOnlyList<LibrarySelectionEntry> selection,
+            LibraryBatchEditDraft draft,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<LibraryBatchUndoResult> UndoLastAsync(
+            CancellationToken cancellationToken)
+        {
+            PublishUndoState(LibraryBatchUndoState.Unavailable);
+            return Task.FromResult(_undoResult);
+        }
+
+        public void InvalidateUndoFor(Guid assetId)
+        {
+            InvalidatedAssetIds.Add(assetId);
+            if (_protectedAssetId == assetId)
+            {
+                PublishUndoState(LibraryBatchUndoState.Unavailable);
+            }
+        }
     }
 }

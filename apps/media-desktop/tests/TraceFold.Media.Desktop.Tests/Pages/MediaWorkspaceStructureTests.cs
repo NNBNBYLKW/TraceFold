@@ -271,6 +271,57 @@ public sealed class MediaWorkspaceStructureTests
     }
 
     [Fact]
+    public void Library_batch_dialog_has_two_tabs_rules_preview_and_safe_primary_action()
+    {
+        string xaml = File.ReadAllText(
+            DesktopSource("Dialogs", "LibraryBatchEditDialog.xaml"));
+
+        foreach (string id in new[]
+        {
+            "LibraryBatchEditDialog",
+            "LibraryBatchMetadataTab",
+            "LibraryBatchNamingTab",
+            "LibraryNamingPresetList",
+            "LibraryNamingRuleList",
+            "LibraryNamingPreviewList",
+            "LibraryBatchApplyButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                xaml,
+                StringComparison.Ordinal);
+            AssertElementHasAccessibleName(xaml, id);
+        }
+
+        Assert.Contains(
+            "仅修改软件中的资料和显示名称",
+            xaml,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Library_page_exposes_batch_edit_and_undo_controls()
+    {
+        string xaml = File.ReadAllText(
+            DesktopSource("Pages", "LibraryPage.xaml"));
+
+        foreach (string id in new[]
+        {
+            "LibraryBatchEditButton",
+            "LibraryBatchUndoBanner",
+            "LibraryBatchUndoButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                xaml,
+                StringComparison.Ordinal);
+            AssertElementHasAccessibleName(xaml, id);
+        }
+    }
+
+    [Fact]
     public async Task Taxonomy_and_settings_pages_expose_stable_stage_two_controls()
     {
         string taxonomy = await File.ReadAllTextAsync(

@@ -109,6 +109,17 @@ public sealed partial class LibraryBatchEditDialogViewModel : ObservableObject
         _ => "批量修改未完成，当前输入已保留，可直接重试。"
     };
 
+    public Task ApplyDraftAsync(CancellationToken cancellationToken) =>
+        ApplyAsync(cancellationToken);
+
+    public void ReportInputError(string message)
+    {
+        StatusMessage = string.IsNullOrWhiteSpace(message)
+            ? "输入无效，请检查后重试。"
+            : message;
+        HasFocusedProblem = true;
+    }
+
     partial void OnIsSubmittingChanged(bool value)
     {
         OnPropertyChanged(nameof(CanApply));
