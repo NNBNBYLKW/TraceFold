@@ -48,6 +48,8 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<InboxBatchSummaryViewModel>();
                 services.AddSingleton<InboxViewModel>();
                 services.AddSingleton<LibraryInspectorViewModel>();
+                services.AddSingleton<LibrarySelectionViewModel>();
+                services.AddSingleton<LibraryFilterViewModel>();
                 services.AddSingleton<LibraryViewModel>();
                 services.AddSingleton<TaxonomyViewModel>();
                 services.AddSingleton<IProcessStarter, WindowsProcessStarter>();

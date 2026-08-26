@@ -25,6 +25,13 @@ public sealed class LibraryCardViewModel(
 
     public string ActualFilename => Card.ActualFilename;
 
+    public long MetadataVersion => Card.MetadataVersion;
+
+    public MediaKind MediaKind => Card.MediaKind;
+
+    public LibrarySelectionEntry SelectionEntry(int ordinal) =>
+        new(Id, MetadataVersion, ordinal);
+
     public ImageSource? ThumbnailSource => _thumbnailUri is null
         ? null
         : _thumbnailSource ??= new BitmapImage(_thumbnailUri);

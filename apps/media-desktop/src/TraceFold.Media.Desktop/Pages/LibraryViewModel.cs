@@ -12,18 +12,27 @@ namespace TraceFold.Media.Desktop.Pages;
 public sealed partial class LibraryViewModel : ObservableObject
 {
     private readonly ILibraryQueryService _library;
+    private readonly ILibrarySortPreferenceService _sortPreferences;
     private readonly IAssetRevealService _reveal;
     private readonly IMediaPreviewResolver _previewResolver;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private bool _settingSelection;
+    private bool _settingSearch;
+    private bool _sortLoaded;
 
     public LibraryViewModel(
         ILibraryQueryService library,
+        ILibrarySortPreferenceService sortPreferences,
+        LibrarySelectionViewModel selection,
+        LibraryFilterViewModel filter,
         LibraryInspectorViewModel inspector,
         IAssetRevealService reveal,
         IMediaPreviewResolver previewResolver)
     {
         _library = library;
+        _sortPreferences = sortPreferences;
+        Selection = selection;
+        Filter = filter;
         Inspector = inspector;
         _reveal = reveal;
         _previewResolver = previewResolver;
@@ -33,6 +42,10 @@ public sealed partial class LibraryViewModel : ObservableObject
     public ObservableCollection<LibraryCardViewModel> Items { get; } = [];
 
     public LibraryInspectorViewModel Inspector { get; }
+
+    public LibrarySelectionViewModel Selection { get; }
+
+    public LibraryFilterViewModel Filter { get; }
 
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
@@ -46,11 +59,87 @@ public sealed partial class LibraryViewModel : ObservableObject
     [ObservableProperty]
     public partial string StatusMessage { get; private set; } = string.Empty;
 
-    public Task LoadAsync(CancellationToken cancellationToken) =>
-        ReloadAsync(cancellationToken);
+    public async Task LoadAsync(CancellationToken cancellationToken)
+    {
+        if (!_sortLoaded)
+        {
+            LibrarySortPreference preference =
+                await _sortPreferences.LoadAsync(cancellationToken);
+            Filter.UpdateSort(preference.Field, preference.Direction);
+            _sortLoaded = true;
+        }
 
-    public Task ApplySearchAsync(CancellationToken cancellationToken) =>
-        ReloadAsync(cancellationToken);
+        await ReloadAsync(cancellationToken);
+    }
+
+    public async Task ApplySearchAsync(CancellationToken cancellationToken)
+    {
+        LibraryQuery previous = Filter.AppliedQuery;
+        LibraryQuery query = Filter.UpdateSearch(SearchText);
+        if (!QueriesEqual(previous, query))
+        {
+            await ClearSelectionForQueryChangeAsync(cancellationToken);
+        }
+
+        await ReloadAsync(cancellationToken);
+    }
+
+    public async Task ApplyFilterAsync(
+        LibraryQuery query,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        LibraryQuery previous = Filter.AppliedQuery;
+        Filter.SetAppliedQuery(query);
+        _settingSearch = true;
+        try
+        {
+            SearchText = query.SearchText ?? string.Empty;
+        }
+        finally
+        {
+            _settingSearch = false;
+        }
+
+        if (!QueriesEqual(previous, query))
+        {
+            await ClearSelectionForQueryChangeAsync(cancellationToken);
+        }
+
+        await ReloadAsync(cancellationToken);
+    }
+
+    public async Task ChangeSortAsync(
+        LibrarySortField field,
+        LibrarySortDirection direction,
+        CancellationToken cancellationToken)
+    {
+        var preference = new LibrarySortPreference(field, direction);
+        string? error = await _sortPreferences.SaveAsync(
+            preference,
+            cancellationToken);
+        if (error is not null)
+        {
+            StatusMessage = $"保存排序设置失败：{error}";
+            return;
+        }
+
+        Filter.UpdateSort(field, direction);
+        await ReloadAsync(cancellationToken);
+    }
+
+    public void ReplaceSelectionFromGrid(
+        IEnumerable<LibraryCardViewModel> selected)
+    {
+        Selection.ReplaceFromGrid(selected, Items);
+        SetSelectedItemSilently(Selection.SingleSelectedItem);
+    }
+
+    public void ClearSelection()
+    {
+        Selection.Clear();
+        SetSelectedItemSilently(null);
+    }
 
     public async Task SelectAsync(
         LibraryCardViewModel? item,
@@ -124,7 +213,10 @@ public sealed partial class LibraryViewModel : ObservableObject
     partial void OnSearchTextChanged(string value)
     {
         _ = value;
-        _ = ReloadSafeAsync();
+        if (!_settingSearch)
+        {
+            _ = ApplySearchSafeAsync();
+        }
     }
 
     partial void OnSelectedItemChanged(LibraryCardViewModel? value)
@@ -148,18 +240,7 @@ public sealed partial class LibraryViewModel : ObservableObject
         {
             Guid? selectedId = SelectedItem?.Id;
             IReadOnlyList<LibraryAssetDto> cards = await _library.SearchAsync(
-                LibraryQuery.Create(
-                    SearchText,
-                    LibraryMediaFilter.All,
-                    [],
-                    null,
-                    [],
-                    false,
-                    false,
-                    false,
-                    LibraryDisplayNameFilter.All,
-                    LibrarySortField.CreatedAt,
-                    LibrarySortDirection.Descending),
+                Filter.AppliedQuery,
                 cancellationToken);
             var refreshed = new List<LibraryCardViewModel>(cards.Count);
             foreach (LibraryAssetDto card in cards)
@@ -191,18 +272,14 @@ public sealed partial class LibraryViewModel : ObservableObject
                 Items.Add(item);
             }
 
-            if (selectedId.HasValue)
+            Selection.Reconcile(Items);
+            LibraryCardViewModel? selected = Selection.SingleSelectedItem;
+            if (selected is null && selectedId.HasValue && Selection.SelectedCount == 0)
             {
-                _settingSelection = true;
-                try
-                {
-                    SelectedItem = Items.FirstOrDefault(item => item.Id == selectedId.Value);
-                }
-                finally
-                {
-                    _settingSelection = false;
-                }
+                selected = Items.FirstOrDefault(item => item.Id == selectedId.Value);
             }
+
+            SetSelectedItemSilently(selected);
         }
         finally
         {
@@ -215,6 +292,18 @@ public sealed partial class LibraryViewModel : ObservableObject
         try
         {
             await ReloadAsync(CancellationToken.None);
+        }
+        catch (Exception error)
+        {
+            StatusMessage = $"刷新正式文件库失败：{error.Message}";
+        }
+    }
+
+    private async Task ApplySearchSafeAsync()
+    {
+        try
+        {
+            await ApplySearchAsync(CancellationToken.None);
         }
         catch (Exception error)
         {
@@ -241,6 +330,44 @@ public sealed partial class LibraryViewModel : ObservableObject
             _ = ReloadSafeAsync();
         }
     }
+
+    private async Task ClearSelectionForQueryChangeAsync(
+        CancellationToken cancellationToken)
+    {
+        bool hadSelection = Selection.SelectedCount > 0;
+        ClearSelection();
+        await Inspector.ResetAsync(cancellationToken);
+        if (hadSelection)
+        {
+            StatusMessage = "查询条件已变化，已取消选择。";
+        }
+    }
+
+    private void SetSelectedItemSilently(LibraryCardViewModel? item)
+    {
+        _settingSelection = true;
+        try
+        {
+            SelectedItem = item;
+        }
+        finally
+        {
+            _settingSelection = false;
+        }
+    }
+
+    private static bool QueriesEqual(LibraryQuery left, LibraryQuery right) =>
+        StringComparer.Ordinal.Equals(left.SearchText, right.SearchText)
+        && left.Media == right.Media
+        && left.AuthorIds.SequenceEqual(right.AuthorIds)
+        && left.SeriesId == right.SeriesId
+        && left.TagIds.SequenceEqual(right.TagIds)
+        && left.MissingAuthors == right.MissingAuthors
+        && left.MissingSeries == right.MissingSeries
+        && left.MissingTags == right.MissingTags
+        && left.DisplayName == right.DisplayName
+        && left.SortField == right.SortField
+        && left.SortDirection == right.SortDirection;
 
     private bool CanRevealSelected() => !IsBusy && SelectedItem is not null;
 }
