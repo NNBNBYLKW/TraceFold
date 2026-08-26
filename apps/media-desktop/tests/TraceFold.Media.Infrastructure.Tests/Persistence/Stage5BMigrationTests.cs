@@ -8,6 +8,27 @@ namespace TraceFold.Media.Infrastructure.Tests.Persistence;
 public sealed class Stage5BMigrationTests
 {
     [Fact]
+    public async Task Stage5B_preset_migration_preserves_stage4_assets_and_settings()
+    {
+        await using TestMediaDatabase database =
+            await TestMediaDatabase.CreateAtMigrationAsync(
+                "20260823230000_Stage4ConflictRecovery");
+        await database.InsertStage1SettingsAsync(
+            "C:\\inbox",
+            "C:\\library",
+            "C:\\work");
+        await database.SeedFormalAssetAsync("preserved.jpg", null, 7);
+
+        await database.MigrateAsync();
+
+        Assert.Equal(1L, await database.ScalarAsync<long>(
+            "SELECT COUNT(*) FROM media_assets"));
+        Assert.Equal("C:\\library", await database.ScalarAsync<string>(
+            "SELECT LibraryDirectory FROM app_settings WHERE Id = 1"));
+        Assert.Contains("naming_presets", await database.ReadTableNamesAsync());
+    }
+
+    [Fact]
     public async Task Stage5B_query_migration_preserves_stage4_settings()
     {
         await using TestMediaDatabase database =

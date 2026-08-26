@@ -50,6 +50,8 @@ public sealed class MediaDesktopDbContext(
     internal DbSet<IngestCleanupEntryRow> IngestCleanupEntries =>
         Set<IngestCleanupEntryRow>();
 
+    internal DbSet<NamingPresetRow> NamingPresets => Set<NamingPresetRow>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureAppSettings(modelBuilder.Entity<AppSettingsRow>());
@@ -70,6 +72,7 @@ public sealed class MediaDesktopDbContext(
         ConfigureProcessingJob(modelBuilder.Entity<ProcessingJobRow>());
         ConfigureProcessedOutput(modelBuilder.Entity<ProcessedOutputRow>());
         ConfigureIngestCleanupEntry(modelBuilder.Entity<IngestCleanupEntryRow>());
+        ConfigureNamingPreset(modelBuilder.Entity<NamingPresetRow>());
     }
 
     private static void ConfigureAppSettings(EntityTypeBuilder<AppSettingsRow> row)
@@ -447,6 +450,19 @@ public sealed class MediaDesktopDbContext(
             .WithMany(item => item.CleanupEntries)
             .HasForeignKey(item => item.OperationId)
             .OnDelete(DeleteBehavior.Cascade);
+        UseSnakeCaseColumns(row);
+    }
+
+    private static void ConfigureNamingPreset(
+        EntityTypeBuilder<NamingPresetRow> row)
+    {
+        row.ToTable("naming_presets");
+        row.HasKey(item => item.Id);
+        row.Property(item => item.DisplayName).IsRequired().HasMaxLength(512);
+        row.Property(item => item.NormalizedName).IsRequired().HasMaxLength(512);
+        row.Property(item => item.Source).IsRequired().HasMaxLength(32);
+        row.Property(item => item.RulesJson).IsRequired();
+        row.HasIndex(item => item.NormalizedName).IsUnique();
         UseSnakeCaseColumns(row);
     }
 

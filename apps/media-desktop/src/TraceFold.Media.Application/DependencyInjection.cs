@@ -50,6 +50,9 @@ public static class DependencyInjection
         services.AddSingleton<NamingRuleEngine>();
         services.AddSingleton<INamingRuleEngine>(provider =>
             provider.GetRequiredService<NamingRuleEngine>());
+        services.AddSingleton<NamingPresetService>();
+        services.AddSingleton<INamingPresetService>(provider =>
+            provider.GetRequiredService<NamingPresetService>());
         services.AddSingleton<MediaPreviewResolver>();
         services.AddSingleton<IMediaPreviewResolver>(provider =>
             provider.GetRequiredService<MediaPreviewResolver>());
