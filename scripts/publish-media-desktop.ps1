@@ -237,12 +237,14 @@ try {
     Invoke-DotNet -DotNetArguments @(
         'restore', $solution,
         '--source', $localPackageSource,
+        "-p:RestorePackagesPath=$localPackageSource",
         '--disable-build-servers',
         '--ignore-failed-sources')
     Invoke-DotNet -DotNetArguments @(
         'test', $solution,
         '-c', 'Release',
         '--no-restore',
+        "-p:RestorePackagesPath=$localPackageSource",
         '--disable-build-servers')
 
     New-Item -ItemType Directory -Path $stagingRoot | Out-Null
@@ -260,6 +262,7 @@ try {
         "-p:InformationalVersion=$informationalVersion",
         "-p:TraceFoldFfmpegSourceRoot=$ffmpegRoot",
         '--no-restore',
+        "-p:RestorePackagesPath=$localPackageSource",
         '--disable-build-servers',
         '-o', $stagingPackage)
 

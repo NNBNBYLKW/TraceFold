@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using TraceFold.Media.Desktop.Diagnostics;
 using Xunit;
@@ -6,6 +7,18 @@ namespace TraceFold.Media.Desktop.Tests.Diagnostics;
 
 public sealed class PackageProbeRefactorTests
 {
+    [Fact]
+    public void Offline_publish_uses_the_verified_cache_as_restore_target()
+    {
+        string script = File.ReadAllText(RepositoryFile(
+            "scripts",
+            "publish-media-desktop.ps1"));
+
+        Assert.Equal(
+            3,
+            Count(script, "\"-p:RestorePackagesPath=$localPackageSource\""));
+    }
+
     [Theory]
     [InlineData("stage5a-batch-extra")]
     [InlineData("stage5b-library-extra")]
@@ -68,5 +81,32 @@ public sealed class PackageProbeRefactorTests
         {
             Assert.True(result.RootElement.TryGetProperty(property, out _), property);
         }
+    }
+
+    private static string RepositoryFile(
+        string folder,
+        string filename,
+        [CallerFilePath] string testFile = "") =>
+        Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(testFile)!,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            folder,
+            filename));
+
+    private static int Count(string value, string search)
+    {
+        int count = 0;
+        int index = 0;
+        while ((index = value.IndexOf(search, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += search.Length;
+        }
+
+        return count;
     }
 }
