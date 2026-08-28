@@ -26,6 +26,7 @@ public sealed partial class LibraryViewModel : ObservableObject
     private bool _sortLoaded;
     private bool _coalescingBatchActivity;
     private bool _batchActivityPending;
+    private LibraryQuery? _lastLoadedQuery;
 
     public LibraryViewModel(
         ILibraryQueryService library,
@@ -163,7 +164,12 @@ public sealed partial class LibraryViewModel : ObservableObject
     public async Task ApplyCurrentFilterAsync(CancellationToken cancellationToken)
     {
         NotifyFilterPresentation();
-        await ClearSelectionForQueryChangeAsync(cancellationToken);
+        if (_lastLoadedQuery is not null
+            && !QueriesEqual(_lastLoadedQuery, Filter.AppliedQuery))
+        {
+            await ClearSelectionForQueryChangeAsync(cancellationToken);
+        }
+
         await ReloadAsync(cancellationToken);
     }
 
@@ -384,8 +390,9 @@ public sealed partial class LibraryViewModel : ObservableObject
         try
         {
             Guid? selectedId = SelectedItem?.Id;
+            LibraryQuery query = Filter.AppliedQuery;
             IReadOnlyList<LibraryAssetDto> cards = await _library.SearchAsync(
-                Filter.AppliedQuery,
+                query,
                 cancellationToken);
             var refreshed = new List<LibraryCardViewModel>(cards.Count);
             foreach (LibraryAssetDto card in cards)
@@ -431,6 +438,7 @@ public sealed partial class LibraryViewModel : ObservableObject
                 }
 
                 SetSelectedItemSilently(selected);
+                _lastLoadedQuery = query;
             }
             finally
             {
@@ -618,9 +626,9 @@ public sealed partial class LibraryViewModel : ObservableObject
 
     private static string UndoError(string? errorCode) => errorCode switch
     {
-        "library.batch.undo_conflict" =>
+        "library.batch.undo.version_conflict" =>
             "资料已在撤销后发生变化，无法撤销上一批修改。",
-        "library.batch.undo_unavailable" => "当前没有可撤销的批量修改。",
+        "library.batch.undo.unavailable" => "当前没有可撤销的批量修改。",
         _ => "无法撤销上一批修改。"
     };
 }

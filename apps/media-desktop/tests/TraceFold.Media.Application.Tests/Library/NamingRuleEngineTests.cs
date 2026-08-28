@@ -174,6 +174,29 @@ public sealed class NamingRuleEngineTests
         }
     }
 
+    [Theory]
+    [InlineData(
+        NamingCaseMode.Upper,
+        "abc-Привет-Σίσυφος-中文.jpg",
+        "ABC-Привет-Σίσυφος-中文")]
+    [InlineData(
+        NamingCaseMode.Lower,
+        "ABC-Привет-Σίσυφος-中文.jpg",
+        "abc-Привет-Σίσυφος-中文")]
+    public void Case_conversion_changes_only_english_ascii_letters(
+        NamingCaseMode mode,
+        string filename,
+        string expected)
+    {
+        NamingPreviewRow row = Preview(
+            filename,
+            null,
+            NamingSource.ActualFilename,
+            [new CaseNamingRule(mode)]);
+
+        Assert.Equal(expected, row.GeneratedName);
+    }
+
     [Fact]
     public void Sequence_supports_prefix_suffix_start_step_and_padding()
     {

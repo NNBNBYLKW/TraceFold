@@ -48,6 +48,24 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
     public IReadOnlyList<BatchTermCoverageOptionViewModel> RemoveTags =>
         RemoveTagPicker.AvailableExisting;
 
+    public IReadOnlyList<TaxonomyTermDto> ExistingTermSnapshots =>
+        AddAuthorPicker.SelectedChoices
+            .Concat(AddTagPicker.SelectedChoices)
+            .Concat(ReplaceAuthorPicker.SelectedChoices)
+            .Concat(ReplaceSeriesPicker.SelectedChoices)
+            .Concat(ReplaceTagPicker.SelectedChoices)
+            .Select(choice => choice.ExistingTerm)
+            .Where(term => term is not null)
+            .Cast<TaxonomyTermDto>()
+            .Concat(RemoveAuthors
+                .Where(option => option.IsSelected)
+                .Select(option => option.Coverage.Term))
+            .Concat(RemoveTags
+                .Where(option => option.IsSelected)
+                .Select(option => option.Coverage.Term))
+            .DistinctBy(term => term.Id)
+            .ToArray();
+
     [ObservableProperty]
     public partial BatchMetadataMode Mode { get; set; } = BatchMetadataMode.Add;
 
@@ -315,15 +333,15 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
     private static BatchTaxonomyReference[] PreviewableValues(
         BatchTaxonomyPickerViewModel picker) =>
         picker.SelectedChoices
-            .Select(choice => choice.Value.ExistingId.HasValue
-                ? BatchTaxonomyReference.New(
-                    choice.Value.Kind,
-                    choice.DisplayText)
-                : choice.Value)
+            .Select(choice => choice.Value)
             .ToArray();
 
     private void Observe(BatchTaxonomyPickerViewModel picker) =>
-        picker.SelectedChoices.CollectionChanged += (_, _) => RaiseDraftChanged();
+        picker.SelectedChoices.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(ExistingTermSnapshots));
+            RaiseDraftChanged();
+        };
 
     private void ObserveOptions(
         IEnumerable<BatchTermCoverageOptionViewModel> options)
@@ -349,6 +367,7 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
     {
         if (e.PropertyName == nameof(BatchTermCoverageOptionViewModel.IsSelected))
         {
+            OnPropertyChanged(nameof(ExistingTermSnapshots));
             RaiseDraftChanged();
         }
     }

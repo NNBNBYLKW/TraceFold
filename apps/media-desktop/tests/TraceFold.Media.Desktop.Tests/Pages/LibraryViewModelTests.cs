@@ -92,6 +92,34 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Current_filter_clears_selection_only_when_query_changes()
+    {
+        var library = new RecordingLibraryQueryService();
+        LibraryViewModel viewModel = CreateViewModel(library);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+        viewModel.Selection.ReplaceFromGrid(
+            viewModel.Items,
+            viewModel.Items);
+        viewModel.Filter.BeginEdit();
+        viewModel.Filter.ApplyDraft();
+
+        await viewModel.ApplyCurrentFilterAsync(
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, viewModel.Selection.SelectedCount);
+        Assert.NotEqual("查询条件已变化，已取消选择。", viewModel.StatusMessage);
+
+        viewModel.Filter.BeginEdit();
+        viewModel.Filter.MissingTags = true;
+        viewModel.Filter.ApplyDraft();
+        await viewModel.ApplyCurrentFilterAsync(
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, viewModel.Selection.SelectedCount);
+        Assert.Equal("查询条件已变化，已取消选择。", viewModel.StatusMessage);
+    }
+
+    [Fact]
     public async Task Load_reads_persisted_sort_only_once()
     {
         var sort = new RecordingSortPreferenceService(
@@ -232,15 +260,23 @@ public sealed class LibraryViewModelTests
         Assert.False(viewModel.CanUndoBatch);
     }
 
-    [Fact]
-    public async Task Undo_conflict_consumes_and_hides_the_banner()
+    [Theory]
+    [InlineData(
+        "library.batch.undo.version_conflict",
+        "资料已在撤销后发生变化，无法撤销上一批修改。")]
+    [InlineData(
+        "library.batch.undo.unavailable",
+        "当前没有可撤销的批量修改。")]
+    public async Task Stable_undo_errors_are_mapped_and_consume_the_banner(
+        string errorCode,
+        string expectedMessage)
     {
         var batchEditor = new RecordingLibraryBatchEditorService(
             new LibraryBatchUndoState(true, 2),
             new LibraryBatchUndoResult(
                 false,
                 0,
-                "library.batch.undo_conflict"));
+                errorCode));
         LibraryViewModel viewModel = CreateViewModel(
             new RecordingLibraryQueryService(),
             batchEditor: batchEditor);
@@ -248,7 +284,7 @@ public sealed class LibraryViewModelTests
         await viewModel.UndoBatchCommand.ExecuteAsync(null);
 
         Assert.False(viewModel.CanUndoBatch);
-        Assert.Contains("无法撤销", viewModel.StatusMessage, StringComparison.Ordinal);
+        Assert.Equal(expectedMessage, viewModel.StatusMessage);
     }
 
     [Fact]

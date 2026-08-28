@@ -51,6 +51,7 @@
                         <TextBlock FontWeight="SemiBold" Text="操作方式" />
                         <ListView
                             x:Name="MetadataModeList"
+                            AutomationProperties.AutomationId="LibraryBatchMetadataModeList"
                             AutomationProperties.Name="选择资料批量操作方式"
                             SelectedIndex="0"
                             SelectionChanged="OnMetadataModeSelectionChanged">
@@ -73,6 +74,7 @@
                                 <TextBlock FontWeight="SemiBold" Text="作者" />
                                 <AutoSuggestBox
                                     x:Name="MetadataFirstInput"
+                                    AutomationProperties.AutomationId="LibraryBatchAddAuthorInput"
                                     AutomationProperties.Name="输入要添加的作者"
                                     ItemsSource="{x:Bind ViewModel.Metadata.AddAuthorPicker.Suggestions, Mode=OneWay}"
                                     PlaceholderText="输入作者名后按 Enter"
@@ -92,6 +94,7 @@
                                 </ItemsControl>
                                 <TextBlock FontWeight="SemiBold" Text="内容标签" />
                                 <AutoSuggestBox
+                                    AutomationProperties.AutomationId="LibraryBatchAddTagInput"
                                     AutomationProperties.Name="输入要添加的内容标签"
                                     ItemsSource="{x:Bind ViewModel.Metadata.AddTagPicker.Suggestions, Mode=OneWay}"
                                     PlaceholderText="输入标签后按 Enter"
@@ -123,7 +126,10 @@
                                     Text="仅列出当前选择中已使用的作者和标签。"
                                     TextWrapping="Wrap" />
                                 <TextBlock FontWeight="SemiBold" Text="作者" />
-                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.RemoveAuthors, Mode=OneWay}">
+                                <ItemsControl
+                                    AutomationProperties.AutomationId="LibraryBatchRemoveAuthorList"
+                                    AutomationProperties.Name="选择要移除的作者"
+                                    ItemsSource="{x:Bind ViewModel.Metadata.RemoveAuthors, Mode=OneWay}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="dialogs:BatchTermCoverageOptionViewModel">
                                             <CheckBox Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
@@ -131,7 +137,10 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                                 <TextBlock FontWeight="SemiBold" Text="内容标签" />
-                                <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.RemoveTags, Mode=OneWay}">
+                                <ItemsControl
+                                    AutomationProperties.AutomationId="LibraryBatchRemoveTagList"
+                                    AutomationProperties.Name="选择要移除的内容标签"
+                                    ItemsSource="{x:Bind ViewModel.Metadata.RemoveTags, Mode=OneWay}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="dialogs:BatchTermCoverageOptionViewModel">
                                             <CheckBox Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
@@ -153,10 +162,11 @@
                                     TextWrapping="Wrap" />
 
                                 <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="12">
-                                    <CheckBox Content="替换作者" IsChecked="{x:Bind ViewModel.Metadata.ReplaceAuthorsEnabled, Mode=TwoWay}" />
-                                    <CheckBox Grid.Column="1" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearAuthors, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceAuthorsEnabled, Mode=OneWay}" />
+                                    <CheckBox AutomationProperties.AutomationId="LibraryBatchReplaceAuthorsToggle" AutomationProperties.Name="启用替换作者" Content="替换作者" IsChecked="{x:Bind ViewModel.Metadata.ReplaceAuthorsEnabled, Mode=TwoWay}" />
+                                    <CheckBox Grid.Column="1" AutomationProperties.AutomationId="LibraryBatchClearAuthorsToggle" AutomationProperties.Name="明确清空作者" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearAuthors, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceAuthorsEnabled, Mode=OneWay}" />
                                 </Grid>
                                 <AutoSuggestBox
+                                    AutomationProperties.AutomationId="LibraryBatchReplaceAuthorInput"
                                     AutomationProperties.Name="输入替换后的作者"
                                     IsEnabled="{x:Bind ViewModel.Metadata.ReplaceAuthorsInputEnabled, Mode=OneWay}"
                                     ItemsSource="{x:Bind ViewModel.Metadata.ReplaceAuthorPicker.Suggestions, Mode=OneWay}"
@@ -174,10 +184,11 @@
                                 </ItemsControl>
 
                                 <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="12">
-                                    <CheckBox Content="替换系列" IsChecked="{x:Bind ViewModel.Metadata.ReplaceSeriesEnabled, Mode=TwoWay}" />
-                                    <CheckBox Grid.Column="1" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearSeries, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceSeriesEnabled, Mode=OneWay}" />
+                                    <CheckBox AutomationProperties.AutomationId="LibraryBatchReplaceSeriesToggle" AutomationProperties.Name="启用替换系列" Content="替换系列" IsChecked="{x:Bind ViewModel.Metadata.ReplaceSeriesEnabled, Mode=TwoWay}" />
+                                    <CheckBox Grid.Column="1" AutomationProperties.AutomationId="LibraryBatchClearSeriesToggle" AutomationProperties.Name="明确清空系列" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearSeries, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceSeriesEnabled, Mode=OneWay}" />
                                 </Grid>
                                 <AutoSuggestBox
+                                    AutomationProperties.AutomationId="LibraryBatchReplaceSeriesInput"
                                     AutomationProperties.Name="输入替换后的系列"
                                     IsEnabled="{x:Bind ViewModel.Metadata.ReplaceSeriesInputEnabled, Mode=OneWay}"
                                     ItemsSource="{x:Bind ViewModel.Metadata.ReplaceSeriesPicker.Suggestions, Mode=OneWay}"
@@ -195,10 +206,11 @@
                                 </ItemsControl>
 
                                 <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="12">
-                                    <CheckBox Content="替换内容标签" IsChecked="{x:Bind ViewModel.Metadata.ReplaceTagsEnabled, Mode=TwoWay}" />
-                                    <CheckBox Grid.Column="1" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearTags, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceTagsEnabled, Mode=OneWay}" />
+                                    <CheckBox AutomationProperties.AutomationId="LibraryBatchReplaceTagsToggle" AutomationProperties.Name="启用替换内容标签" Content="替换内容标签" IsChecked="{x:Bind ViewModel.Metadata.ReplaceTagsEnabled, Mode=TwoWay}" />
+                                    <CheckBox Grid.Column="1" AutomationProperties.AutomationId="LibraryBatchClearTagsToggle" AutomationProperties.Name="明确清空内容标签" Content="明确清空" IsChecked="{x:Bind ViewModel.Metadata.ClearTags, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.Metadata.ReplaceTagsEnabled, Mode=OneWay}" />
                                 </Grid>
                                 <AutoSuggestBox
+                                    AutomationProperties.AutomationId="LibraryBatchReplaceTagInput"
                                     AutomationProperties.Name="输入替换后的内容标签"
                                     IsEnabled="{x:Bind ViewModel.Metadata.ReplaceTagsInputEnabled, Mode=OneWay}"
                                     ItemsSource="{x:Bind ViewModel.Metadata.ReplaceTagPicker.Suggestions, Mode=OneWay}"
@@ -235,6 +247,7 @@
                                 <TextBlock FontWeight="SemiBold" Text="名称来源" />
                                 <ComboBox
                                     x:Name="NamingSourceSelector"
+                                    AutomationProperties.AutomationId="LibraryNamingSourceSelector"
                                     AutomationProperties.Name="选择命名来源"
                                     SelectedIndex="0"
                                     SelectionChanged="OnNamingSourceChanged">
@@ -261,14 +274,18 @@
                             </ListView>
                             <StackPanel Grid.Row="3" Spacing="6">
                                 <TextBox
+                                    AutomationProperties.AutomationId="LibraryNamingPresetNameInput"
+                                    AutomationProperties.Name="命名预设名称"
                                     Header="预设名称"
                                     PlaceholderText="另存为新预设"
                                     Text="{x:Bind ViewModel.Naming.PresetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                                    <Button Command="{x:Bind ViewModel.Naming.SavePresetCommand}" Content="保存预设" />
-                                    <Button Grid.Column="1" Command="{x:Bind ViewModel.Naming.DeletePresetCommand}" Content="删除" />
+                                    <Button AutomationProperties.AutomationId="LibraryNamingSavePresetButton" AutomationProperties.Name="保存命名预设" Command="{x:Bind ViewModel.Naming.SavePresetCommand}" Content="保存预设" />
+                                    <Button Grid.Column="1" AutomationProperties.AutomationId="LibraryNamingDeletePresetButton" AutomationProperties.Name="删除命名预设" Command="{x:Bind ViewModel.Naming.DeletePresetCommand}" Content="删除" />
                                 </Grid>
                                 <Button
+                                    AutomationProperties.AutomationId="LibraryNamingOverwritePresetButton"
+                                    AutomationProperties.Name="覆盖同名命名预设"
                                     Command="{x:Bind ViewModel.Naming.OverwritePresetCommand}"
                                     Content="确认覆盖同名预设" />
                             </StackPanel>
@@ -286,7 +303,7 @@
                                 <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按顺序执行" />
                             </Grid>
                             <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <ComboBox x:Name="RuleKindSelector" AutomationProperties.Name="选择要添加的命名规则" SelectedIndex="0">
+                                <ComboBox x:Name="RuleKindSelector" AutomationProperties.AutomationId="LibraryNamingRuleKindSelector" AutomationProperties.Name="选择要添加的命名规则" SelectedIndex="0">
                                     <ComboBoxItem Content="添加前缀" Tag="prefix" />
                                     <ComboBoxItem Content="添加后缀" Tag="suffix" />
                                     <ComboBoxItem Content="替换文本" Tag="replace" />
@@ -296,7 +313,7 @@
                                     <ComboBoxItem Content="添加序号" Tag="sequence" />
                                     <ComboBoxItem Content="资料模板" Tag="metadata_template" />
                                 </ComboBox>
-                                <Button Grid.Column="1" Click="OnAddRuleClicked" Content="添加规则" />
+                                <Button Grid.Column="1" AutomationProperties.AutomationId="LibraryNamingAddRuleButton" AutomationProperties.Name="添加命名规则" Click="OnAddRuleClicked" Content="添加规则" />
                             </Grid>
                             <ListView
                                 x:Name="RuleList"
@@ -312,14 +329,14 @@
                                             AutomationProperties.AutomationId="{x:Bind AutomationId}"
                                             ColumnDefinitions="Auto,*,Auto,Auto,Auto"
                                             ColumnSpacing="5">
-                                            <CheckBox AutomationProperties.Name="启用或停用命名规则" IsChecked="{x:Bind IsEnabled, Mode=TwoWay}" />
+                                            <CheckBox AutomationProperties.AutomationId="{x:Bind EnabledAutomationId}" AutomationProperties.Name="启用或停用命名规则" IsChecked="{x:Bind IsEnabled, Mode=TwoWay}" />
                                             <StackPanel Grid.Column="1">
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind DisplayName}" />
                                                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ParameterSummary}" TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
-                                            <Button Grid.Column="2" AutomationProperties.Name="上移命名规则" Click="OnMoveRuleUpClicked" Content="↑" Tag="{Binding}" />
-                                            <Button Grid.Column="3" AutomationProperties.Name="下移命名规则" Click="OnMoveRuleDownClicked" Content="↓" Tag="{Binding}" />
-                                            <Button Grid.Column="4" AutomationProperties.Name="删除命名规则" Click="OnDeleteRuleClicked" Content="×" Tag="{Binding}" />
+                                            <Button Grid.Column="2" AutomationProperties.AutomationId="{x:Bind MoveUpAutomationId}" AutomationProperties.Name="上移命名规则" Click="OnMoveRuleUpClicked" Content="↑" Tag="{Binding}" />
+                                            <Button Grid.Column="3" AutomationProperties.AutomationId="{x:Bind MoveDownAutomationId}" AutomationProperties.Name="下移命名规则" Click="OnMoveRuleDownClicked" Content="↓" Tag="{Binding}" />
+                                            <Button Grid.Column="4" AutomationProperties.AutomationId="{x:Bind DeleteAutomationId}" AutomationProperties.Name="删除命名规则" Click="OnDeleteRuleClicked" Content="×" Tag="{Binding}" />
                                         </Grid>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
@@ -336,41 +353,41 @@
                                     <StackPanel Spacing="8">
                                         <TextBlock FontWeight="SemiBold" Text="所选规则参数" />
                                         <StackPanel x:Name="TextRuleEditor" Spacing="5">
-                                            <TextBox Header="文本" Text="{Binding TextParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox AutomationProperties.AutomationId="LibraryNamingTextParameter" AutomationProperties.Name="命名规则文本参数" Header="文本" Text="{Binding TextParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
                                         <StackPanel x:Name="ReplaceRuleEditor" Spacing="5" Visibility="Collapsed">
-                                            <TextBox Header="查找" Text="{Binding SearchParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                            <TextBox Header="替换为" Text="{Binding ReplacementParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                            <CheckBox Content="区分大小写" IsChecked="{Binding CaseSensitiveParameter, Mode=TwoWay}" />
+                                            <TextBox AutomationProperties.AutomationId="LibraryNamingSearchParameter" AutomationProperties.Name="查找文本参数" Header="查找" Text="{Binding SearchParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox AutomationProperties.AutomationId="LibraryNamingReplacementParameter" AutomationProperties.Name="替换文本参数" Header="替换为" Text="{Binding ReplacementParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <CheckBox AutomationProperties.AutomationId="LibraryNamingCaseSensitiveParameter" AutomationProperties.Name="替换时区分大小写" Content="区分大小写" IsChecked="{Binding CaseSensitiveParameter, Mode=TwoWay}" />
                                         </StackPanel>
                                         <StackPanel x:Name="BracketRuleEditor" Spacing="5" Visibility="Collapsed">
-                                            <ComboBox x:Name="BracketPairSelector" Header="括号类型" SelectedIndex="0" SelectionChanged="OnBracketPairChanged">
+                                            <ComboBox x:Name="BracketPairSelector" AutomationProperties.AutomationId="LibraryNamingBracketPairParameter" AutomationProperties.Name="括号类型参数" Header="括号类型" SelectedIndex="0" SelectionChanged="OnBracketPairChanged">
                                                 <ComboBoxItem Content="( )" /><ComboBoxItem Content="[ ]" /><ComboBoxItem Content="{}{ }" /><ComboBoxItem Content="（ ）" /><ComboBoxItem Content="【 】" />
                                             </ComboBox>
                                         </StackPanel>
                                         <StackPanel x:Name="CaseRuleEditor" Spacing="5" Visibility="Collapsed">
-                                            <ComboBox x:Name="CaseModeSelector" Header="字母形式" SelectedIndex="0" SelectionChanged="OnCaseModeChanged">
+                                            <ComboBox x:Name="CaseModeSelector" AutomationProperties.AutomationId="LibraryNamingCaseModeParameter" AutomationProperties.Name="英文字母大小写参数" Header="字母形式" SelectedIndex="0" SelectionChanged="OnCaseModeChanged">
                                                 <ComboBoxItem Content="大写" /><ComboBoxItem Content="小写" />
                                             </ComboBox>
                                         </StackPanel>
                                         <StackPanel x:Name="SequenceRuleEditor" Spacing="5" Visibility="Collapsed">
                                             <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6">
-                                                <NumberBox Header="起始" Minimum="0" Value="{Binding SequenceStartParameter, Mode=TwoWay}" />
-                                                <NumberBox Grid.Column="1" Header="步长" Minimum="1" Value="{Binding SequenceStepParameter, Mode=TwoWay}" />
-                                                <NumberBox Grid.Column="2" Header="最少位数" Minimum="1" Maximum="10" Value="{Binding SequenceMinimumDigitsParameter, Mode=TwoWay}" />
+                                                <NumberBox AutomationProperties.AutomationId="LibraryNamingSequenceStartParameter" AutomationProperties.Name="序号起始值参数" Header="起始" Minimum="0" Value="{Binding SequenceStartParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="1" AutomationProperties.AutomationId="LibraryNamingSequenceStepParameter" AutomationProperties.Name="序号步长参数" Header="步长" Minimum="1" Value="{Binding SequenceStepParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="2" AutomationProperties.AutomationId="LibraryNamingSequenceDigitsParameter" AutomationProperties.Name="序号最少位数参数" Header="最少位数" Minimum="1" Maximum="10" Value="{Binding SequenceMinimumDigitsParameter, Mode=TwoWay}" />
                                             </Grid>
                                             <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                                                <ComboBox x:Name="SequencePlacementSelector" Header="位置" SelectedIndex="1" SelectionChanged="OnSequencePlacementChanged"><ComboBoxItem Content="前缀" /><ComboBoxItem Content="后缀" /></ComboBox>
-                                                <TextBox Grid.Column="1" Header="分隔符" Text="{Binding SequenceSeparatorParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                <ComboBox x:Name="SequencePlacementSelector" AutomationProperties.AutomationId="LibraryNamingSequencePlacementParameter" AutomationProperties.Name="序号位置参数" Header="位置" SelectedIndex="1" SelectionChanged="OnSequencePlacementChanged"><ComboBoxItem Content="前缀" /><ComboBoxItem Content="后缀" /></ComboBox>
+                                                <TextBox Grid.Column="1" AutomationProperties.AutomationId="LibraryNamingSequenceSeparatorParameter" AutomationProperties.Name="序号分隔符参数" Header="分隔符" Text="{Binding SequenceSeparatorParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                             </Grid>
                                         </StackPanel>
                                         <StackPanel x:Name="TemplateRuleEditor" Spacing="5" Visibility="Collapsed">
-                                            <TextBox Header="模板" PlaceholderText="{}{authors}-{series}-{name}-{number}" Text="{Binding TemplateParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                            <TextBox Header="多值分隔符" Text="{Binding MultiValueSeparatorParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox AutomationProperties.AutomationId="LibraryNamingTemplateParameter" AutomationProperties.Name="资料模板参数" Header="模板" PlaceholderText="{}{authors}-{series}-{name}-{number}" Text="{Binding TemplateParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox AutomationProperties.AutomationId="LibraryNamingMultiValueSeparatorParameter" AutomationProperties.Name="资料多值分隔符参数" Header="多值分隔符" Text="{Binding MultiValueSeparatorParameter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                             <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6">
-                                                <NumberBox Header="序号起始" Minimum="0" Value="{Binding SequenceStartParameter, Mode=TwoWay}" />
-                                                <NumberBox Grid.Column="1" Header="序号步长" Minimum="1" Value="{Binding SequenceStepParameter, Mode=TwoWay}" />
-                                                <NumberBox Grid.Column="2" Header="序号位数" Minimum="1" Maximum="10" Value="{Binding SequenceMinimumDigitsParameter, Mode=TwoWay}" />
+                                                <NumberBox AutomationProperties.AutomationId="LibraryNamingTemplateSequenceStartParameter" AutomationProperties.Name="模板序号起始值参数" Header="序号起始" Minimum="0" Value="{Binding SequenceStartParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="1" AutomationProperties.AutomationId="LibraryNamingTemplateSequenceStepParameter" AutomationProperties.Name="模板序号步长参数" Header="序号步长" Minimum="1" Value="{Binding SequenceStepParameter, Mode=TwoWay}" />
+                                                <NumberBox Grid.Column="2" AutomationProperties.AutomationId="LibraryNamingTemplateSequenceDigitsParameter" AutomationProperties.Name="模板序号位数参数" Header="序号位数" Minimum="1" Maximum="10" Value="{Binding SequenceMinimumDigitsParameter, Mode=TwoWay}" />
                                             </Grid>
                                         </StackPanel>
                                     </StackPanel>
@@ -423,6 +440,8 @@
         <TextBlock
             x:Name="DialogStatus"
             Grid.Row="2"
+            AutomationProperties.AutomationId="LibraryBatchDialogStatus"
+            AutomationProperties.Name="批量编辑状态和错误定位"
             Foreground="{ThemeResource SystemFillColorCriticalBrush}"
             Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
             TextWrapping="Wrap" />
@@ -432,7 +451,7 @@
                 VerticalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Text="关闭或按 Esc 不会修改任何资料。" />
-            <Button Grid.Column="1" Click="OnCancelClicked" Content="取消" />
+            <Button Grid.Column="1" AutomationProperties.AutomationId="LibraryBatchCancelButton" AutomationProperties.Name="取消正式文件库批量修改" Click="OnCancelClicked" Content="取消" />
             <Button
                 Grid.Column="2"
                 AutomationProperties.AutomationId="LibraryBatchApplyButton"

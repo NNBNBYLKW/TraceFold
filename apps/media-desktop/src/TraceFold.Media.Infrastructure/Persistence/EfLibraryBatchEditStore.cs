@@ -74,7 +74,10 @@ public sealed class EfLibraryBatchEditStore(
         try
         {
             ArgumentNullException.ThrowIfNull(draft);
-            _ = LibraryBatchEditDraft.Create(draft.Metadata, draft.Naming);
+            _ = LibraryBatchEditDraft.Create(
+                draft.Metadata,
+                draft.Naming,
+                draft.ExistingTermSnapshots);
         }
         catch (ArgumentException)
         {
@@ -99,6 +102,9 @@ public sealed class EfLibraryBatchEditStore(
                 context,
                 snapshots.Values,
                 _timeProvider.GetUtcNow());
+            await resolver.ValidateSnapshotsAsync(
+                draft.ExistingTermSnapshots,
+                cancellationToken);
             ResolvedBatchMetadataEdits edits = draft.Metadata is null
                 ? UnchangedEdits()
                 : await ResolveEditsAsync(
@@ -862,6 +868,52 @@ public sealed class EfLibraryBatchEditStore(
                 ? term
                 : throw new LibraryBatchStoreException(
                     "library.batch.taxonomy_missing");
+
+        public async Task ValidateSnapshotsAsync(
+            IReadOnlyList<TaxonomyTermDto> snapshots,
+            CancellationToken cancellationToken)
+        {
+            foreach (TaxonomyTermDto expected in snapshots)
+            {
+                TaxonomyTermDto actual;
+                if (_byId.TryGetValue(expected.Id, out TaxonomyTermDto? loaded))
+                {
+                    actual = loaded;
+                }
+                else
+                {
+                    TaxonomyTermRow? row = await _context.TaxonomyTerms
+                        .AsNoTracking()
+                        .SingleOrDefaultAsync(
+                            item => item.Id == expected.Id,
+                            cancellationToken);
+                    if (row is null)
+                    {
+                        throw new LibraryBatchStoreException(
+                            "library.batch.taxonomy_missing");
+                    }
+
+                    actual = ToTerm(
+                        row.Id,
+                        row.Kind,
+                        row.DisplayName,
+                        row.NormalizedName);
+                    Add(actual);
+                }
+
+                if (actual.Kind != expected.Kind
+                    || !StringComparer.Ordinal.Equals(
+                        actual.DisplayName,
+                        expected.DisplayName)
+                    || !StringComparer.Ordinal.Equals(
+                        actual.NormalizedName,
+                        expected.NormalizedName))
+                {
+                    throw new LibraryBatchStoreException(
+                        "library.batch.taxonomy_invalid");
+                }
+            }
+        }
 
         public async Task<IReadOnlyList<Guid>> ResolveManyAsync(
             IReadOnlyList<BatchTaxonomyReference> references,

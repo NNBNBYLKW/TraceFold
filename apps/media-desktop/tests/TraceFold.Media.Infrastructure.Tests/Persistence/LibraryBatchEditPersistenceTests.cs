@@ -110,13 +110,17 @@ public sealed class LibraryBatchEditPersistenceTests
         await database.MigrateAsync();
         LibraryBatchFixture fixture = await database.SeedLibraryBatchFixtureAsync(2);
         EfLibraryBatchEditStore store = CreateStore(database);
+        Guid deletedTermId = await database.SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Deleted before apply");
+        await database.DeleteTaxonomyAsync(deletedTermId);
         BatchMetadataDraft invalidTaxonomy = BatchMetadataDraft.Create(
             BatchMetadataMode.Add,
             new(
                 BatchMetadataFieldOperation.Add,
                 [BatchTaxonomyReference.Existing(
                     TaxonomyKind.Author,
-                    Guid.NewGuid())]),
+                    deletedTermId)]),
             BatchMetadataSeriesEdit.Unchanged,
             BatchMetadataSetEdit.Unchanged);
 
@@ -138,6 +142,47 @@ public sealed class LibraryBatchEditPersistenceTests
             row =>
             {
                 Assert.Null(row.DisplayName);
+                Assert.Equal(0, row.MetadataVersion);
+            });
+    }
+
+    [Fact]
+    public async Task Renamed_existing_term_snapshot_rejects_the_whole_batch()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        LibraryBatchFixture fixture = await database.SeedLibraryBatchFixtureAsync(2);
+        Guid termId = await database.SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Before");
+        var snapshot = new TaxonomyTermDto(
+            termId,
+            TaxonomyKind.Author,
+            "Before",
+            TaxonomyName.Create("Before").Normalized,
+            0);
+        await database.RenameTaxonomyAsync(termId, "After");
+        BatchMetadataDraft metadata = BatchMetadataDraft.Create(
+            BatchMetadataMode.Add,
+            new(
+                BatchMetadataFieldOperation.Add,
+                [BatchTaxonomyReference.Existing(
+                    TaxonomyKind.Author,
+                    termId)]),
+            BatchMetadataSeriesEdit.Unchanged,
+            BatchMetadataSetEdit.Unchanged);
+
+        LibraryBatchStoreResult result = await CreateStore(database).ApplyAsync(
+            fixture.Selection,
+            LibraryBatchEditDraft.Create(metadata, null, [snapshot]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("library.batch.taxonomy_invalid", result.ErrorCode);
+        Assert.All(
+            await database.ReadFormalAssetsAsync(fixture.AssetIds),
+            row =>
+            {
+                Assert.Empty(row.AuthorNames);
                 Assert.Equal(0, row.MetadataVersion);
             });
     }

@@ -33,6 +33,30 @@ public sealed class LibraryBatchPreviewServiceTests
     }
 
     [Fact]
+    public void Existing_term_snapshot_outside_selection_preserves_identity_in_preview()
+    {
+        TaxonomyTermDto author = Term(TaxonomyKind.Author, "Outside");
+        LibraryBatchEditorDto editor = Editor(Asset());
+        LibraryBatchEditDraft draft = LibraryBatchEditDraft.Create(
+            BatchMetadataDraft.Create(
+                BatchMetadataMode.Add,
+                new(
+                    BatchMetadataFieldOperation.Add,
+                    [BatchTaxonomyReference.Existing(
+                        TaxonomyKind.Author,
+                        author.Id)]),
+                BatchMetadataSeriesEdit.Unchanged,
+                BatchMetadataSetEdit.Unchanged),
+            Definition(new MetadataTemplateNamingRule("{authors}-{name}")),
+            [author]);
+
+        LibraryBatchPreviewDto preview = CreateService().Preview(editor, draft);
+
+        Assert.True(preview.CanApply);
+        Assert.Equal("Outside-asset", preview.Rows[0].GeneratedDisplayName);
+    }
+
+    [Fact]
     public void Any_naming_error_blocks_metadata_only_changes_too()
     {
         TaxonomyTermDto tag = Term(TaxonomyKind.Tag, "Keep");

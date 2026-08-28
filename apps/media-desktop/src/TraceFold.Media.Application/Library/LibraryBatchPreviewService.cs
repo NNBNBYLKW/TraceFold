@@ -13,7 +13,7 @@ public sealed class LibraryBatchPreviewService(
         LibraryBatchEditDraft draft)
     {
         Validate(editor, draft);
-        var catalog = TermCatalog.Create(editor);
+        var catalog = TermCatalog.Create(editor, draft.ExistingTermSnapshots);
         ResolvedBatchMetadataEdits edits = draft.Metadata is null
             ? UnchangedEdits()
             : Resolve(draft.Metadata, catalog);
@@ -147,15 +147,10 @@ public sealed class LibraryBatchPreviewService(
         ArgumentNullException.ThrowIfNull(editor.Authors);
         ArgumentNullException.ThrowIfNull(editor.Tags);
         ArgumentNullException.ThrowIfNull(editor.UnselectedDisplayNames);
-        if (draft.Metadata is null && draft.Naming is null)
-        {
-            throw new ArgumentException("At least one batch edit is required.");
-        }
-
-        if (draft.Metadata is not null)
-        {
-            BatchMetadataDraft.Validate(draft.Metadata);
-        }
+        _ = LibraryBatchEditDraft.Create(
+            draft.Metadata,
+            draft.Naming,
+            draft.ExistingTermSnapshots);
 
         if (editor.Assets.Count == 0
             || editor.UnselectedDisplayNames.Any(name => name is null))
@@ -274,7 +269,9 @@ public sealed class LibraryBatchPreviewService(
         private readonly Dictionary<Guid, TaxonomyTermDto> _byId = [];
         private readonly Dictionary<TermNameKey, TaxonomyTermDto> _byName = [];
 
-        public static TermCatalog Create(LibraryBatchEditorDto editor)
+        public static TermCatalog Create(
+            LibraryBatchEditorDto editor,
+            IReadOnlyList<TaxonomyTermDto> existingTermSnapshots)
         {
             var catalog = new TermCatalog();
             foreach (LibraryBatchAssetDto asset in editor.Assets)
@@ -303,6 +300,11 @@ public sealed class LibraryBatchPreviewService(
             foreach (BatchTermCoverageDto tag in editor.Tags)
             {
                 catalog.AddExisting(tag.Term);
+            }
+
+            foreach (TaxonomyTermDto term in existingTermSnapshots)
+            {
+                catalog.AddExisting(term);
             }
 
             return catalog;

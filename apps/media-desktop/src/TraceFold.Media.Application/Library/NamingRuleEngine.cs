@@ -101,9 +101,9 @@ public sealed class NamingRuleEngine : INamingRuleEngine
             RemoveBracketContentNamingRule bracket => RuleResult.Success(
                 RemoveBracketContent(current, bracket.Pair)),
             CaseNamingRule { Mode: NamingCaseMode.Upper } =>
-                RuleResult.Success(current.ToUpperInvariant()),
+                RuleResult.Success(ConvertEnglishAsciiCase(current, upper: true)),
             CaseNamingRule { Mode: NamingCaseMode.Lower } =>
-                RuleResult.Success(current.ToLowerInvariant()),
+                RuleResult.Success(ConvertEnglishAsciiCase(current, upper: false)),
             CaseNamingRule => RuleResult.Failure("naming.rule_invalid"),
             SequenceNamingRule sequence => ApplySequence(
                 sequence,
@@ -115,6 +115,25 @@ public sealed class NamingRuleEngine : INamingRuleEngine
                 asset),
             _ => RuleResult.Failure("naming.rule_unknown")
         };
+
+    private static string ConvertEnglishAsciiCase(string value, bool upper)
+    {
+        char[] characters = value.ToCharArray();
+        for (int index = 0; index < characters.Length; index++)
+        {
+            char character = characters[index];
+            if (upper && character is >= 'a' and <= 'z')
+            {
+                characters[index] = (char)(character - ('a' - 'A'));
+            }
+            else if (!upper && character is >= 'A' and <= 'Z')
+            {
+                characters[index] = (char)(character + ('a' - 'A'));
+            }
+        }
+
+        return new string(characters);
+    }
 
     private static RuleResult ApplyReplace(
         ReplaceNamingRule rule,

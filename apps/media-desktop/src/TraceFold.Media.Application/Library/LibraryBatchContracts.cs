@@ -1,4 +1,5 @@
 using TraceFold.Media.Application.Metadata;
+using TraceFold.Media.Domain.Metadata;
 
 namespace TraceFold.Media.Application.Library;
 
@@ -18,11 +19,13 @@ public sealed record LibraryBatchEditorDto(
 
 public sealed record LibraryBatchEditDraft(
     BatchMetadataDraft? Metadata,
-    NamingDefinition? Naming)
+    NamingDefinition? Naming,
+    IReadOnlyList<TaxonomyTermDto> ExistingTermSnapshots)
 {
     public static LibraryBatchEditDraft Create(
         BatchMetadataDraft? metadata,
-        NamingDefinition? naming)
+        NamingDefinition? naming,
+        IReadOnlyList<TaxonomyTermDto>? existingTermSnapshots = null)
     {
         if (metadata is null && naming is null)
         {
@@ -34,7 +37,54 @@ public sealed record LibraryBatchEditDraft(
             BatchMetadataDraft.Validate(metadata);
         }
 
-        return new LibraryBatchEditDraft(metadata, naming);
+        TaxonomyTermDto[] snapshots = ValidateExistingTermSnapshots(
+            metadata,
+            existingTermSnapshots ?? []);
+        return new LibraryBatchEditDraft(
+            metadata,
+            naming,
+            Array.AsReadOnly(snapshots));
+    }
+
+    private static TaxonomyTermDto[] ValidateExistingTermSnapshots(
+        BatchMetadataDraft? metadata,
+        IReadOnlyList<TaxonomyTermDto> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        HashSet<Guid> referencedIds = metadata is null
+            ? []
+            : metadata.Authors.Values
+                .Concat(metadata.Tags.Values)
+                .Append(metadata.Series.Value)
+                .Where(reference => reference?.ExistingId is not null)
+                .Select(reference => reference!.ExistingId!.Value)
+                .ToHashSet();
+        var seen = new HashSet<Guid>();
+        foreach (TaxonomyTermDto? term in snapshots)
+        {
+            if (term is null
+                || term.Id == Guid.Empty
+                || !Enum.IsDefined(term.Kind)
+                || !seen.Add(term.Id)
+                || !referencedIds.Contains(term.Id))
+            {
+                throw new ArgumentException(
+                    "The taxonomy snapshot is invalid.",
+                    nameof(snapshots));
+            }
+
+            TaxonomyName name = TaxonomyName.Create(term.DisplayName);
+            if (!StringComparer.Ordinal.Equals(
+                    name.Normalized,
+                    term.NormalizedName))
+            {
+                throw new ArgumentException(
+                    "The taxonomy snapshot is invalid.",
+                    nameof(snapshots));
+            }
+        }
+
+        return snapshots.ToArray();
     }
 }
 

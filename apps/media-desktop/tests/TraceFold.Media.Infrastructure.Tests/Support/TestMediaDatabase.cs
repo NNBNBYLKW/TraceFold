@@ -200,6 +200,28 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         return id;
     }
 
+    public async Task DeleteTaxonomyAsync(Guid id)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            DELETE FROM taxonomy_terms WHERE id = {id}
+            """);
+    }
+
+    public async Task RenameTaxonomyAsync(Guid id, string displayName)
+    {
+        TaxonomyName name = TaxonomyName.Create(displayName);
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-27T00:00:00Z");
+        await using var context = new MediaDesktopDbContext(_options);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE taxonomy_terms
+            SET display_name = {name.Display},
+                normalized_name = {name.Normalized},
+                updated_at_utc = {now}
+            WHERE id = {id}
+            """);
+    }
+
     public async Task<LibraryFixture> SeedLibraryFilterFixtureAsync()
     {
         Guid authorA = await SeedTaxonomyAsync(TaxonomyKind.Author, "Author A");

@@ -44,7 +44,8 @@ public sealed partial class LibraryBatchEditDialogViewModel : ObservableObject
             presetService,
             previewService,
             editor,
-            MetadataDraftOrNull);
+            MetadataDraftOrNull,
+            existingTermsProvider: () => Metadata.ExistingTermSnapshots);
         Metadata.DraftChanged += OnDraftChanged;
         Naming.PreviewChanged += OnPreviewChanged;
         ApplyCommand = new AsyncRelayCommand(
@@ -206,7 +207,10 @@ public sealed partial class LibraryBatchEditDialogViewModel : ObservableObject
             return false;
         }
 
-        draft = LibraryBatchEditDraft.Create(metadata, naming);
+        draft = LibraryBatchEditDraft.Create(
+            metadata,
+            naming,
+            Metadata.ExistingTermSnapshots);
         error = null;
         return true;
     }

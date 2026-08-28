@@ -29,6 +29,14 @@ public sealed class NamingRuleRowViewModel : ObservableObject
 
     public string AutomationId { get; }
 
+    public string EnabledAutomationId => $"{AutomationId}-Enabled";
+
+    public string MoveUpAutomationId => $"{AutomationId}-MoveUp";
+
+    public string MoveDownAutomationId => $"{AutomationId}-MoveDown";
+
+    public string DeleteAutomationId => $"{AutomationId}-Delete";
+
     public int DisplayIndex
     {
         get => _displayIndex;

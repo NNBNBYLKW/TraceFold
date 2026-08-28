@@ -181,7 +181,8 @@ public sealed class LibraryNamingDraftViewModelTests
             {
                 metadata.TryBuildDraft(out BatchMetadataDraft? draft, out _);
                 return draft;
-            });
+            },
+            existingTermsProvider: () => metadata.ExistingTermSnapshots);
         metadata.DraftChanged += (_, _) => naming.RefreshPreview();
         naming.AddRule(new MetadataTemplateNamingRule("{authors}-{name}"));
 
@@ -214,7 +215,8 @@ public sealed class LibraryNamingDraftViewModelTests
             {
                 metadata.TryBuildDraft(out BatchMetadataDraft? draft, out _);
                 return draft;
-            });
+            },
+            existingTermsProvider: () => metadata.ExistingTermSnapshots);
         metadata.DraftChanged += (_, _) => naming.RefreshPreview();
         naming.AddRule(new MetadataTemplateNamingRule("{authors}-{name}"));
 
@@ -222,6 +224,12 @@ public sealed class LibraryNamingDraftViewModelTests
         await metadata.AddAuthorPicker.CommitInputAsync(
             TestContext.Current.CancellationToken);
 
+        Assert.True(metadata.TryBuildDraft(
+            out BatchMetadataDraft? draft,
+            out _));
+        BatchTaxonomyReference reference = Assert.Single(draft!.Authors.Values);
+        Assert.Equal(term.Id, reference.ExistingId);
+        Assert.Null(reference.NewName);
         Assert.Equal("Alice-photo", naming.PreviewRows[0].GeneratedDisplayName);
         Assert.True(naming.CanApply);
     }
@@ -230,13 +238,15 @@ public sealed class LibraryNamingDraftViewModelTests
         LibraryBatchEditorDto? editor = null,
         LibraryDialogTestData.FakeNamingPresetService? presets = null,
         Func<BatchMetadataDraft?>? metadataProvider = null,
-        Guid? dialogId = null) =>
+        Guid? dialogId = null,
+        Func<IReadOnlyList<TaxonomyTermDto>>? existingTermsProvider = null) =>
         new(
             presets ?? new LibraryDialogTestData.FakeNamingPresetService(),
             LibraryDialogTestData.PreviewService(),
             editor ?? LibraryDialogTestData.Editor(),
             metadataProvider,
-            dialogId);
+            dialogId,
+            existingTermsProvider);
 
     private static NamingPresetDto Preset(string name, INamingRule rule) =>
         new(

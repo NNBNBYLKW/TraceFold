@@ -281,9 +281,48 @@ public sealed class MediaWorkspaceStructureTests
             "LibraryBatchEditDialog",
             "LibraryBatchMetadataTab",
             "LibraryBatchNamingTab",
+            "LibraryBatchMetadataModeList",
+            "LibraryBatchAddAuthorInput",
+            "LibraryBatchAddTagInput",
+            "LibraryBatchRemoveAuthorList",
+            "LibraryBatchRemoveTagList",
+            "LibraryBatchReplaceAuthorsToggle",
+            "LibraryBatchClearAuthorsToggle",
+            "LibraryBatchReplaceAuthorInput",
+            "LibraryBatchReplaceSeriesToggle",
+            "LibraryBatchClearSeriesToggle",
+            "LibraryBatchReplaceSeriesInput",
+            "LibraryBatchReplaceTagsToggle",
+            "LibraryBatchClearTagsToggle",
+            "LibraryBatchReplaceTagInput",
+            "LibraryNamingSourceSelector",
             "LibraryNamingPresetList",
+            "LibraryNamingPresetNameInput",
+            "LibraryNamingSavePresetButton",
+            "LibraryNamingDeletePresetButton",
+            "LibraryNamingOverwritePresetButton",
+            "LibraryNamingRuleKindSelector",
+            "LibraryNamingAddRuleButton",
             "LibraryNamingRuleList",
+            "LibraryNamingTextParameter",
+            "LibraryNamingSearchParameter",
+            "LibraryNamingReplacementParameter",
+            "LibraryNamingCaseSensitiveParameter",
+            "LibraryNamingBracketPairParameter",
+            "LibraryNamingCaseModeParameter",
+            "LibraryNamingSequenceStartParameter",
+            "LibraryNamingSequenceStepParameter",
+            "LibraryNamingSequenceDigitsParameter",
+            "LibraryNamingSequencePlacementParameter",
+            "LibraryNamingSequenceSeparatorParameter",
+            "LibraryNamingTemplateParameter",
+            "LibraryNamingMultiValueSeparatorParameter",
+            "LibraryNamingTemplateSequenceStartParameter",
+            "LibraryNamingTemplateSequenceStepParameter",
+            "LibraryNamingTemplateSequenceDigitsParameter",
             "LibraryNamingPreviewList",
+            "LibraryBatchDialogStatus",
+            "LibraryBatchCancelButton",
             "LibraryBatchApplyButton"
         })
         {
@@ -298,6 +337,19 @@ public sealed class MediaWorkspaceStructureTests
             "仅修改软件中的资料和显示名称",
             xaml,
             StringComparison.Ordinal);
+        foreach (string property in new[]
+        {
+            "EnabledAutomationId",
+            "MoveUpAutomationId",
+            "MoveDownAutomationId",
+            "DeleteAutomationId"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{{x:Bind {property}}}\"",
+                xaml,
+                StringComparison.Ordinal);
+        }
     }
 
     [Fact]

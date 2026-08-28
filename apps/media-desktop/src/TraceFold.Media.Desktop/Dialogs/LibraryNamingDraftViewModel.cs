@@ -12,6 +12,8 @@ public sealed partial class LibraryNamingDraftViewModel : ObservableObject
     private readonly ILibraryBatchPreviewService _preview;
     private readonly LibraryBatchEditorDto _editor;
     private readonly Func<BatchMetadataDraft?>? _metadataProvider;
+    private readonly Func<IReadOnlyList<TaxonomyTermDto>>?
+        _existingTermsProvider;
     private readonly Guid _dialogId;
     private int _nextAutomationIndex = 1;
 
@@ -20,7 +22,8 @@ public sealed partial class LibraryNamingDraftViewModel : ObservableObject
         ILibraryBatchPreviewService preview,
         LibraryBatchEditorDto editor,
         Func<BatchMetadataDraft?>? metadataProvider = null,
-        Guid? dialogId = null)
+        Guid? dialogId = null,
+        Func<IReadOnlyList<TaxonomyTermDto>>? existingTermsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(presets);
         ArgumentNullException.ThrowIfNull(preview);
@@ -29,6 +32,7 @@ public sealed partial class LibraryNamingDraftViewModel : ObservableObject
         _preview = preview;
         _editor = editor;
         _metadataProvider = metadataProvider;
+        _existingTermsProvider = existingTermsProvider;
         _dialogId = dialogId ?? Guid.NewGuid();
         if (_dialogId == Guid.Empty)
         {
@@ -214,7 +218,10 @@ public sealed partial class LibraryNamingDraftViewModel : ObservableObject
         try
         {
             LibraryBatchEditDraft draft =
-                LibraryBatchEditDraft.Create(metadata, naming);
+                LibraryBatchEditDraft.Create(
+                    metadata,
+                    naming,
+                    _existingTermsProvider?.Invoke());
             LibraryBatchPreviewDto result = _preview.Preview(_editor, draft);
             LastPreview = result;
             Replace(PreviewRows, result.Rows);

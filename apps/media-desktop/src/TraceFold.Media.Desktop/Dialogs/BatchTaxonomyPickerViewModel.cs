@@ -7,7 +7,8 @@ namespace TraceFold.Media.Desktop.Dialogs;
 
 public sealed record BatchTaxonomyChoiceViewModel(
     BatchTaxonomyReference Value,
-    string DisplayText);
+    string DisplayText,
+    TaxonomyTermDto? ExistingTerm);
 
 public sealed partial class BatchTaxonomyPickerViewModel(
     ITaxonomySearchService taxonomy,
@@ -84,7 +85,8 @@ public sealed partial class BatchTaxonomyPickerViewModel(
             SelectedValues.Add(value);
             SelectedChoices.Add(new(
                 value,
-                existing?.DisplayName ?? name.Display));
+                existing?.DisplayName ?? name.Display,
+                existing));
             _selectedKeys.Add(key);
         }
 
