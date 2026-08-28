@@ -55,8 +55,37 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
     public IReadOnlyList<BatchTermCoverageOptionViewModel> RemoveTags =>
         RemoveTagPicker.AvailableExisting;
 
-    public IReadOnlyList<TaxonomyTermDto> ExistingTermSnapshots =>
-        AddAuthorPicker.SelectedChoices
+    public IReadOnlyList<TaxonomyTermDto> ExistingTermSnapshots
+    {
+        get
+        {
+            return TryBuildDraft(
+                out BatchMetadataDraft? draft,
+                out _)
+                ? ExistingTermSnapshotsFor(draft)
+                : [];
+        }
+    }
+
+    public IReadOnlyList<TaxonomyTermDto> ExistingTermSnapshotsFor(
+        BatchMetadataDraft? draft)
+    {
+        if (draft is null)
+        {
+            return [];
+        }
+
+        HashSet<(Guid Id, TaxonomyKind Kind)> referencedTerms =
+            draft.Authors.Values
+                .Concat(draft.Tags.Values)
+                .Append(draft.Series.Value)
+                .Where(reference => reference?.ExistingId is not null)
+                .Select(reference => (
+                    reference!.ExistingId!.Value,
+                    reference.Kind))
+                .ToHashSet();
+
+        return AddAuthorPicker.SelectedChoices
             .Concat(AddTagPicker.SelectedChoices)
             .Concat(ReplaceAuthorPicker.SelectedChoices)
             .Concat(ReplaceSeriesPicker.SelectedChoices)
@@ -70,8 +99,10 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
             .Concat(RemoveTags
                 .Where(option => option.IsSelected)
                 .Select(option => option.Coverage.Term))
+            .Where(term => referencedTerms.Contains((term.Id, term.Kind)))
             .DistinctBy(term => term.Id)
             .ToArray();
+    }
 
     [ObservableProperty]
     public partial BatchMetadataMode Mode { get; set; } = BatchMetadataMode.Add;

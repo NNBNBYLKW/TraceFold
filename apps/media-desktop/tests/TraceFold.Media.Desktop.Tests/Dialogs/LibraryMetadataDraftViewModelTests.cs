@@ -94,15 +94,102 @@ public sealed class LibraryMetadataDraftViewModelTests
             tagId,
             StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Switching_modes_excludes_hidden_existing_choices_from_snapshots()
+    {
+        TaxonomyTermDto author = Term(TaxonomyKind.Author, "Author");
+        LibraryMetadataDraftViewModel viewModel =
+            LibraryDialogTestData.CreateMetadataDraft(
+                taxonomy: new ExistingTaxonomySearchService(author));
+        viewModel.AddAuthorPicker.InputText = author.DisplayName;
+        await viewModel.AddAuthorPicker.CommitInputAsync(
+            TestContext.Current.CancellationToken);
+        Assert.Single(viewModel.ExistingTermSnapshots);
+
+        viewModel.Mode = BatchMetadataMode.Remove;
+
+        Assert.Empty(viewModel.ExistingTermSnapshots);
+    }
+
+    [Fact]
+    public async Task Disabling_replace_excludes_hidden_existing_choice_snapshot()
+    {
+        TaxonomyTermDto author = Term(TaxonomyKind.Author, "Author");
+        LibraryMetadataDraftViewModel viewModel =
+            LibraryDialogTestData.CreateMetadataDraft(
+                taxonomy: new ExistingTaxonomySearchService(author));
+        viewModel.Mode = BatchMetadataMode.Replace;
+        viewModel.ReplaceAuthorsEnabled = true;
+        viewModel.ReplaceAuthorPicker.InputText = author.DisplayName;
+        await viewModel.ReplaceAuthorPicker.CommitInputAsync(
+            TestContext.Current.CancellationToken);
+        Assert.Single(viewModel.ExistingTermSnapshots);
+
+        viewModel.ReplaceAuthorsEnabled = false;
+
+        Assert.Empty(viewModel.ExistingTermSnapshots);
+    }
+
+    [Fact]
+    public async Task Explicit_clear_excludes_hidden_existing_choice_snapshot()
+    {
+        TaxonomyTermDto author = Term(TaxonomyKind.Author, "Author");
+        LibraryMetadataDraftViewModel viewModel =
+            LibraryDialogTestData.CreateMetadataDraft(
+                taxonomy: new ExistingTaxonomySearchService(author));
+        viewModel.Mode = BatchMetadataMode.Replace;
+        viewModel.ReplaceAuthorsEnabled = true;
+        viewModel.ReplaceAuthorPicker.InputText = author.DisplayName;
+        await viewModel.ReplaceAuthorPicker.CommitInputAsync(
+            TestContext.Current.CancellationToken);
+
+        viewModel.ClearAuthors = true;
+
+        Assert.True(viewModel.TryBuildDraft(
+            out BatchMetadataDraft? metadata,
+            out _));
+        Assert.Equal(
+            BatchMetadataFieldOperation.Clear,
+            metadata!.Authors.Operation);
+        Assert.Empty(viewModel.ExistingTermSnapshots);
+        _ = LibraryBatchEditDraft.Create(
+            metadata,
+            null,
+            viewModel.ExistingTermSnapshots);
+    }
+
+    private static TaxonomyTermDto Term(
+        TaxonomyKind kind,
+        string name) =>
+        new(
+            Guid.NewGuid(),
+            kind,
+            name,
+            TaxonomyName.Create(name).Normalized,
+            0);
+
+    private sealed class ExistingTaxonomySearchService(
+        params TaxonomyTermDto[] terms) : ITaxonomySearchService
+    {
+        public Task<IReadOnlyList<TaxonomyTermDto>> SearchAsync(
+            TaxonomyKind kind,
+            string? query,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<TaxonomyTermDto>>(terms
+                .Where(term => term.Kind == kind)
+                .ToArray());
+    }
 }
 
 internal static class LibraryDialogTestData
 {
     public static LibraryMetadataDraftViewModel CreateMetadataDraft(
-        LibraryBatchEditorDto? editor = null)
+        LibraryBatchEditorDto? editor = null,
+        ITaxonomySearchService? taxonomy = null)
     {
         var viewModel = new LibraryMetadataDraftViewModel(
-            new EmptyTaxonomySearchService());
+            taxonomy ?? new EmptyTaxonomySearchService());
         viewModel.Load(editor ?? Editor());
         return viewModel;
     }

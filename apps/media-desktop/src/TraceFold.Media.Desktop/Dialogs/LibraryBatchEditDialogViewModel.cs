@@ -210,7 +210,7 @@ public sealed partial class LibraryBatchEditDialogViewModel : ObservableObject
         draft = LibraryBatchEditDraft.Create(
             metadata,
             naming,
-            Metadata.ExistingTermSnapshots);
+            Metadata.ExistingTermSnapshotsFor(metadata));
         error = null;
         return true;
     }
