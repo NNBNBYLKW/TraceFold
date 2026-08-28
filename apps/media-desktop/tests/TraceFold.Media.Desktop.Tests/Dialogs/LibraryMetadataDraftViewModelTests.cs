@@ -159,6 +159,55 @@ public sealed class LibraryMetadataDraftViewModelTests
             viewModel.ExistingTermSnapshots);
     }
 
+    [Fact]
+    public async Task Mode_switch_keeps_only_current_existing_reference_snapshot()
+    {
+        TaxonomyTermDto hiddenAddAuthor = Term(
+            TaxonomyKind.Author,
+            "Hidden add author");
+        TaxonomyTermDto currentRemoveAuthor = Term(
+            TaxonomyKind.Author,
+            "Current remove author");
+        var selection = new LibrarySelectionEntry(Guid.NewGuid(), 0, 0);
+        var asset = new LibraryBatchAssetDto(
+            selection,
+            "photo.jpg",
+            null,
+            [currentRemoveAuthor],
+            null,
+            []);
+        var editor = new LibraryBatchEditorDto(
+            [asset],
+            [new BatchTermCoverageDto(currentRemoveAuthor, 1)],
+            [],
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        LibraryMetadataDraftViewModel viewModel =
+            LibraryDialogTestData.CreateMetadataDraft(
+                editor,
+                new ExistingTaxonomySearchService(hiddenAddAuthor));
+        viewModel.AddAuthorPicker.InputText = hiddenAddAuthor.DisplayName;
+        await viewModel.AddAuthorPicker.CommitInputAsync(
+            TestContext.Current.CancellationToken);
+
+        viewModel.Mode = BatchMetadataMode.Remove;
+        Assert.Single(viewModel.RemoveAuthors).IsSelected = true;
+
+        Assert.True(viewModel.TryBuildDraft(
+            out BatchMetadataDraft? metadata,
+            out _));
+        TaxonomyTermDto snapshot = Assert.Single(
+            viewModel.ExistingTermSnapshotsFor(metadata));
+        Assert.Equal(currentRemoveAuthor.Id, snapshot.Id);
+        LibraryBatchEditDraft draft = LibraryBatchEditDraft.Create(
+            metadata,
+            null,
+            [snapshot]);
+        Assert.True(
+            LibraryDialogTestData.PreviewService()
+                .Preview(editor, draft)
+                .CanApply);
+    }
+
     private static TaxonomyTermDto Term(
         TaxonomyKind kind,
         string name) =>
