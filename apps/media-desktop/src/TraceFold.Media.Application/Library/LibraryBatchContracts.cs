@@ -51,14 +51,34 @@ public sealed record LibraryBatchEditDraft(
         IReadOnlyList<TaxonomyTermDto> snapshots)
     {
         ArgumentNullException.ThrowIfNull(snapshots);
-        HashSet<Guid> referencedIds = metadata is null
+        var referencedTerms = new Dictionary<Guid, TaxonomyKind>();
+        IEnumerable<BatchTaxonomyReference> references = metadata is null
             ? []
             : metadata.Authors.Values
                 .Concat(metadata.Tags.Values)
                 .Append(metadata.Series.Value)
-                .Where(reference => reference?.ExistingId is not null)
-                .Select(reference => reference!.ExistingId!.Value)
-                .ToHashSet();
+                .Where(reference => reference is not null)
+                .Select(reference => reference!);
+        foreach (BatchTaxonomyReference reference in references)
+        {
+            if (reference.ExistingId is not Guid existingId)
+            {
+                continue;
+            }
+
+            if (referencedTerms.TryGetValue(
+                    existingId,
+                    out TaxonomyKind existingKind)
+                && existingKind != reference.Kind)
+            {
+                throw new ArgumentException(
+                    "The taxonomy reference is inconsistent.",
+                    nameof(metadata));
+            }
+
+            referencedTerms.TryAdd(existingId, reference.Kind);
+        }
+
         var seen = new HashSet<Guid>();
         foreach (TaxonomyTermDto? term in snapshots)
         {
@@ -66,7 +86,10 @@ public sealed record LibraryBatchEditDraft(
                 || term.Id == Guid.Empty
                 || !Enum.IsDefined(term.Kind)
                 || !seen.Add(term.Id)
-                || !referencedIds.Contains(term.Id))
+                || !referencedTerms.TryGetValue(
+                    term.Id,
+                    out TaxonomyKind referencedKind)
+                || referencedKind != term.Kind)
             {
                 throw new ArgumentException(
                     "The taxonomy snapshot is invalid.",
@@ -82,6 +105,13 @@ public sealed record LibraryBatchEditDraft(
                     "The taxonomy snapshot is invalid.",
                     nameof(snapshots));
             }
+        }
+
+        if (seen.Count != referencedTerms.Count)
+        {
+            throw new ArgumentException(
+                "Every existing taxonomy reference requires a snapshot.",
+                nameof(snapshots));
         }
 
         return snapshots.ToArray();

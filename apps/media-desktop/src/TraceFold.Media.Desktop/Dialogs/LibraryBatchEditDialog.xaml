@@ -87,7 +87,7 @@
                                         <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
                                             <Grid Margin="0,2" ColumnDefinitions="*,Auto">
                                                 <TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" />
-                                                <Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" />
+                                                <Button Grid.Column="1" AutomationProperties.AutomationId="{x:Bind RemoveAutomationId}" AutomationProperties.Name="移除所选作者" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" />
                                             </Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
@@ -107,7 +107,7 @@
                                         <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
                                             <Grid Margin="0,2" ColumnDefinitions="*,Auto">
                                                 <TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" />
-                                                <Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" />
+                                                <Button Grid.Column="1" AutomationProperties.AutomationId="{x:Bind RemoveAutomationId}" AutomationProperties.Name="移除所选内容标签" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" />
                                             </Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
@@ -132,7 +132,7 @@
                                     ItemsSource="{x:Bind ViewModel.Metadata.RemoveAuthors, Mode=OneWay}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="dialogs:BatchTermCoverageOptionViewModel">
-                                            <CheckBox Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
+                                            <CheckBox AutomationProperties.AutomationId="{x:Bind SelectionAutomationId}" AutomationProperties.Name="选择要移除的作者" Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
@@ -143,7 +143,7 @@
                                     ItemsSource="{x:Bind ViewModel.Metadata.RemoveTags, Mode=OneWay}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="dialogs:BatchTermCoverageOptionViewModel">
-                                            <CheckBox Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
+                                            <CheckBox AutomationProperties.AutomationId="{x:Bind SelectionAutomationId}" AutomationProperties.Name="选择要移除的内容标签" Content="{x:Bind DisplayText}" IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
@@ -178,7 +178,7 @@
                                 <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.ReplaceAuthorPicker.SelectedChoices, Mode=OneWay}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
-                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" AutomationProperties.AutomationId="{x:Bind RemoveAutomationId}" AutomationProperties.Name="移除替换作者" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
@@ -200,7 +200,7 @@
                                 <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.ReplaceSeriesPicker.SelectedChoices, Mode=OneWay}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
-                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" AutomationProperties.AutomationId="{x:Bind RemoveAutomationId}" AutomationProperties.Name="移除替换系列" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
@@ -222,7 +222,7 @@
                                 <ItemsControl ItemsSource="{x:Bind ViewModel.Metadata.ReplaceTagPicker.SelectedChoices, Mode=OneWay}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="dialogs:BatchTaxonomyChoiceViewModel">
-                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
+                                            <Grid Margin="0,2" ColumnDefinitions="*,Auto"><TextBlock VerticalAlignment="Center" Text="{x:Bind DisplayText}" /><Button Grid.Column="1" AutomationProperties.AutomationId="{x:Bind RemoveAutomationId}" AutomationProperties.Name="移除替换内容标签" Click="OnRemoveChoiceClicked" Content="移除" Tag="{x:Bind Value}" /></Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>

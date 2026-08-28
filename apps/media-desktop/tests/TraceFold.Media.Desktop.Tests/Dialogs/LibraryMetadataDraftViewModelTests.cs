@@ -54,6 +54,46 @@ public sealed class LibraryMetadataDraftViewModelTests
             BatchMetadataFieldOperation.Clear,
             draft.Series.Operation);
     }
+
+    [Fact]
+    public void Remove_term_automation_ids_remain_unique_across_fields()
+    {
+        Guid sharedId = Guid.NewGuid();
+        TaxonomyTermDto author = new(
+            sharedId,
+            TaxonomyKind.Author,
+            "Author",
+            "AUTHOR",
+            1);
+        TaxonomyTermDto tag = new(
+            sharedId,
+            TaxonomyKind.Tag,
+            "Tag",
+            "TAG",
+            1);
+        LibraryBatchEditorDto editor = LibraryDialogTestData.Editor() with
+        {
+            Authors = [new BatchTermCoverageDto(author, 1)],
+            Tags = [new BatchTermCoverageDto(tag, 1)]
+        };
+        LibraryMetadataDraftViewModel viewModel =
+            LibraryDialogTestData.CreateMetadataDraft(editor);
+
+        string authorId = Assert.Single(viewModel.RemoveAuthors)
+            .SelectionAutomationId;
+        string tagId = Assert.Single(viewModel.RemoveTags)
+            .SelectionAutomationId;
+
+        Assert.NotEqual(authorId, tagId);
+        Assert.StartsWith(
+            "LibraryBatchRemoveAuthor-Select-",
+            authorId,
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            "LibraryBatchRemoveTag-Select-",
+            tagId,
+            StringComparison.Ordinal);
+    }
 }
 
 internal static class LibraryDialogTestData

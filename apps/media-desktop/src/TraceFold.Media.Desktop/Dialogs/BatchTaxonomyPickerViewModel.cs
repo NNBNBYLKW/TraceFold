@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
+using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
@@ -8,13 +10,19 @@ namespace TraceFold.Media.Desktop.Dialogs;
 public sealed record BatchTaxonomyChoiceViewModel(
     BatchTaxonomyReference Value,
     string DisplayText,
-    TaxonomyTermDto? ExistingTerm);
+    TaxonomyTermDto? ExistingTerm,
+    string RemoveAutomationId);
 
 public sealed partial class BatchTaxonomyPickerViewModel(
     ITaxonomySearchService taxonomy,
-    TaxonomyKind kind) : ObservableObject
+    TaxonomyKind kind,
+    string? automationScope = null) : ObservableObject
 {
     private readonly List<string> _selectedKeys = [];
+    private readonly string _automationScope = string.IsNullOrWhiteSpace(
+        automationScope)
+        ? $"BatchTaxonomy{kind}"
+        : automationScope.Trim();
 
     public TaxonomyKind Kind { get; } = kind;
 
@@ -86,12 +94,32 @@ public sealed partial class BatchTaxonomyPickerViewModel(
             SelectedChoices.Add(new(
                 value,
                 existing?.DisplayName ?? name.Display,
-                existing));
+                existing,
+                BuildRemoveAutomationId(existing, name)));
             _selectedKeys.Add(key);
         }
 
         InputText = string.Empty;
         Suggestions.Clear();
+    }
+
+    private string BuildRemoveAutomationId(
+        TaxonomyTermDto? existing,
+        TaxonomyName name)
+    {
+        string identity;
+        if (existing is not null)
+        {
+            identity = existing.Id.ToString("N");
+        }
+        else
+        {
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{Kind}:{name.Normalized}"));
+            identity = Convert.ToHexString(hash.AsSpan(0, 8));
+        }
+
+        return $"{_automationScope}-Remove-{identity}";
     }
 
     public void Remove(BatchTaxonomyReference value)

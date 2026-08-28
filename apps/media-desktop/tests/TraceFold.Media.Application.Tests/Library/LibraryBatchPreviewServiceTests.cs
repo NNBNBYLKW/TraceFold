@@ -57,6 +57,34 @@ public sealed class LibraryBatchPreviewServiceTests
     }
 
     [Fact]
+    public void Existing_term_snapshot_reference_count_does_not_change_identity()
+    {
+        TaxonomyTermDto selectedAuthor = Term(TaxonomyKind.Author, "Author");
+        TaxonomyTermDto persistedSnapshot = selectedAuthor with
+        {
+            ReferenceCount = 42
+        };
+        LibraryBatchEditorDto editor = Editor(Asset(authors: [selectedAuthor]));
+        LibraryBatchEditDraft draft = LibraryBatchEditDraft.Create(
+            BatchMetadataDraft.Create(
+                BatchMetadataMode.Add,
+                new(
+                    BatchMetadataFieldOperation.Add,
+                    [BatchTaxonomyReference.Existing(
+                        TaxonomyKind.Author,
+                        selectedAuthor.Id)]),
+                BatchMetadataSeriesEdit.Unchanged,
+                BatchMetadataSetEdit.Unchanged),
+            Definition(new MetadataTemplateNamingRule("{authors}-{name}")),
+            [persistedSnapshot]);
+
+        LibraryBatchPreviewDto preview = CreateService().Preview(editor, draft);
+
+        Assert.True(preview.CanApply);
+        Assert.Equal("Author-asset", preview.Rows[0].GeneratedDisplayName);
+    }
+
+    [Fact]
     public void Any_naming_error_blocks_metadata_only_changes_too()
     {
         TaxonomyTermDto tag = Term(TaxonomyKind.Tag, "Keep");
@@ -73,7 +101,8 @@ public sealed class LibraryBatchPreviewServiceTests
                     [BatchTaxonomyReference.Existing(
                         TaxonomyKind.Tag,
                         tag.Id)])),
-            Definition(new MetadataTemplateNamingRule("{series}")));
+            Definition(new MetadataTemplateNamingRule("{series}")),
+            [tag]);
 
         LibraryBatchPreviewDto preview = CreateService().Preview(editor, draft);
 
@@ -102,7 +131,8 @@ public sealed class LibraryBatchPreviewServiceTests
                     [BatchTaxonomyReference.Existing(
                         TaxonomyKind.Tag,
                         tag.Id)])),
-            null);
+            null,
+            [tag]);
         LibraryBatchEditDraft namingOnly = LibraryBatchEditDraft.Create(
             null,
             Definition(new PrefixNamingRule("sorted-")));
@@ -139,7 +169,8 @@ public sealed class LibraryBatchPreviewServiceTests
                         absent.Id)]),
                 BatchMetadataSeriesEdit.Unchanged,
                 BatchMetadataSetEdit.Unchanged),
-            null);
+            null,
+            [absent]);
 
         LibraryBatchPreviewDto preview = CreateService().Preview(editor, draft);
 
@@ -169,7 +200,8 @@ public sealed class LibraryBatchPreviewServiceTests
                         author.Id)]),
                 BatchMetadataSeriesEdit.Unchanged,
                 BatchMetadataSetEdit.Unchanged),
-            null);
+            null,
+            [author]);
         LibraryBatchEditDraft clear = LibraryBatchEditDraft.Create(
             BatchMetadataDraft.Create(
                 BatchMetadataMode.Replace,
@@ -282,6 +314,35 @@ public sealed class LibraryBatchPreviewServiceTests
 
         Assert.Throws<ArgumentException>(() =>
             CreateService().Preview(invalid, draft));
+    }
+
+    [Fact]
+    public void Existing_references_require_complete_kind_matched_snapshots()
+    {
+        TaxonomyTermDto author = Term(TaxonomyKind.Author, "Author");
+        BatchMetadataDraft metadata = BatchMetadataDraft.Create(
+            BatchMetadataMode.Add,
+            new(
+                BatchMetadataFieldOperation.Add,
+                [BatchTaxonomyReference.Existing(
+                    TaxonomyKind.Author,
+                    author.Id)]),
+            BatchMetadataSeriesEdit.Unchanged,
+            BatchMetadataSetEdit.Unchanged);
+
+        Assert.Throws<ArgumentException>(() =>
+            LibraryBatchEditDraft.Create(metadata, null));
+        Assert.Throws<ArgumentException>(() =>
+            LibraryBatchEditDraft.Create(
+                metadata,
+                null,
+                [author with { Kind = TaxonomyKind.Tag }]));
+
+        LibraryBatchEditDraft valid = LibraryBatchEditDraft.Create(
+            metadata,
+            null,
+            [author]);
+        Assert.Equal(author, Assert.Single(valid.ExistingTermSnapshots));
     }
 
     private static LibraryBatchPreviewService CreateService() =>

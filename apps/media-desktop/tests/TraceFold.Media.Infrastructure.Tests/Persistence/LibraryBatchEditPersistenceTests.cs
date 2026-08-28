@@ -126,7 +126,15 @@ public sealed class LibraryBatchEditPersistenceTests
 
         LibraryBatchStoreResult taxonomy = await store.ApplyAsync(
             fixture.Selection,
-            Draft(invalidTaxonomy, null),
+            Draft(
+                invalidTaxonomy,
+                null,
+                [new TaxonomyTermDto(
+                    deletedTermId,
+                    TaxonomyKind.Author,
+                    "Deleted before apply",
+                    TaxonomyName.Create("Deleted before apply").Normalized,
+                    0)]),
             TestContext.Current.CancellationToken);
         LibraryBatchStoreResult tooLong = await store.ApplyAsync(
             fixture.Selection,
@@ -243,7 +251,15 @@ public sealed class LibraryBatchEditPersistenceTests
 
         LibraryBatchStoreResult result = await CreateStore(database).ApplyAsync(
             selection,
-            Draft(metadata, null),
+            Draft(
+                metadata,
+                null,
+                [new TaxonomyTermDto(
+                    author,
+                    TaxonomyKind.Author,
+                    "Existing",
+                    TaxonomyName.Create("Existing").Normalized,
+                    1)]),
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
@@ -412,8 +428,12 @@ public sealed class LibraryBatchEditPersistenceTests
 
     private static LibraryBatchEditDraft Draft(
         BatchMetadataDraft? metadata,
-        NamingDefinition? naming) =>
-        LibraryBatchEditDraft.Create(metadata, naming);
+        NamingDefinition? naming,
+        IReadOnlyList<TaxonomyTermDto>? existingTermSnapshots = null) =>
+        LibraryBatchEditDraft.Create(
+            metadata,
+            naming,
+            existingTermSnapshots);
 
     private static BatchMetadataDraft ReplaceAuthors(string name) =>
         BatchMetadataDraft.Create(

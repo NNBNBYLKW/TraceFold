@@ -7,7 +7,8 @@ namespace TraceFold.Media.Desktop.Dialogs;
 
 public sealed partial class BatchTermCoverageOptionViewModel(
     BatchTermCoverageDto coverage,
-    int totalSelected) : ObservableObject
+    int totalSelected,
+    string? automationScope = null) : ObservableObject
 {
     public BatchTermCoverageDto Coverage { get; } = coverage;
 
@@ -15,6 +16,11 @@ public sealed partial class BatchTermCoverageOptionViewModel(
 
     public string DisplayText { get; } =
         $"{coverage.Term.DisplayName} · {coverage.SelectedCount}/{totalSelected}";
+
+    public string SelectionAutomationId { get; } =
+        $"{(string.IsNullOrWhiteSpace(automationScope)
+            ? $"BatchMetadata{coverage.Term.Kind}"
+            : automationScope.Trim())}-Select-{coverage.Term.Id:N}";
 
     [ObservableProperty]
     public partial bool IsSelected { get; set; }
@@ -26,13 +32,20 @@ public sealed partial class BatchMetadataDialogViewModel : ObservableObject
 
     public BatchMetadataDialogViewModel(ITaxonomySearchService taxonomy)
     {
-        AddAuthorPicker = new(taxonomy, TaxonomyKind.Author);
-        AddTagPicker = new(taxonomy, TaxonomyKind.Tag);
-        RemoveAuthorPicker = new(taxonomy, TaxonomyKind.Author);
-        RemoveTagPicker = new(taxonomy, TaxonomyKind.Tag);
-        ReplaceAuthorPicker = new(taxonomy, TaxonomyKind.Author);
-        ReplaceSeriesPicker = new(taxonomy, TaxonomyKind.Series);
-        ReplaceTagPicker = new(taxonomy, TaxonomyKind.Tag);
+        AddAuthorPicker = new(
+            taxonomy, TaxonomyKind.Author, "BatchMetadataAddAuthor");
+        AddTagPicker = new(
+            taxonomy, TaxonomyKind.Tag, "BatchMetadataAddTag");
+        RemoveAuthorPicker = new(
+            taxonomy, TaxonomyKind.Author, "BatchMetadataRemoveAuthor");
+        RemoveTagPicker = new(
+            taxonomy, TaxonomyKind.Tag, "BatchMetadataRemoveTag");
+        ReplaceAuthorPicker = new(
+            taxonomy, TaxonomyKind.Author, "BatchMetadataReplaceAuthor");
+        ReplaceSeriesPicker = new(
+            taxonomy, TaxonomyKind.Series, "BatchMetadataReplaceSeries");
+        ReplaceTagPicker = new(
+            taxonomy, TaxonomyKind.Tag, "BatchMetadataReplaceTag");
     }
 
     public BatchTaxonomyPickerViewModel AddAuthorPicker { get; }
@@ -131,11 +144,13 @@ public sealed partial class BatchMetadataDialogViewModel : ObservableObject
         RemoveAuthorPicker.SetAvailableExisting(editor.Authors.Select(
             coverage => new BatchTermCoverageOptionViewModel(
                 coverage,
-                editor.SelectedCount)));
+                editor.SelectedCount,
+                "BatchMetadataRemoveAuthor")));
         RemoveTagPicker.SetAvailableExisting(editor.Tags.Select(
             coverage => new BatchTermCoverageOptionViewModel(
                 coverage,
-                editor.SelectedCount)));
+                editor.SelectedCount,
+                "BatchMetadataRemoveTag")));
         OnPropertyChanged(nameof(RemoveAuthors));
         OnPropertyChanged(nameof(RemoveTags));
     }

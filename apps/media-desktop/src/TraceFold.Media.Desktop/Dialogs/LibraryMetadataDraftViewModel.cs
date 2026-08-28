@@ -11,13 +11,20 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
     public LibraryMetadataDraftViewModel(ITaxonomySearchService taxonomy)
     {
         ArgumentNullException.ThrowIfNull(taxonomy);
-        AddAuthorPicker = new(taxonomy, TaxonomyKind.Author);
-        AddTagPicker = new(taxonomy, TaxonomyKind.Tag);
-        RemoveAuthorPicker = new(taxonomy, TaxonomyKind.Author);
-        RemoveTagPicker = new(taxonomy, TaxonomyKind.Tag);
-        ReplaceAuthorPicker = new(taxonomy, TaxonomyKind.Author);
-        ReplaceSeriesPicker = new(taxonomy, TaxonomyKind.Series);
-        ReplaceTagPicker = new(taxonomy, TaxonomyKind.Tag);
+        AddAuthorPicker = new(
+            taxonomy, TaxonomyKind.Author, "LibraryBatchAddAuthor");
+        AddTagPicker = new(
+            taxonomy, TaxonomyKind.Tag, "LibraryBatchAddTag");
+        RemoveAuthorPicker = new(
+            taxonomy, TaxonomyKind.Author, "LibraryBatchRemoveAuthor");
+        RemoveTagPicker = new(
+            taxonomy, TaxonomyKind.Tag, "LibraryBatchRemoveTag");
+        ReplaceAuthorPicker = new(
+            taxonomy, TaxonomyKind.Author, "LibraryBatchReplaceAuthor");
+        ReplaceSeriesPicker = new(
+            taxonomy, TaxonomyKind.Series, "LibraryBatchReplaceSeries");
+        ReplaceTagPicker = new(
+            taxonomy, TaxonomyKind.Tag, "LibraryBatchReplaceTag");
 
         Observe(AddAuthorPicker);
         Observe(AddTagPicker);
@@ -133,11 +140,13 @@ public sealed partial class LibraryMetadataDraftViewModel : ObservableObject
         RemoveAuthorPicker.SetAvailableExisting(editor.Authors.Select(
             coverage => new BatchTermCoverageOptionViewModel(
                 coverage,
-                editor.Assets.Count)));
+                editor.Assets.Count,
+                "LibraryBatchRemoveAuthor")));
         RemoveTagPicker.SetAvailableExisting(editor.Tags.Select(
             coverage => new BatchTermCoverageOptionViewModel(
                 coverage,
-                editor.Assets.Count)));
+                editor.Assets.Count,
+                "LibraryBatchRemoveTag")));
         ObserveOptions(RemoveAuthorPicker.AvailableExisting);
         ObserveOptions(RemoveTagPicker.AvailableExisting);
         OnPropertyChanged(nameof(RemoveAuthors));

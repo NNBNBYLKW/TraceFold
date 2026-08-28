@@ -64,6 +64,32 @@ public sealed class BatchTaxonomyPickerViewModelTests
         Assert.Equal("第二季", Assert.Single(picker.SelectedValues).NewName);
     }
 
+    [Fact]
+    public async Task Dynamic_choice_automation_ids_are_scoped_unique_and_private()
+    {
+        var picker = new BatchTaxonomyPickerViewModel(
+            new RecordingTaxonomySearchService(),
+            TaxonomyKind.Author,
+            "LibraryBatchAddAuthor");
+        picker.InputText = "Private Alpha";
+        await picker.CommitInputAsync(TestContext.Current.CancellationToken);
+        picker.InputText = "Private Beta";
+
+        await picker.CommitInputAsync(TestContext.Current.CancellationToken);
+
+        string[] ids = picker.SelectedChoices
+            .Select(choice => choice.RemoveAutomationId)
+            .ToArray();
+        Assert.Equal(2, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(ids, id => Assert.StartsWith(
+            "LibraryBatchAddAuthor-Remove-",
+            id,
+            StringComparison.Ordinal));
+        Assert.DoesNotContain(ids, id => id.Contains(
+            "Private",
+            StringComparison.OrdinalIgnoreCase));
+    }
+
     private sealed class RecordingTaxonomySearchService(
         params TaxonomyTermDto[] terms) : ITaxonomySearchService
     {

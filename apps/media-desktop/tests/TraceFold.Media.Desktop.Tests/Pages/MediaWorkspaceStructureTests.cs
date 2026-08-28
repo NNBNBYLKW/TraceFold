@@ -350,6 +350,31 @@ public sealed class MediaWorkspaceStructureTests
                 xaml,
                 StringComparison.Ordinal);
         }
+
+
+        Assert.Equal(
+            5,
+            Count(
+                xaml,
+                "AutomationProperties.AutomationId=\"{x:Bind RemoveAutomationId}\""));
+        Assert.Equal(
+            2,
+            Count(
+                xaml,
+                "AutomationProperties.AutomationId=\"{x:Bind SelectionAutomationId}\""));
+
+        XDocument document = XDocument.Parse(xaml);
+        string[] staticIds = document.Descendants()
+            .SelectMany(element => element.Attributes())
+            .Where(attribute =>
+                attribute.Name.LocalName
+                    == "AutomationProperties.AutomationId"
+                && !attribute.Value.StartsWith("{", StringComparison.Ordinal))
+            .Select(attribute => attribute.Value)
+            .ToArray();
+        Assert.Equal(
+            staticIds.Length,
+            staticIds.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]

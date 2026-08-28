@@ -366,7 +366,7 @@ public sealed class LibraryBatchPreviewService(
         {
             var key = new TermNameKey(term.Kind, term.NormalizedName);
             if (_byId.TryGetValue(term.Id, out TaxonomyTermDto? byId)
-                && byId != term)
+                && !HasSameIdentity(byId, term))
             {
                 throw new ArgumentException("A taxonomy id is inconsistent.");
             }
@@ -380,6 +380,18 @@ public sealed class LibraryBatchPreviewService(
             _byId.TryAdd(term.Id, term);
             _byName.TryAdd(key, term);
         }
+
+        private static bool HasSameIdentity(
+            TaxonomyTermDto left,
+            TaxonomyTermDto right) =>
+            left.Id == right.Id
+            && left.Kind == right.Kind
+            && StringComparer.Ordinal.Equals(
+                left.DisplayName,
+                right.DisplayName)
+            && StringComparer.Ordinal.Equals(
+                left.NormalizedName,
+                right.NormalizedName);
 
         private Guid CreateDeferredId(TermNameKey key)
         {
