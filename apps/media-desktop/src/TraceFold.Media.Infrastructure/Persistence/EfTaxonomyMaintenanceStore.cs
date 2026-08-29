@@ -314,10 +314,55 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
         }
     }
 
-    public Task<TaxonomyMaintenanceUndoResult> UndoAsync(
+    public async Task<TaxonomyMaintenanceUndoResult> UndoAsync(
         TaxonomyMaintenanceUndoReceipt receipt,
-        CancellationToken cancellationToken) =>
-        throw new NotSupportedException();
+        CancellationToken cancellationToken)
+    {
+        if (receipt is null || receipt.OperationId == Guid.Empty)
+        {
+            return UndoFailure(
+                TaxonomyMaintenanceErrorCodes.UndoConflict,
+                retryable: false);
+        }
+
+        await using MediaDesktopDbContext context =
+            await _contextFactory.CreateDbContextAsync(cancellationToken);
+        await using IDbContextTransaction transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            TaxonomyMaintenanceUndoResult result = receipt switch
+            {
+                TaxonomyMergeUndoReceipt merge => await UndoMergeInContextAsync(
+                    context,
+                    merge,
+                    cancellationToken),
+                TaxonomyDeleteUndoReceipt delete => await UndoDeleteInContextAsync(
+                    context,
+                    delete,
+                    cancellationToken),
+                _ => throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.UndoConflict),
+            };
+            await transaction.CommitAsync(cancellationToken);
+            return result;
+        }
+        catch (TaxonomyMaintenancePlanningException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return UndoFailure(
+                TaxonomyMaintenanceErrorCodes.UndoConflict,
+                retryable: false);
+        }
+        catch (Exception error) when (error is DbUpdateException
+            or SqliteException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return UndoFailure(
+                TaxonomyMaintenanceErrorCodes.PersistenceFailed,
+                retryable: true);
+        }
+    }
 
     private static async Task<TaxonomyMergePrepareResult>
         PrepareMergeInContextAsync(
@@ -645,6 +690,311 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
             row => new ReferenceCounts(row.Inbox, row.Library));
     }
 
+    private async Task<TaxonomyMaintenanceUndoResult> UndoMergeInContextAsync(
+        MediaDesktopDbContext context,
+        TaxonomyMergeUndoReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        ValidateMergeReceiptShape(receipt);
+        TaxonomyTermRow? target = await context.TaxonomyTerms
+            .SingleOrDefaultAsync(
+                term => term.Id == receipt.TargetBefore.Id,
+                cancellationToken);
+        if (target is null
+            || target.Kind != KindKey(receipt.TargetBefore.Kind)
+            || !StringComparer.Ordinal.Equals(
+                target.DisplayName,
+                receipt.TargetAfter.Display)
+            || !StringComparer.Ordinal.Equals(
+                target.NormalizedName,
+                receipt.TargetAfter.Normalized))
+        {
+            throw new TaxonomyMaintenancePlanningException(
+                TaxonomyMaintenanceErrorCodes.UndoConflict);
+        }
+
+        Guid[] sourceIds = receipt.Sources.Select(source => source.Id).ToArray();
+        bool sourceIdExists = await context.TaxonomyTerms
+            .AnyAsync(term => sourceIds.Contains(term.Id), cancellationToken);
+        if (sourceIdExists)
+        {
+            throw new TaxonomyMaintenancePlanningException(
+                TaxonomyMaintenanceErrorCodes.UndoConflict);
+        }
+
+        string[] restoreNames = receipt.Sources
+            .Select(source => source.NormalizedName)
+            .Append(receipt.TargetBefore.NormalizedName)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Guid[] occupiedIds = await context.TaxonomyTerms
+            .AsNoTracking()
+            .Where(term => term.Kind == target.Kind
+                && restoreNames.Contains(term.NormalizedName))
+            .Select(term => term.Id)
+            .ToArrayAsync(cancellationToken);
+        if (occupiedIds.Any(id => id != target.Id))
+        {
+            throw new TaxonomyMaintenancePlanningException(
+                TaxonomyMaintenanceErrorCodes.UndoConflict);
+        }
+
+        IReadOnlyDictionary<MetadataOwner, TaxonomyOwnerSnapshot> currentOwners =
+            await LoadOwnersByIdentityAsync(
+                context,
+                receipt.Owners.Select(owner => owner.Owner),
+                cancellationToken);
+        foreach (TaxonomyMergeUndoOwner owner in receipt.Owners)
+        {
+            if (!currentOwners.TryGetValue(
+                    owner.Owner,
+                    out TaxonomyOwnerSnapshot? current)
+                || current.Version != owner.ExpectedPostVersion
+                || !AssignmentsEqual(current.Assignment, owner.After))
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.UndoConflict);
+            }
+        }
+
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        target.DisplayName = receipt.TargetBefore.DisplayName;
+        target.NormalizedName = receipt.TargetBefore.NormalizedName;
+        target.UpdatedAtUtc = now;
+        await context.SaveChangesAsync(cancellationToken);
+
+        context.TaxonomyTerms.AddRange(receipt.Sources.Select(ToRow));
+        foreach (TaxonomyMergeUndoOwner owner in receipt.Owners)
+        {
+            await RestoreOwnerAsync(
+                context,
+                receipt.TargetBefore.Kind,
+                owner,
+                now,
+                cancellationToken);
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        return new TaxonomyMaintenanceUndoResult(
+            true,
+            receipt.Owners.Count,
+            receipt.Sources.Count,
+            receipt.Owners.Select(owner => owner.Owner).ToArray(),
+            ReceiptIsRetryable: false,
+            ErrorCode: null);
+    }
+
+    private static async Task<TaxonomyMaintenanceUndoResult>
+        UndoDeleteInContextAsync(
+            MediaDesktopDbContext context,
+            TaxonomyDeleteUndoReceipt receipt,
+            CancellationToken cancellationToken)
+    {
+        if (receipt.Terms is null
+            || receipt.Terms.Count == 0
+            || receipt.Terms.Any(term => term is null || term.Id == Guid.Empty)
+            || receipt.Terms.Select(term => term.Id).Distinct().Count()
+                != receipt.Terms.Count)
+        {
+            throw new TaxonomyMaintenancePlanningException(
+                TaxonomyMaintenanceErrorCodes.UndoConflict);
+        }
+
+        Guid[] ids = receipt.Terms.Select(term => term.Id).ToArray();
+        if (await context.TaxonomyTerms.AnyAsync(
+                term => ids.Contains(term.Id),
+                cancellationToken))
+        {
+            throw new TaxonomyMaintenancePlanningException(
+                TaxonomyMaintenanceErrorCodes.UndoConflict);
+        }
+
+        foreach (IGrouping<TaxonomyKind, TaxonomyTermSnapshot> group in
+            receipt.Terms.GroupBy(term => term.Kind))
+        {
+            string kindKey = KindKey(group.Key);
+            string[] names = group
+                .Select(term => term.NormalizedName)
+                .ToArray();
+            if (await context.TaxonomyTerms.AnyAsync(
+                    term => term.Kind == kindKey
+                        && names.Contains(term.NormalizedName),
+                    cancellationToken))
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.UndoConflict);
+            }
+        }
+
+        context.TaxonomyTerms.AddRange(receipt.Terms.Select(ToRow));
+        await context.SaveChangesAsync(cancellationToken);
+        return new TaxonomyMaintenanceUndoResult(
+            true,
+            0,
+            receipt.Terms.Count,
+            [],
+            ReceiptIsRetryable: false,
+            ErrorCode: null);
+    }
+
+    private static void ValidateMergeReceiptShape(
+        TaxonomyMergeUndoReceipt receipt)
+    {
+        if (receipt.TargetBefore is null
+            || receipt.TargetAfter is null
+            || receipt.TargetBefore.Id == Guid.Empty
+            || receipt.Sources is null
+            || receipt.Sources.Count == 0
+            || receipt.Owners is null
+            || receipt.Sources.Any(source => source is null
+                || source.Id == Guid.Empty
+                || source.Id == receipt.TargetBefore.Id
+                || source.Kind != receipt.TargetBefore.Kind)
+            || receipt.Sources.Select(source => source.Id).Distinct().Count()
+                != receipt.Sources.Count
+            || receipt.Owners.Any(owner => owner is null
+                || owner.Owner is null
+                || owner.Owner.Id == Guid.Empty
+                || owner.ExpectedPostVersion < 0
+                || owner.Before is null
+                || owner.After is null)
+            || receipt.Owners.Select(owner => owner.Owner).Distinct().Count()
+                != receipt.Owners.Count)
+        {
+            throw new TaxonomyMaintenancePlanningException(
+                TaxonomyMaintenanceErrorCodes.UndoConflict);
+        }
+    }
+
+    private static async Task<
+        IReadOnlyDictionary<MetadataOwner, TaxonomyOwnerSnapshot>>
+        LoadOwnersByIdentityAsync(
+            MediaDesktopDbContext context,
+            IEnumerable<MetadataOwner> owners,
+            CancellationToken cancellationToken)
+    {
+        MetadataOwner[] requested = owners.Distinct().ToArray();
+        Guid[] inboxIds = requested
+            .Where(owner => owner.Kind == MetadataOwnerKind.InboxItem)
+            .Select(owner => owner.Id)
+            .ToArray();
+        Guid[] assetIds = requested
+            .Where(owner => owner.Kind == MetadataOwnerKind.MediaAsset)
+            .Select(owner => owner.Id)
+            .ToArray();
+        OwnerFact[] inboxFacts = await context.MetadataDrafts
+            .AsNoTracking()
+            .Where(draft => inboxIds.Contains(draft.InboxItemId))
+            .Select(draft => new OwnerFact
+            {
+                Id = draft.InboxItemId,
+                ActualFilename = draft.InboxItem.ActualFilename,
+                DisplayName = draft.DisplayName,
+                Version = draft.Version,
+                SeriesId = draft.SeriesId,
+            })
+            .ToArrayAsync(cancellationToken);
+        OwnerFact[] assetFacts = await context.MediaAssets
+            .AsNoTracking()
+            .Where(asset => assetIds.Contains(asset.Id))
+            .Select(asset => new OwnerFact
+            {
+                Id = asset.Id,
+                ActualFilename = asset.ActualFilename,
+                DisplayName = asset.DisplayName,
+                Version = asset.MetadataVersion,
+                SeriesId = asset.SeriesId,
+            })
+            .ToArrayAsync(cancellationToken);
+        IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> inboxAuthors =
+            await LoadInboxAuthorIdsAsync(context, inboxIds, cancellationToken);
+        IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> inboxTags =
+            await LoadInboxTagIdsAsync(context, inboxIds, cancellationToken);
+        IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> assetAuthors =
+            await LoadAssetAuthorIdsAsync(context, assetIds, cancellationToken);
+        IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> assetTags =
+            await LoadAssetTagIdsAsync(context, assetIds, cancellationToken);
+        return inboxFacts.Select(fact => ToOwnerSnapshot(
+                MetadataOwnerKind.InboxItem,
+                fact,
+                GetIds(inboxAuthors, fact.Id),
+                GetIds(inboxTags, fact.Id)))
+            .Concat(assetFacts.Select(fact => ToOwnerSnapshot(
+                MetadataOwnerKind.MediaAsset,
+                fact,
+                GetIds(assetAuthors, fact.Id),
+                GetIds(assetTags, fact.Id))))
+            .ToDictionary(owner => owner.Owner);
+    }
+
+    private static async Task RestoreOwnerAsync(
+        MediaDesktopDbContext context,
+        TaxonomyKind kind,
+        TaxonomyMergeUndoOwner owner,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        switch (owner.Owner.Kind)
+        {
+            case MetadataOwnerKind.InboxItem:
+                MetadataDraftRow? draft = await context.MetadataDrafts
+                    .SingleOrDefaultAsync(
+                        row => row.InboxItemId == owner.Owner.Id,
+                        cancellationToken);
+                if (draft is null)
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.UndoConflict);
+                }
+
+                await ReplaceInboxAssignmentAsync(
+                    context,
+                    kind,
+                    owner.Owner.Id,
+                    owner.Before,
+                    cancellationToken);
+                draft.SeriesId = owner.Before.SeriesId;
+                draft.Version = checked(owner.ExpectedPostVersion + 1);
+                draft.UpdatedAtUtc = now;
+                break;
+            case MetadataOwnerKind.MediaAsset:
+                MediaAssetRow? asset = await context.MediaAssets
+                    .SingleOrDefaultAsync(
+                        row => row.Id == owner.Owner.Id,
+                        cancellationToken);
+                if (asset is null)
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.UndoConflict);
+                }
+
+                await ReplaceAssetAssignmentAsync(
+                    context,
+                    kind,
+                    owner.Owner.Id,
+                    owner.Before,
+                    cancellationToken);
+                asset.SeriesId = owner.Before.SeriesId;
+                asset.MetadataVersion = checked(owner.ExpectedPostVersion + 1);
+                asset.UpdatedAtUtc = now;
+                break;
+            default:
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.UndoConflict);
+        }
+    }
+
+    private static TaxonomyTermRow ToRow(TaxonomyTermSnapshot snapshot) =>
+        new()
+        {
+            Id = snapshot.Id,
+            Kind = KindKey(snapshot.Kind),
+            DisplayName = snapshot.DisplayName,
+            NormalizedName = snapshot.NormalizedName,
+            CreatedAtUtc = snapshot.CreatedAtUtc,
+            UpdatedAtUtc = snapshot.UpdatedAtUtc,
+        };
+
     private static async Task ApplyOwnerAsync(
         MediaDesktopDbContext context,
         TaxonomyKind kind,
@@ -866,6 +1216,11 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
     private static TaxonomyMaintenanceStoreResult StoreFailure(
         string errorCode) =>
         new(false, [], 0, null, errorCode);
+
+    private static TaxonomyMaintenanceUndoResult UndoFailure(
+        string errorCode,
+        bool retryable) =>
+        new(false, 0, 0, [], retryable, errorCode);
 
     private sealed class OwnerFact
     {

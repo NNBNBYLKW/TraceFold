@@ -59,6 +59,9 @@ public static class DependencyInjection
             provider.GetRequiredService<EfTaxonomyStore>());
         services.AddSingleton<ITaxonomyManagementQueryStore,
             EfTaxonomyManagementQueryStore>();
+        services.AddSingleton<EfTaxonomyMaintenanceStore>();
+        services.AddSingleton<ITaxonomyMaintenanceStore>(provider =>
+            provider.GetRequiredService<EfTaxonomyMaintenanceStore>());
         services.AddSingleton<IMetadataStore, EfMetadataStore>();
         services.AddSingleton<IBatchMetadataStore, EfBatchMetadataStore>();
         services.AddSingleton<ILibraryQueryStore, EfLibraryQueryStore>();
