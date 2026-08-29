@@ -58,6 +58,20 @@ internal sealed record PersistedLibraryAssetSnapshot(
     IReadOnlyList<string> TagNames,
     long MetadataVersion);
 
+internal sealed record TaxonomyManagementFixture(
+    Guid SharedAuthorId,
+    Guid FormalOnlyAuthorId,
+    Guid UnusedAuthorId,
+    Guid TieAuthorAId,
+    Guid TieAuthorBId,
+    Guid SharedSeriesId,
+    Guid UnusedSeriesId,
+    Guid SharedTagId,
+    Guid UnusedTagId,
+    Guid PercentTagId,
+    Guid UnderscoreTagId,
+    Guid BackslashTagId);
+
 internal sealed class TestMediaDatabase : IAsyncDisposable
 {
     private readonly TestDirectory _directory;
@@ -198,6 +212,97 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
                  {name.Normalized}, {now}, {now})
             """);
         return id;
+    }
+
+    public async Task<TaxonomyManagementFixture>
+        SeedTaxonomyManagementFixtureAsync()
+    {
+        Guid sharedAuthorId = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Shared Author");
+        Guid formalOnlyAuthorId = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Formal Only");
+        Guid unusedAuthorId = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Unused Author");
+        Guid tieAuthorAId = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Alpha Tie");
+        Guid tieAuthorBId = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Beta Tie");
+        Guid sharedSeriesId = await SeedTaxonomyAsync(
+            TaxonomyKind.Series,
+            "Shared Series");
+        Guid unusedSeriesId = await SeedTaxonomyAsync(
+            TaxonomyKind.Series,
+            "Unused Series");
+        Guid sharedTagId = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Shared Tag");
+        Guid unusedTagId = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Unused Tag");
+        Guid percentTagId = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "100% Real");
+        Guid underscoreTagId = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Under_score");
+        Guid backslashTagId = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            @"Back\slash");
+
+        Guid inboxId = await SeedInboxItemAsync(
+            InboxItemState.ReadyToTag,
+            metadataVersion: 3,
+            displayName: "Inbox taxonomy owner");
+        await using (var context = new MediaDesktopDbContext(_options))
+        {
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE metadata_drafts
+                SET series_id = {sharedSeriesId}
+                WHERE inbox_item_id = {inboxId}
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_authors
+                    (inbox_item_id, author_id, ordinal)
+                VALUES ({inboxId}, {sharedAuthorId}, {0})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_authors
+                    (inbox_item_id, author_id, ordinal)
+                VALUES ({inboxId}, {tieAuthorAId}, {1})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_tags
+                    (inbox_item_id, tag_id, ordinal)
+                VALUES ({inboxId}, {sharedTagId}, {0})
+                """);
+        }
+
+        await SeedFormalAssetAsync(
+            "taxonomy-owner.jpg",
+            displayName: "Library taxonomy owner",
+            metadataVersion: 4,
+            authorIds: [sharedAuthorId, tieAuthorBId, formalOnlyAuthorId],
+            seriesId: sharedSeriesId,
+            tagIds: [sharedTagId]);
+
+        return new TaxonomyManagementFixture(
+            sharedAuthorId,
+            formalOnlyAuthorId,
+            unusedAuthorId,
+            tieAuthorAId,
+            tieAuthorBId,
+            sharedSeriesId,
+            unusedSeriesId,
+            sharedTagId,
+            unusedTagId,
+            percentTagId,
+            underscoreTagId,
+            backslashTagId);
     }
 
     public async Task DeleteTaxonomyAsync(Guid id)

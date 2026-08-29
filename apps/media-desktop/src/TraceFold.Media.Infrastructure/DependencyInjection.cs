@@ -57,6 +57,8 @@ public static class DependencyInjection
             provider.GetRequiredService<EfTaxonomyStore>());
         services.AddSingleton<ITaxonomyLookup>(provider =>
             provider.GetRequiredService<EfTaxonomyStore>());
+        services.AddSingleton<ITaxonomyManagementQueryStore,
+            EfTaxonomyManagementQueryStore>();
         services.AddSingleton<IMetadataStore, EfMetadataStore>();
         services.AddSingleton<IBatchMetadataStore, EfBatchMetadataStore>();
         services.AddSingleton<ILibraryQueryStore, EfLibraryQueryStore>();
