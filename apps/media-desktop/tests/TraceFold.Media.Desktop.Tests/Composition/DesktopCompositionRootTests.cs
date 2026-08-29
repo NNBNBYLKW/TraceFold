@@ -4,6 +4,7 @@ using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Desktop.Composition;
 using TraceFold.Media.Desktop.Dialogs;
+using TraceFold.Media.Desktop.Pages;
 using TraceFold.Media.Infrastructure.Workers;
 using Xunit;
 
@@ -41,6 +42,16 @@ public sealed class DesktopCompositionRootTests
                 host.Services.GetRequiredService<ILibraryBatchEditDialogService>());
             Assert.IsType<WindowsBatchIngestConfirmationService>(
                 host.Services.GetRequiredService<IBatchIngestConfirmationService>());
+            ITaxonomyMaintenanceDialogService taxonomyDialogs = Assert.Single(
+                host.Services.GetServices<ITaxonomyMaintenanceDialogService>());
+            Assert.IsType<WindowsTaxonomyMaintenanceDialogService>(
+                taxonomyDialogs);
+            Assert.Same(
+                host.Services.GetRequiredService<TaxonomyViewModel>(),
+                host.Services.GetRequiredService<TaxonomyViewModel>());
+            IServiceProviderIsService serviceProbe =
+                host.Services.GetRequiredService<IServiceProviderIsService>();
+            Assert.True(serviceProbe.IsService(typeof(TaxonomyPage)));
         }
         finally
         {

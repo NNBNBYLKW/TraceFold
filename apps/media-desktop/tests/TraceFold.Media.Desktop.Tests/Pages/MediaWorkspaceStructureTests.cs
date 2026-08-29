@@ -399,13 +399,13 @@ public sealed class MediaWorkspaceStructureTests
     }
 
     [Fact]
-    public async Task Taxonomy_and_settings_pages_expose_stable_stage_two_controls()
+    public async Task Taxonomy_workspace_and_merge_dialog_expose_stage_five_c_controls()
     {
         string taxonomy = await File.ReadAllTextAsync(
             DesktopSource("Pages", "TaxonomyPage.xaml"),
             TestContext.Current.CancellationToken);
-        string settings = await File.ReadAllTextAsync(
-            DesktopSource("Pages", "SettingsPage.xaml"),
+        string mergeDialog = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "TaxonomyMergeDialog.xaml"),
             TestContext.Current.CancellationToken);
         string taxonomyCode = await File.ReadAllTextAsync(
             DesktopSource("Pages", "TaxonomyPage.xaml.cs"),
@@ -413,36 +413,59 @@ public sealed class MediaWorkspaceStructureTests
 
         foreach (string id in new[]
         {
-            "TaxonomyKindSelector",
+            "TaxonomyKindList",
             "TaxonomySearchBox",
-            "TaxonomyList",
+            "TaxonomyReferenceFilter",
+            "TaxonomySortField",
+            "TaxonomySortDirection",
             "TaxonomyCreateButton",
-            "TaxonomyRenameButton",
-            "TaxonomyDeleteButton"
+            "TaxonomyRefreshButton",
+            "TaxonomyTermList",
+            "TaxonomyInspectorPane",
+            "TaxonomyMergeButton",
+            "TaxonomyDeleteButton",
+            "TaxonomyDeleteBlockers",
+            "TaxonomyUndoBanner",
+            "TaxonomyUndoButton",
+            "TaxonomyRenameConflictMergeButton"
         })
         {
             Assert.Contains(
                 $"AutomationProperties.AutomationId=\"{id}\"",
                 taxonomy,
                 StringComparison.Ordinal);
+            AssertElementHasAccessibleName(taxonomy, id);
         }
 
-        Assert.Contains(
-            "IsEnabled=\"{x:Bind ViewModel.CanRename, Mode=OneWay}\"",
-            taxonomy,
+        Assert.Contains("SelectionMode=\"Extended\"", taxonomy,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "IsEnabled=\"{x:Bind ViewModel.CanDelete, Mode=OneWay}\"",
-            taxonomy,
+        Assert.Contains("Key=\"A\" Modifiers=\"Control\"", taxonomy,
             StringComparison.Ordinal);
+        Assert.Contains("Key=\"Escape\"", taxonomy, StringComparison.Ordinal);
 
-        Assert.Contains(
-            "AutomationProperties.AutomationId=\"AutoScanToggle\"",
-            settings,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "AutomationProperties.AutomationId=\"LastScanStatus\"",
-            settings,
+        foreach (string id in new[]
+        {
+            "TaxonomyMergeDialog",
+            "TaxonomyMergeSources",
+            "TaxonomyMergeTargetSearch",
+            "TaxonomyMergeTargetResults",
+            "TaxonomyMergeRenameToggle",
+            "TaxonomyMergeFinalName",
+            "TaxonomyMergeAffectedSummary",
+            "TaxonomyMergeAffectedFiles",
+            "TaxonomyMergeStatus",
+            "TaxonomyMergeApplyButton",
+            "TaxonomyMergeCancelButton"
+        })
+        {
+            Assert.Contains(
+                $"AutomationProperties.AutomationId=\"{id}\"",
+                mergeDialog,
+                StringComparison.Ordinal);
+            AssertElementHasAccessibleName(mergeDialog, id);
+        }
+
+        Assert.Contains("仅修改软件资料，不修改实际文件", mergeDialog,
             StringComparison.Ordinal);
         Assert.Contains("RunGuardedAsync", taxonomyCode, StringComparison.Ordinal);
         Assert.Contains("Unloaded += OnUnloaded", taxonomyCode, StringComparison.Ordinal);

@@ -6,6 +6,12 @@ using TraceFold.Media.Domain.Metadata;
 
 namespace TraceFold.Media.Desktop.Dialogs;
 
+public sealed record TaxonomyMergePreviewDisplayRow(
+    string LocationLabel,
+    string VisibleName,
+    string BeforeSummary,
+    string AfterSummary);
+
 public sealed class TaxonomyMergeDialogViewModel : ObservableObject
 {
     private static readonly TaxonomyMergePreviewDto EmptyPreview =
@@ -77,6 +83,9 @@ public sealed class TaxonomyMergeDialogViewModel : ObservableObject
     public ObservableCollection<TaxonomyManagementTermDto> Sources
         { get; } = [];
 
+    public ObservableCollection<TaxonomyMergePreviewDisplayRow>
+        PreviewDisplayRows { get; } = [];
+
     public IAsyncRelayCommand ApplyCommand { get; }
 
     public string TargetSearchText
@@ -131,6 +140,7 @@ public sealed class TaxonomyMergeDialogViewModel : ObservableObject
         {
             if (SetProperty(ref _preview, value))
             {
+                ReplacePreviewDisplayRows();
                 OnPropertyChanged(nameof(PreviewRows));
                 OnPropertyChanged(nameof(AffectedInboxCount));
                 OnPropertyChanged(nameof(AffectedLibraryCount));
@@ -409,6 +419,10 @@ public sealed class TaxonomyMergeDialogViewModel : ObservableObject
         _ => "合并未完成，当前输入已保留，可直接重试。"
     };
 
+    public void ReportOperationFailure() =>
+        StatusMessage = ErrorMessage(
+            TaxonomyMaintenanceErrorCodes.PersistenceFailed);
+
     private void RefreshPreview()
     {
         if (Preparation is null)
@@ -444,6 +458,45 @@ public sealed class TaxonomyMergeDialogViewModel : ObservableObject
         {
             LastResult = null;
         }
+    }
+
+    private void ReplacePreviewDisplayRows()
+    {
+        PreviewDisplayRows.Clear();
+        foreach (TaxonomyMergePreviewRowDto row in Preview.Rows)
+        {
+            PreviewDisplayRows.Add(new TaxonomyMergePreviewDisplayRow(
+                row.Owner.Kind == MetadataOwnerKind.InboxItem
+                    ? "待入库"
+                    : "正式库",
+                row.VisibleName,
+                DescribeRelevantTerms(row.Before),
+                DescribeRelevantTerms(row.After)));
+        }
+    }
+
+    private string DescribeRelevantTerms(TaxonomyAssignmentSnapshot assignment)
+    {
+        IEnumerable<Guid> ids = Kind switch
+        {
+            TaxonomyKind.Author => assignment.AuthorIds,
+            TaxonomyKind.Series => assignment.SeriesId is Guid seriesId
+                ? [seriesId]
+                : [],
+            TaxonomyKind.Tag => assignment.TagIds,
+            _ => []
+        };
+        Dictionary<Guid, string> visibleNames = Sources
+            .Append(Target)
+            .Where(term => term is not null)
+            .Cast<TaxonomyManagementTermDto>()
+            .GroupBy(term => term.Id)
+            .ToDictionary(group => group.Key, group => group.First().DisplayName);
+        string[] relevant = ids
+            .Where(visibleNames.ContainsKey)
+            .Select(id => visibleNames[id])
+            .ToArray();
+        return relevant.Length == 0 ? "无相关词条" : string.Join("、", relevant);
     }
 
     private void FinishPreparation(

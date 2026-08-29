@@ -3,6 +3,7 @@ using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
+using Microsoft.UI.Xaml;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Domain.Metadata;
@@ -39,13 +40,17 @@ public sealed class TaxonomyViewModel : ObservableObject
         ITaxonomyManagementQueryService query,
         ITaxonomyService taxonomy,
         ITaxonomyMaintenanceService maintenance,
-        ITaxonomyMaintenanceDialogService? dialogs = null,
+        ITaxonomyMaintenanceDialogService dialogs,
         ILogger<TaxonomyViewModel>? logger = null)
     {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(taxonomy);
+        ArgumentNullException.ThrowIfNull(maintenance);
+        ArgumentNullException.ThrowIfNull(dialogs);
         _query = query;
         _taxonomy = taxonomy;
         _maintenance = maintenance;
-        _dialogs = dialogs ?? UnavailableTaxonomyMaintenanceDialogService.Instance;
+        _dialogs = dialogs;
         _logger = logger;
         Selection = new TaxonomySelectionViewModel();
         Selection.PropertyChanged += OnSelectionPropertyChanged;
@@ -75,6 +80,10 @@ public sealed class TaxonomyViewModel : ObservableObject
 
     public ObservableCollection<TaxonomyManagementTermDto> Terms { get; } = [];
 
+    public event EventHandler? TermsReplacing;
+
+    public event EventHandler? TermsReplaced;
+
     public TaxonomySelectionViewModel Selection { get; }
 
     public IAsyncRelayCommand<string?> CreateCommand { get; }
@@ -96,6 +105,7 @@ public sealed class TaxonomyViewModel : ObservableObject
         {
             if (SetProperty(ref _selectedKind, value))
             {
+                OnPropertyChanged(nameof(SelectedKindDisplayName));
                 ClearSelectionForQueryChange();
                 QueueReload(preserveSelection: false);
             }
@@ -153,8 +163,8 @@ public sealed class TaxonomyViewModel : ObservableObject
         }
     }
 
-    // This compatibility property is replaced by Extended ListView selection
-    // synchronization when the new workspace XAML is rendered in Task 11.
+    // The inspector uses this projection while the page synchronizes the
+    // Extended ListView through Selection.
     public TaxonomyManagementTermDto? SelectedTerm
     {
         get => Selection.SingleSelectedTerm;
@@ -176,6 +186,56 @@ public sealed class TaxonomyViewModel : ObservableObject
     public IReadOnlyList<TaxonomyManagementTermDto> DeleteBlockers =>
         Selection.DeleteBlockers;
 
+    public int SelectedCount => Selection.SelectedCount;
+
+    public int SelectedReferenceCount =>
+        Selection.Capture().Sum(term => term.ReferenceCount);
+
+    public int SelectedInboxReferenceCount =>
+        Selection.Capture().Sum(term => term.InboxReferenceCount);
+
+    public int SelectedLibraryReferenceCount =>
+        Selection.Capture().Sum(term => term.LibraryReferenceCount);
+
+    public string SelectedDisplayName => SelectedTerm?.DisplayName ?? string.Empty;
+
+    public string SelectedKindDisplayName => KindOptions
+        .Single(option => option.Kind == SelectedKind)
+        .DisplayName;
+
+    public int SelectedTermInboxReferenceCount =>
+        SelectedTerm?.InboxReferenceCount ?? 0;
+
+    public int SelectedTermLibraryReferenceCount =>
+        SelectedTerm?.LibraryReferenceCount ?? 0;
+
+    public int SelectedTermReferenceCount => SelectedTerm?.ReferenceCount ?? 0;
+
+    public Visibility EmptyInspectorVisibility =>
+        Selection.SelectedCount == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public Visibility SingleInspectorVisibility =>
+        Selection.IsSingleSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public Visibility MultipleInspectorVisibility =>
+        Selection.IsMultipleSelection
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public Visibility DeleteBlockersVisibility =>
+        DeleteBlockers.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public Visibility RenameConflictVisibility =>
+        RenameConflictTarget is not null
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
     public TaxonomyManagementTermDto? RenameConflictTarget
     {
         get => _renameConflictTarget;
@@ -184,6 +244,7 @@ public sealed class TaxonomyViewModel : ObservableObject
             if (SetProperty(ref _renameConflictTarget, value))
             {
                 OnPropertyChanged(nameof(CanMergeRenameConflict));
+                OnPropertyChanged(nameof(RenameConflictVisibility));
             }
         }
     }
@@ -222,13 +283,7 @@ public sealed class TaxonomyViewModel : ObservableObject
         IEnumerable<TaxonomyManagementTermDto> selectedTerms)
     {
         Selection.ReplaceFromList(selectedTerms, Terms);
-        if (Selection.SelectedCount != 1
-            || Selection.SingleSelectedTerm?.Id
-                != RenameConflictTarget?.Id)
-        {
-            RenameConflictTarget = null;
-        }
-
+        RenameConflictTarget = null;
         SetSelectionStatus();
     }
 
@@ -494,31 +549,39 @@ public sealed class TaxonomyViewModel : ObservableObject
                 return;
             }
 
-            Terms.Clear();
-            foreach (TaxonomyManagementTermDto term in terms)
+            TermsReplacing?.Invoke(this, EventArgs.Empty);
+            try
             {
-                Terms.Add(term);
-            }
+                Terms.Clear();
+                foreach (TaxonomyManagementTermDto term in terms)
+                {
+                    Terms.Add(term);
+                }
 
-            if (preserveSelection)
-            {
-                Selection.Reconcile(terms);
-            }
-            else
-            {
-                Selection.ReplaceFromList([], terms);
-            }
+                if (preserveSelection)
+                {
+                    Selection.Reconcile(terms);
+                }
+                else
+                {
+                    Selection.ReplaceFromList([], terms);
+                }
 
-            if (preferredSelectionId is Guid id
-                && terms.FirstOrDefault(term => term.Id == id) is { } preferred
-                && !Selection.SelectedIds.Contains(id))
-            {
-                Selection.ReplaceFromList(
-                    [.. Selection.Capture(), preferred],
-                    terms);
-            }
+                if (preferredSelectionId is Guid id
+                    && terms.FirstOrDefault(term => term.Id == id) is { } preferred
+                    && !Selection.SelectedIds.Contains(id))
+                {
+                    Selection.ReplaceFromList(
+                        [.. Selection.Capture(), preferred],
+                        terms);
+                }
 
-            NotifySelectionState();
+                NotifySelectionState();
+            }
+            finally
+            {
+                TermsReplaced?.Invoke(this, EventArgs.Empty);
+            }
         }
         finally
         {
@@ -596,6 +659,18 @@ public sealed class TaxonomyViewModel : ObservableObject
         OnPropertyChanged(nameof(CanRename));
         OnPropertyChanged(nameof(CanDelete));
         OnPropertyChanged(nameof(CanMergeRenameConflict));
+        OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(SelectedReferenceCount));
+        OnPropertyChanged(nameof(SelectedInboxReferenceCount));
+        OnPropertyChanged(nameof(SelectedLibraryReferenceCount));
+        OnPropertyChanged(nameof(SelectedDisplayName));
+        OnPropertyChanged(nameof(SelectedTermInboxReferenceCount));
+        OnPropertyChanged(nameof(SelectedTermLibraryReferenceCount));
+        OnPropertyChanged(nameof(SelectedTermReferenceCount));
+        OnPropertyChanged(nameof(EmptyInspectorVisibility));
+        OnPropertyChanged(nameof(SingleInspectorVisibility));
+        OnPropertyChanged(nameof(MultipleInspectorVisibility));
+        OnPropertyChanged(nameof(DeleteBlockersVisibility));
         RenameCommand.NotifyCanExecuteChanged();
         MergeCommand.NotifyCanExecuteChanged();
         DeleteSelectionCommand.NotifyCanExecuteChanged();
@@ -655,30 +730,4 @@ public sealed class TaxonomyViewModel : ObservableObject
             _ => $"{operation}失败，请重试。"
         };
 
-    private sealed class UnavailableTaxonomyMaintenanceDialogService
-        : ITaxonomyMaintenanceDialogService
-    {
-        public static UnavailableTaxonomyMaintenanceDialogService Instance
-            { get; } = new();
-
-        public Task<TaxonomyMaintenanceResult?> ShowMergeAsync(
-            IReadOnlyList<TaxonomyManagementTermDto> selectedTerms,
-            Guid? preselectedTargetId,
-            CancellationToken cancellationToken)
-        {
-            _ = selectedTerms;
-            _ = preselectedTargetId;
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<TaxonomyMaintenanceResult?>(null);
-        }
-
-        public Task<bool> ConfirmDeleteAsync(
-            TaxonomyDeletePreparation preparation,
-            CancellationToken cancellationToken)
-        {
-            _ = preparation;
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(false);
-        }
-    }
 }
