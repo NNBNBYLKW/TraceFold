@@ -55,7 +55,7 @@
                 SelectedItem="{x:Bind ViewModel.SelectedTerm, Mode=TwoWay}"
                 SelectionMode="Single">
                 <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="metadata:TaxonomyTermDto">
+                    <DataTemplate x:DataType="metadata:TaxonomyManagementTermDto">
                         <Grid Padding="10,8" ColumnDefinitions="*,Auto">
                             <TextBlock Text="{x:Bind DisplayName}" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
