@@ -476,6 +476,23 @@ public sealed class MediaWorkspaceStructureTests
     }
 
     [Fact]
+    public async Task Taxonomy_sort_handler_tolerates_xaml_initialization_order()
+    {
+        string taxonomyCode = await File.ReadAllTextAsync(
+            DesktopSource("Pages", "TaxonomyPage.xaml.cs"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "private static bool TryReadTag<T>(ComboBox? selector",
+            taxonomyCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if (selector is null)",
+            taxonomyCode,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Taxonomy_merge_dialog_moves_focus_past_a_prefilled_target()
     {
         string codeBehind = await File.ReadAllTextAsync(

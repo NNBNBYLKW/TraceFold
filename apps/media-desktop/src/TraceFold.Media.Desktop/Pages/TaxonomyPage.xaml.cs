@@ -278,9 +278,15 @@ public sealed partial class TaxonomyPage : Page
             : null;
     }
 
-    private static bool TryReadTag<T>(ComboBox selector, out T value)
+    private static bool TryReadTag<T>(ComboBox? selector, out T value)
         where T : struct, Enum
     {
+        if (selector is null)
+        {
+            value = default;
+            return false;
+        }
+
         string? tag = (selector.SelectedItem as ComboBoxItem)?.Tag?.ToString();
         return Enum.TryParse(tag, ignoreCase: false, out value);
     }
