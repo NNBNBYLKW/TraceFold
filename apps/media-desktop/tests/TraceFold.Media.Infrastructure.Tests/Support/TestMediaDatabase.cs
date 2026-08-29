@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
+using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Metadata;
 using TraceFold.Media.Infrastructure.Persistence;
@@ -71,6 +72,45 @@ internal sealed record TaxonomyManagementFixture(
     Guid PercentTagId,
     Guid UnderscoreTagId,
     Guid BackslashTagId);
+
+internal sealed record TaxonomyMaintenanceFixture(
+    Guid TargetAuthor,
+    Guid SourceAuthorA,
+    Guid SourceAuthorB,
+    Guid UnrelatedAuthor,
+    Guid UnusedAuthor,
+    Guid TargetSeries,
+    Guid SourceSeries,
+    Guid UnrelatedSeries,
+    Guid UnusedSeries,
+    Guid TargetTag,
+    Guid SourceTagA,
+    Guid SourceTagB,
+    Guid UnrelatedTag,
+    IReadOnlyList<Guid> UnusedTagIds,
+    Guid InboxId,
+    Guid AssetId,
+    long InboxVersion,
+    long AssetVersion)
+{
+    public TaxonomyMergeSelection AuthorMergeSelection =>
+        TaxonomyMergeSelection.Create(
+            TaxonomyKind.Author,
+            [SourceAuthorA, SourceAuthorB],
+            TargetAuthor);
+
+    public TaxonomyMergeSelection SeriesMergeSelection =>
+        TaxonomyMergeSelection.Create(
+            TaxonomyKind.Series,
+            [SourceSeries],
+            TargetSeries);
+
+    public TaxonomyMergeSelection TagMergeSelection =>
+        TaxonomyMergeSelection.Create(
+            TaxonomyKind.Tag,
+            [SourceTagA, SourceTagB],
+            TargetTag);
+}
 
 internal sealed class TestMediaDatabase : IAsyncDisposable
 {
@@ -303,6 +343,147 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
             percentTagId,
             underscoreTagId,
             backslashTagId);
+    }
+
+    public async Task<TaxonomyMaintenanceFixture>
+        SeedTaxonomyMaintenanceFixtureAsync()
+    {
+        Guid targetAuthor = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Target Author");
+        Guid sourceAuthorA = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Source Author A");
+        Guid sourceAuthorB = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Source Author B");
+        Guid unrelatedAuthor = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Unrelated Author");
+        Guid unusedAuthor = await SeedTaxonomyAsync(
+            TaxonomyKind.Author,
+            "Unused Author");
+        Guid targetSeries = await SeedTaxonomyAsync(
+            TaxonomyKind.Series,
+            "Target Series");
+        Guid sourceSeries = await SeedTaxonomyAsync(
+            TaxonomyKind.Series,
+            "Source Series");
+        Guid unrelatedSeries = await SeedTaxonomyAsync(
+            TaxonomyKind.Series,
+            "Unrelated Series");
+        Guid unusedSeries = await SeedTaxonomyAsync(
+            TaxonomyKind.Series,
+            "Unused Series");
+        Guid targetTag = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Target Tag");
+        Guid sourceTagA = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Source Tag A");
+        Guid sourceTagB = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Source Tag B");
+        Guid unrelatedTag = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Unrelated Tag");
+        Guid unusedTagA = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Unused Tag A");
+        Guid unusedTagB = await SeedTaxonomyAsync(
+            TaxonomyKind.Tag,
+            "Unused Tag B");
+
+        const long inboxVersion = 7;
+        const long assetVersion = 11;
+        Guid inboxId = await SeedInboxItemAsync(
+            InboxItemState.ReadyToTag,
+            inboxVersion,
+            displayName: "Inbox maintenance owner");
+        Guid assetId = await SeedFormalAssetAsync(
+            "maintenance-owner.jpg",
+            "Library maintenance owner",
+            assetVersion,
+            authorIds: [targetAuthor, sourceAuthorA, unrelatedAuthor],
+            seriesId: sourceSeries,
+            tagIds: [targetTag, sourceTagB, unrelatedTag]);
+
+        await using (var context = new MediaDesktopDbContext(_options))
+        {
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE metadata_drafts
+                SET series_id = {sourceSeries}
+                WHERE inbox_item_id = {inboxId}
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_authors
+                    (inbox_item_id, author_id, ordinal)
+                VALUES ({inboxId}, {unrelatedAuthor}, {0})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_authors
+                    (inbox_item_id, author_id, ordinal)
+                VALUES ({inboxId}, {sourceAuthorB}, {3})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_authors
+                    (inbox_item_id, author_id, ordinal)
+                VALUES ({inboxId}, {sourceAuthorA}, {7})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_tags
+                    (inbox_item_id, tag_id, ordinal)
+                VALUES ({inboxId}, {unrelatedTag}, {0})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_tags
+                    (inbox_item_id, tag_id, ordinal)
+                VALUES ({inboxId}, {sourceTagA}, {4})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_draft_tags
+                    (inbox_item_id, tag_id, ordinal)
+                VALUES ({inboxId}, {sourceTagB}, {9})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE media_asset_authors
+                SET ordinal = CASE author_id
+                    WHEN {targetAuthor} THEN 0
+                    WHEN {sourceAuthorA} THEN 4
+                    ELSE 8
+                END
+                WHERE media_asset_id = {assetId}
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE media_asset_tags
+                SET ordinal = CASE tag_id
+                    WHEN {targetTag} THEN 0
+                    WHEN {sourceTagB} THEN 5
+                    ELSE 9
+                END
+                WHERE media_asset_id = {assetId}
+                """);
+        }
+
+        return new TaxonomyMaintenanceFixture(
+            targetAuthor,
+            sourceAuthorA,
+            sourceAuthorB,
+            unrelatedAuthor,
+            unusedAuthor,
+            targetSeries,
+            sourceSeries,
+            unrelatedSeries,
+            unusedSeries,
+            targetTag,
+            sourceTagA,
+            sourceTagB,
+            unrelatedTag,
+            [unusedTagA, unusedTagB],
+            inboxId,
+            assetId,
+            inboxVersion,
+            assetVersion);
     }
 
     public async Task DeleteTaxonomyAsync(Guid id)
