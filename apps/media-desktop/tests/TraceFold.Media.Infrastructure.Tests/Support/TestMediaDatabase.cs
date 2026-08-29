@@ -861,6 +861,19 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
             """);
     }
 
+    public async Task AddInboxTagReferenceAsync(
+        Guid inboxItemId,
+        Guid tagId,
+        int ordinal)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO inbox_draft_tags
+                (inbox_item_id, tag_id, ordinal)
+            VALUES ({inboxItemId}, {tagId}, {ordinal})
+            """);
+    }
+
     public async Task CreateTaxonomyRenameFailureTriggerAsync(Guid termId)
     {
         await using var context = new MediaDesktopDbContext(_options);
@@ -873,6 +886,23 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
             WHEN upper(NEW.id) = upper('{termId:D}')
             BEGIN
                 SELECT RAISE(ABORT, 'test taxonomy rename failure');
+            END
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task CreateTaxonomyDeleteFailureTriggerAsync(Guid termId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            CREATE TRIGGER test_fail_taxonomy_delete
+            BEFORE DELETE ON taxonomy_terms
+            WHEN upper(OLD.id) = upper('{termId:D}')
+            BEGIN
+                SELECT RAISE(ABORT, 'test taxonomy delete failure');
             END
             """;
         await command.ExecuteNonQueryAsync();

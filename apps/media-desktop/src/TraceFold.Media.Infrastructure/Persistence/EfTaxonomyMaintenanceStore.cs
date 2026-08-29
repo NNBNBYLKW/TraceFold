@@ -227,10 +227,92 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
         }
     }
 
-    public Task<TaxonomyMaintenanceStoreResult> DeleteUnusedAsync(
+    public async Task<TaxonomyMaintenanceStoreResult> DeleteUnusedAsync(
         TaxonomyDeletePreparation preparation,
-        CancellationToken cancellationToken) =>
-        throw new NotSupportedException();
+        CancellationToken cancellationToken)
+    {
+        if (preparation is null
+            || preparation.OperationId == Guid.Empty
+            || preparation.Selection is null
+            || preparation.Terms is null
+            || preparation.Blockers is null)
+        {
+            return StoreFailure(
+                TaxonomyMaintenanceErrorCodes.SelectionInvalid);
+        }
+
+        if (!preparation.CanDelete)
+        {
+            return StoreFailure(TaxonomyMaintenanceErrorCodes.DeleteInUse);
+        }
+
+        await using MediaDesktopDbContext context =
+            await _contextFactory.CreateDbContextAsync(cancellationToken);
+        await using IDbContextTransaction transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            Guid[] selectedIds = preparation.Selection.TermIds.ToArray();
+            TaxonomyTermRow[] loaded = await context.TaxonomyTerms
+                .Where(term => selectedIds.Contains(term.Id))
+                .ToArrayAsync(cancellationToken);
+            if (loaded.Length != selectedIds.Length
+                || loaded.Any(term => term.Kind != KindKey(
+                    preparation.Selection.Kind)))
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.PreviewStale);
+            }
+
+            IReadOnlyDictionary<Guid, TaxonomyTermRow> byId =
+                loaded.ToDictionary(term => term.Id);
+            TaxonomyTermSnapshot[] currentTerms = selectedIds
+                .Select(id => ToSnapshot(byId[id]))
+                .ToArray();
+            if (!SnapshotSetsEqual(preparation.Terms, currentTerms))
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.PreviewStale);
+            }
+
+            IReadOnlyDictionary<Guid, ReferenceCounts> counts =
+                await LoadReferenceCountsAsync(
+                    context,
+                    preparation.Selection.Kind,
+                    selectedIds,
+                    cancellationToken);
+            if (counts.Values.Any(count => count.Total > 0))
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.DeleteInUse);
+            }
+
+            var receipt = new TaxonomyDeleteUndoReceipt(
+                preparation.OperationId,
+                currentTerms);
+            context.TaxonomyTerms.RemoveRange(loaded);
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new TaxonomyMaintenanceStoreResult(
+                true,
+                [],
+                currentTerms.Length,
+                receipt,
+                null);
+        }
+        catch (TaxonomyMaintenancePlanningException error)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return StoreFailure(error.ErrorCode);
+        }
+        catch (Exception error) when (error is DbUpdateException
+            or SqliteException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return StoreFailure(
+                TaxonomyMaintenanceErrorCodes.PersistenceFailed);
+        }
+    }
 
     public Task<TaxonomyMaintenanceUndoResult> UndoAsync(
         TaxonomyMaintenanceUndoReceipt receipt,
