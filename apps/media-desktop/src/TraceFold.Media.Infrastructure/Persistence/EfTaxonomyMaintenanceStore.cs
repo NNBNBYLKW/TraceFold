@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
 
@@ -47,11 +48,120 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
         }
     }
 
-    public Task<TaxonomyMaintenanceStoreResult> ApplyMergeAsync(
+    public async Task<TaxonomyMaintenanceStoreResult> ApplyMergeAsync(
         TaxonomyMergePreparation preparation,
         TaxonomyName? finalName,
-        CancellationToken cancellationToken) =>
-        throw new NotSupportedException();
+        CancellationToken cancellationToken)
+    {
+        if (preparation is null)
+        {
+            return StoreFailure(
+                TaxonomyMaintenanceErrorCodes.SelectionInvalid);
+        }
+
+        await using MediaDesktopDbContext context =
+            await _contextFactory.CreateDbContextAsync(cancellationToken);
+        await using IDbContextTransaction transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            TaxonomyMergePrepareResult reloaded =
+                await PrepareMergeInContextAsync(
+                    context,
+                    preparation.Selection,
+                    cancellationToken);
+            if (!reloaded.Succeeded || reloaded.Preparation is null)
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.PreviewStale);
+            }
+
+            TaxonomyMergePreparation current = reloaded.Preparation with
+            {
+                OperationId = preparation.OperationId,
+            };
+            if (!MergePreparationsEqual(preparation, current))
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.PreviewStale);
+            }
+
+            TaxonomyMergePlan plan = TaxonomyMergePlanner.Build(
+                current,
+                finalName);
+            var receipt = new TaxonomyMergeUndoReceipt(
+                preparation.OperationId,
+                current.Target,
+                plan.FinalName,
+                current.Sources.ToArray(),
+                plan.Owners.Select(owner => new TaxonomyMergeUndoOwner(
+                    owner.Owner,
+                    checked(owner.BeforeVersion + 1),
+                    owner.Before,
+                    owner.After)).ToArray());
+
+            DateTimeOffset now = _timeProvider.GetUtcNow();
+            foreach (TaxonomyMergePlanOwner owner in plan.Owners)
+            {
+                await ApplyOwnerAsync(
+                    context,
+                    plan.Kind,
+                    owner,
+                    now,
+                    cancellationToken);
+            }
+
+            Guid[] sourceIds = plan.Sources.Select(source => source.Id).ToArray();
+            TaxonomyTermRow[] sourceRows = await context.TaxonomyTerms
+                .Where(term => sourceIds.Contains(term.Id))
+                .ToArrayAsync(cancellationToken);
+            TaxonomyTermRow? targetRow = await context.TaxonomyTerms
+                .SingleOrDefaultAsync(
+                    term => term.Id == plan.Target.Id,
+                    cancellationToken);
+            if (sourceRows.Length != sourceIds.Length || targetRow is null)
+            {
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.PreviewStale);
+            }
+
+            context.TaxonomyTerms.RemoveRange(sourceRows);
+            await context.SaveChangesAsync(cancellationToken);
+
+            if (!StringComparer.Ordinal.Equals(
+                    targetRow.DisplayName,
+                    plan.FinalName.Display)
+                || !StringComparer.Ordinal.Equals(
+                    targetRow.NormalizedName,
+                    plan.FinalName.Normalized))
+            {
+                targetRow.DisplayName = plan.FinalName.Display;
+                targetRow.NormalizedName = plan.FinalName.Normalized;
+                targetRow.UpdatedAtUtc = now;
+                await context.SaveChangesAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return new TaxonomyMaintenanceStoreResult(
+                true,
+                plan.Owners.Select(owner => owner.Owner).ToArray(),
+                plan.Sources.Count,
+                receipt,
+                null);
+        }
+        catch (TaxonomyMaintenancePlanningException error)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return StoreFailure(error.ErrorCode);
+        }
+        catch (Exception error) when (error is DbUpdateException
+            or SqliteException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            return StoreFailure(
+                TaxonomyMaintenanceErrorCodes.PersistenceFailed);
+        }
+    }
 
     public async Task<TaxonomyDeletePrepareResult> PrepareDeleteAsync(
         TaxonomyDeleteSelection selection,
@@ -453,6 +563,204 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
             row => new ReferenceCounts(row.Inbox, row.Library));
     }
 
+    private static async Task ApplyOwnerAsync(
+        MediaDesktopDbContext context,
+        TaxonomyKind kind,
+        TaxonomyMergePlanOwner owner,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        switch (owner.Owner.Kind)
+        {
+            case MetadataOwnerKind.InboxItem:
+                MetadataDraftRow? draft = await context.MetadataDrafts
+                    .SingleOrDefaultAsync(
+                        row => row.InboxItemId == owner.Owner.Id,
+                        cancellationToken);
+                if (draft is null)
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.PreviewStale);
+                }
+
+                await ReplaceInboxAssignmentAsync(
+                    context,
+                    kind,
+                    owner.Owner.Id,
+                    owner.After,
+                    cancellationToken);
+                draft.SeriesId = owner.After.SeriesId;
+                draft.Version = checked(draft.Version + 1);
+                draft.UpdatedAtUtc = now;
+                break;
+            case MetadataOwnerKind.MediaAsset:
+                MediaAssetRow? asset = await context.MediaAssets
+                    .SingleOrDefaultAsync(
+                        row => row.Id == owner.Owner.Id,
+                        cancellationToken);
+                if (asset is null)
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.PreviewStale);
+                }
+
+                await ReplaceAssetAssignmentAsync(
+                    context,
+                    kind,
+                    owner.Owner.Id,
+                    owner.After,
+                    cancellationToken);
+                asset.SeriesId = owner.After.SeriesId;
+                asset.MetadataVersion = checked(asset.MetadataVersion + 1);
+                asset.UpdatedAtUtc = now;
+                break;
+            default:
+                throw new TaxonomyMaintenancePlanningException(
+                    TaxonomyMaintenanceErrorCodes.SelectionInvalid);
+        }
+    }
+
+    private static async Task ReplaceInboxAssignmentAsync(
+        MediaDesktopDbContext context,
+        TaxonomyKind kind,
+        Guid ownerId,
+        TaxonomyAssignmentSnapshot after,
+        CancellationToken cancellationToken)
+    {
+        if (kind == TaxonomyKind.Author)
+        {
+            await context.InboxDraftAuthors
+                .Where(link => link.InboxItemId == ownerId)
+                .ExecuteDeleteAsync(cancellationToken);
+            context.InboxDraftAuthors.AddRange(after.AuthorIds.Select(
+                (termId, ordinal) => new InboxDraftAuthorRow
+                {
+                    InboxItemId = ownerId,
+                    AuthorId = termId,
+                    Ordinal = ordinal,
+                }));
+        }
+        else if (kind == TaxonomyKind.Tag)
+        {
+            await context.InboxDraftTags
+                .Where(link => link.InboxItemId == ownerId)
+                .ExecuteDeleteAsync(cancellationToken);
+            context.InboxDraftTags.AddRange(after.TagIds.Select(
+                (termId, ordinal) => new InboxDraftTagRow
+                {
+                    InboxItemId = ownerId,
+                    TagId = termId,
+                    Ordinal = ordinal,
+                }));
+        }
+    }
+
+    private static async Task ReplaceAssetAssignmentAsync(
+        MediaDesktopDbContext context,
+        TaxonomyKind kind,
+        Guid ownerId,
+        TaxonomyAssignmentSnapshot after,
+        CancellationToken cancellationToken)
+    {
+        if (kind == TaxonomyKind.Author)
+        {
+            await context.MediaAssetAuthors
+                .Where(link => link.MediaAssetId == ownerId)
+                .ExecuteDeleteAsync(cancellationToken);
+            context.MediaAssetAuthors.AddRange(after.AuthorIds.Select(
+                (termId, ordinal) => new MediaAssetAuthorRow
+                {
+                    MediaAssetId = ownerId,
+                    AuthorId = termId,
+                    Ordinal = ordinal,
+                }));
+        }
+        else if (kind == TaxonomyKind.Tag)
+        {
+            await context.MediaAssetTags
+                .Where(link => link.MediaAssetId == ownerId)
+                .ExecuteDeleteAsync(cancellationToken);
+            context.MediaAssetTags.AddRange(after.TagIds.Select(
+                (termId, ordinal) => new MediaAssetTagRow
+                {
+                    MediaAssetId = ownerId,
+                    TagId = termId,
+                    Ordinal = ordinal,
+                }));
+        }
+    }
+
+    private static bool MergePreparationsEqual(
+        TaxonomyMergePreparation expected,
+        TaxonomyMergePreparation current) =>
+        expected.OperationId == current.OperationId
+        && expected.Selection.Kind == current.Selection.Kind
+        && expected.Selection.TargetId == current.Selection.TargetId
+        && expected.Selection.SourceIds.SequenceEqual(
+            current.Selection.SourceIds)
+        && TermSnapshotsEqual(expected.Target, current.Target)
+        && SnapshotSetsEqual(expected.Sources, current.Sources)
+        && OwnerSetsEqual(expected.Owners, current.Owners);
+
+    private static bool SnapshotSetsEqual(
+        IReadOnlyList<TaxonomyTermSnapshot> expected,
+        IReadOnlyList<TaxonomyTermSnapshot> current)
+    {
+        if (expected.Count != current.Count)
+        {
+            return false;
+        }
+
+        IReadOnlyDictionary<Guid, TaxonomyTermSnapshot> currentById =
+            current.ToDictionary(term => term.Id);
+        return expected.All(term =>
+            currentById.TryGetValue(
+                term.Id,
+                out TaxonomyTermSnapshot? currentTerm)
+            && TermSnapshotsEqual(term, currentTerm));
+    }
+
+    private static bool TermSnapshotsEqual(
+        TaxonomyTermSnapshot left,
+        TaxonomyTermSnapshot right) =>
+        left.Id == right.Id
+        && left.Kind == right.Kind
+        && StringComparer.Ordinal.Equals(left.DisplayName, right.DisplayName)
+        && StringComparer.Ordinal.Equals(
+            left.NormalizedName,
+            right.NormalizedName)
+        && left.CreatedAtUtc == right.CreatedAtUtc
+        && left.UpdatedAtUtc == right.UpdatedAtUtc;
+
+    private static bool OwnerSetsEqual(
+        IReadOnlyList<TaxonomyOwnerSnapshot> expected,
+        IReadOnlyList<TaxonomyOwnerSnapshot> current)
+    {
+        if (expected.Count != current.Count)
+        {
+            return false;
+        }
+
+        IReadOnlyDictionary<MetadataOwner, TaxonomyOwnerSnapshot> currentByOwner =
+            current.ToDictionary(owner => owner.Owner);
+        return expected.All(owner =>
+            currentByOwner.TryGetValue(
+                owner.Owner,
+                out TaxonomyOwnerSnapshot? currentOwner)
+            && owner.Version == currentOwner.Version
+            && StringComparer.Ordinal.Equals(
+                owner.VisibleName,
+                currentOwner.VisibleName)
+            && AssignmentsEqual(owner.Assignment, currentOwner.Assignment));
+    }
+
+    private static bool AssignmentsEqual(
+        TaxonomyAssignmentSnapshot left,
+        TaxonomyAssignmentSnapshot right) =>
+        left.SeriesId == right.SeriesId
+        && left.AuthorIds.SequenceEqual(right.AuthorIds)
+        && left.TagIds.SequenceEqual(right.TagIds);
+
     private static TaxonomyTermSnapshot ToSnapshot(TaxonomyTermRow row) =>
         new(
             row.Id,
@@ -472,6 +780,10 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
     private static TaxonomyDeletePrepareResult DeletePrepareFailure(
         string errorCode) =>
         new(false, null, errorCode);
+
+    private static TaxonomyMaintenanceStoreResult StoreFailure(
+        string errorCode) =>
+        new(false, [], 0, null, errorCode);
 
     private sealed class OwnerFact
     {

@@ -728,6 +728,176 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
             """);
     }
 
+    public async Task<IReadOnlyList<Guid>> ReadInboxAuthorIdsAsync(
+        Guid inboxItemId) =>
+        await ReadOrderedIdsAsync(
+            """
+            SELECT author_id
+            FROM inbox_draft_authors
+            WHERE upper(inbox_item_id) = upper($id)
+            ORDER BY ordinal, author_id
+            """,
+            inboxItemId);
+
+    public async Task<IReadOnlyList<Guid>> ReadInboxTagIdsAsync(
+        Guid inboxItemId) =>
+        await ReadOrderedIdsAsync(
+            """
+            SELECT tag_id
+            FROM inbox_draft_tags
+            WHERE upper(inbox_item_id) = upper($id)
+            ORDER BY ordinal, tag_id
+            """,
+            inboxItemId);
+
+    public async Task<IReadOnlyList<Guid>> ReadAssetAuthorIdsAsync(Guid assetId) =>
+        await ReadOrderedIdsAsync(
+            """
+            SELECT author_id
+            FROM media_asset_authors
+            WHERE upper(media_asset_id) = upper($id)
+            ORDER BY ordinal, author_id
+            """,
+            assetId);
+
+    public async Task<IReadOnlyList<Guid>> ReadAssetTagIdsAsync(Guid assetId) =>
+        await ReadOrderedIdsAsync(
+            """
+            SELECT tag_id
+            FROM media_asset_tags
+            WHERE upper(media_asset_id) = upper($id)
+            ORDER BY ordinal, tag_id
+            """,
+            assetId);
+
+    public async Task<Guid?> ReadInboxSeriesIdAsync(Guid inboxItemId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT series_id
+            FROM metadata_drafts
+            WHERE upper(inbox_item_id) = upper($id)
+            """;
+        AddParameter(command, "$id", inboxItemId.ToString("D"));
+        object? value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? null : Guid.Parse((string)value);
+    }
+
+    public async Task<Guid?> ReadAssetSeriesIdAsync(Guid assetId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT series_id
+            FROM media_assets
+            WHERE upper(id) = upper($id)
+            """;
+        AddParameter(command, "$id", assetId.ToString("D"));
+        object? value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? null : Guid.Parse((string)value);
+    }
+
+    public async Task<long> ReadInboxVersionAsync(Guid inboxItemId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        return await context.Database.SqlQuery<long>($"""
+            SELECT version AS Value
+            FROM metadata_drafts
+            WHERE inbox_item_id = {inboxItemId}
+            """).SingleAsync();
+    }
+
+    public async Task<long> ReadAssetVersionAsync(Guid assetId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        return await context.Database.SqlQuery<long>($"""
+            SELECT metadata_version AS Value
+            FROM media_assets
+            WHERE id = {assetId}
+            """).SingleAsync();
+    }
+
+    public async Task<bool> TaxonomyTermExistsAsync(Guid termId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        int count = await context.Database.SqlQuery<int>($"""
+            SELECT COUNT(*) AS Value
+            FROM taxonomy_terms
+            WHERE id = {termId}
+            """).SingleAsync();
+        return count == 1;
+    }
+
+    public async Task<string?> ReadTaxonomyDisplayNameAsync(Guid termId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT display_name
+            FROM taxonomy_terms
+            WHERE upper(id) = upper($id)
+            """;
+        AddParameter(command, "$id", termId.ToString("D"));
+        return (string?)await command.ExecuteScalarAsync();
+    }
+
+    public async Task AddInboxAuthorReferenceAsync(
+        Guid inboxItemId,
+        Guid authorId,
+        int ordinal)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO inbox_draft_authors
+                (inbox_item_id, author_id, ordinal)
+            VALUES ({inboxItemId}, {authorId}, {ordinal})
+            """);
+    }
+
+    public async Task CreateTaxonomyRenameFailureTriggerAsync(Guid termId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = $"""
+            CREATE TRIGGER test_fail_taxonomy_rename
+            BEFORE UPDATE OF display_name ON taxonomy_terms
+            WHEN upper(NEW.id) = upper('{termId:D}')
+            BEGIN
+                SELECT RAISE(ABORT, 'test taxonomy rename failure');
+            END
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<IReadOnlyList<Guid>> ReadOrderedIdsAsync(
+        string trustedSql,
+        Guid ownerId)
+    {
+        await using var context = new MediaDesktopDbContext(_options);
+        DbConnection connection = context.Database.GetDbConnection();
+        await connection.OpenAsync();
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = trustedSql;
+        AddParameter(command, "$id", ownerId.ToString("D"));
+        await using DbDataReader reader = await command.ExecuteReaderAsync();
+        var ids = new List<Guid>();
+        while (await reader.ReadAsync())
+        {
+            ids.Add(Guid.Parse(reader.GetString(0)));
+        }
+
+        return ids;
+    }
+
     public async Task<int> CountTaxonomyTermsAsync(
         TaxonomyKind kind,
         string displayName)
