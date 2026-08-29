@@ -11,7 +11,7 @@ public sealed class WindowsTaxonomyMaintenanceDialogService(
     ITaxonomyMaintenanceService maintenance,
     WindowContext windowContext) : ITaxonomyMaintenanceDialogService
 {
-    public async Task<TaxonomyMaintenanceResult?> ShowMergeAsync(
+    public async Task<TaxonomyMergeDialogResult?> ShowMergeAsync(
         IReadOnlyList<TaxonomyManagementTermDto> selectedTerms,
         Guid? preselectedTargetId,
         CancellationToken cancellationToken)

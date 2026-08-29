@@ -74,6 +74,8 @@ public sealed class TaxonomyMergeDialogViewModel : ObservableObject
 
     public TaxonomyKind Kind => _selectedTerms[0].Kind;
 
+    public bool HasPreselectedTarget => _preselectedTargetId.HasValue;
+
     public IReadOnlyList<TaxonomyManagementTermDto> SelectedTerms =>
         _selectedTerms;
 
@@ -492,6 +494,11 @@ public sealed class TaxonomyMergeDialogViewModel : ObservableObject
             .Cast<TaxonomyManagementTermDto>()
             .GroupBy(term => term.Id)
             .ToDictionary(group => group.Key, group => group.First().DisplayName);
+        if (Target is not null && RenameTarget && Preview.CanApply)
+        {
+            visibleNames[Target.Id] = TaxonomyName.Create(FinalNameText).Display;
+        }
+
         string[] relevant = ids
             .Where(visibleNames.ContainsKey)
             .Select(id => visibleNames[id])

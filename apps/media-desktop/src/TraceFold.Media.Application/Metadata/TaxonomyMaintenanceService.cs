@@ -130,8 +130,15 @@ public sealed class TaxonomyMaintenanceService : ITaxonomyMaintenanceService
         TaxonomyMaintenanceResult result = ToResult(stored);
         if (stored.Succeeded)
         {
+            bool targetNameChanged = finalName is not null
+                && (!StringComparer.Ordinal.Equals(
+                        preparation.Target.DisplayName,
+                        finalName.Display)
+                    || !StringComparer.Ordinal.Equals(
+                        preparation.Target.NormalizedName,
+                        finalName.Normalized));
             ReplaceUndoReceipt(stored.UndoReceipt);
-            PublishChangedOwners(stored.ChangedOwners);
+            PublishChangedOwners(stored.ChangedOwners, targetNameChanged);
             result = result with { CanUndo = UndoState.IsAvailable };
         }
 
@@ -228,7 +235,6 @@ public sealed class TaxonomyMaintenanceService : ITaxonomyMaintenanceService
             result = await _store.UndoAsync(receipt, cancellationToken);
         }
         catch (OperationCanceledException)
-            when (!cancellationToken.IsCancellationRequested)
         {
             RestoreReceiptIfEmpty(receipt);
             throw;
@@ -236,7 +242,14 @@ public sealed class TaxonomyMaintenanceService : ITaxonomyMaintenanceService
 
         if (result.Succeeded)
         {
-            PublishChangedOwners(result.ChangedOwners);
+            bool targetNameChanged = receipt is TaxonomyMergeUndoReceipt mergeReceipt
+                && (!StringComparer.Ordinal.Equals(
+                        mergeReceipt.TargetBefore.DisplayName,
+                        mergeReceipt.TargetAfter.Display)
+                    || !StringComparer.Ordinal.Equals(
+                        mergeReceipt.TargetBefore.NormalizedName,
+                        mergeReceipt.TargetAfter.Normalized));
+            PublishChangedOwners(result.ChangedOwners, targetNameChanged);
         }
         else if (result.ReceiptIsRetryable)
         {
@@ -306,9 +319,12 @@ public sealed class TaxonomyMaintenanceService : ITaxonomyMaintenanceService
     private TaxonomyMaintenanceResult Failure(string errorCode) =>
         new(false, 0, 0, 0, UndoState.IsAvailable, errorCode);
 
-    private void PublishChangedOwners(IReadOnlyList<MetadataOwner> owners)
+    private void PublishChangedOwners(
+        IReadOnlyList<MetadataOwner> owners,
+        bool targetNameChanged = false)
     {
-        if (owners.Any(owner => owner.Kind == MetadataOwnerKind.InboxItem))
+        if (targetNameChanged
+            || owners.Any(owner => owner.Kind == MetadataOwnerKind.InboxItem))
         {
             _inboxNotifier.Publish(InboxActivityKind.ItemChanged);
         }
@@ -318,7 +334,7 @@ public sealed class TaxonomyMaintenanceService : ITaxonomyMaintenanceService
             .Select(owner => owner.Id)
             .Distinct()
             .ToArray();
-        if (assetIds.Length > 0)
+        if (targetNameChanged || assetIds.Length > 0)
         {
             _libraryNotifier.Publish(
                 LibraryActivityKind.TaxonomyChanged,

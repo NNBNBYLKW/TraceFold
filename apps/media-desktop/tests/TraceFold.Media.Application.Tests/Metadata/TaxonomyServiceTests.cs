@@ -10,7 +10,8 @@ public sealed class TaxonomyServiceTests
     public async Task CreateAsync_reuses_existing_normalized_term()
     {
         var store = new InMemoryTaxonomyStore();
-        var service = new TaxonomyService(store);
+        var invalidator = new RecordingMaintenanceService();
+        TaxonomyService service = CreateService(store, invalidator);
 
         TaxonomyTermDto first = await service.CreateAsync(
             TaxonomyKind.Author,
@@ -23,13 +24,17 @@ public sealed class TaxonomyServiceTests
 
         Assert.Equal(first.Id, second.Id);
         Assert.Equal("Alice", second.DisplayName);
+        Assert.Equal(2, invalidator.InvalidateCallCount);
     }
 
     [Fact]
     public async Task DeleteAsync_refuses_referenced_term()
     {
         var store = new InMemoryTaxonomyStore(referenceCount: 2);
-        var service = new TaxonomyService(store);
+        var invalidator = new RecordingMaintenanceService();
+        TaxonomyService service = CreateService(
+            store,
+            invalidator);
 
         TaxonomyMutationResult result = await service.DeleteAsync(
             store.TermId,
@@ -37,6 +42,59 @@ public sealed class TaxonomyServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal("taxonomy.in_use", result.ErrorCode);
+        Assert.Equal(0, invalidator.InvalidateCallCount);
+    }
+
+    private static TaxonomyService CreateService(
+        ITaxonomyStore store,
+        ITaxonomyMaintenanceService maintenance)
+    {
+        System.Reflection.ConstructorInfo constructor = Assert.Single(
+            typeof(TaxonomyService).GetConstructors());
+        Assert.Equal(
+            [typeof(ITaxonomyStore), typeof(ITaxonomyMaintenanceService)],
+            constructor.GetParameters().Select(parameter => parameter.ParameterType));
+        return (TaxonomyService)constructor.Invoke([store, maintenance]);
+    }
+
+    private sealed class RecordingMaintenanceService : ITaxonomyMaintenanceService
+    {
+        public TaxonomyMaintenanceUndoState UndoState =>
+            TaxonomyMaintenanceUndoState.Unavailable;
+
+        public event EventHandler? UndoStateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public int InvalidateCallCount { get; private set; }
+
+        public Task<TaxonomyMergePrepareResult> PrepareMergeAsync(
+            TaxonomyMergeSelection selection,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public TaxonomyMergePreviewDto PreviewMerge(
+            TaxonomyMergePreparation preparation,
+            string? finalNameOverride) => throw new NotSupportedException();
+
+        public Task<TaxonomyMaintenanceResult> ApplyMergeAsync(
+            TaxonomyMergePreparation preparation,
+            string? finalNameOverride,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TaxonomyDeletePrepareResult> PrepareDeleteAsync(
+            TaxonomyDeleteSelection selection,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TaxonomyMaintenanceResult> DeleteUnusedAsync(
+            TaxonomyDeletePreparation preparation,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TaxonomyMaintenanceUndoResult> UndoLastAsync(
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public void InvalidateUndo() => InvalidateCallCount++;
     }
 
     private sealed class InMemoryTaxonomyStore(int referenceCount = 0) : ITaxonomyStore

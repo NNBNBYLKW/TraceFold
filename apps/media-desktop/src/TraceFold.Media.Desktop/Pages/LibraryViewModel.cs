@@ -510,7 +510,8 @@ public sealed partial class LibraryViewModel : ObservableObject
         _ = sender;
         if (args.Kind is not (
             LibraryActivityKind.BatchChanged
-            or LibraryActivityKind.UndoCompleted))
+            or LibraryActivityKind.UndoCompleted
+            or LibraryActivityKind.TaxonomyChanged))
         {
             return;
         }

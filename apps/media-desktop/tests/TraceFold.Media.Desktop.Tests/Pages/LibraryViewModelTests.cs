@@ -196,6 +196,25 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Taxonomy_name_change_notification_refreshes_visible_library_metadata()
+    {
+        var notifier = new LibraryActivityNotifier();
+        var library = new RecordingLibraryQueryService();
+        LibraryViewModel viewModel = CreateViewModel(
+            library,
+            notifier: notifier);
+        await viewModel.LoadAsync(TestContext.Current.CancellationToken);
+
+        notifier.Publish(LibraryActivityKind.TaxonomyChanged, []);
+        while (library.SearchCallCount < 2)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(2, library.SearchCallCount);
+    }
+
+    [Fact]
     public async Task Failed_batch_dialog_preserves_selection_without_reload()
     {
         var dialog = new RecordingLibraryBatchEditDialogService(applied: false);

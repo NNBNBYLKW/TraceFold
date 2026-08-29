@@ -36,7 +36,8 @@
                     AutomationProperties.AutomationId="TaxonomyUndoButton"
                     AutomationProperties.Name="撤销最近一次词表维护"
                     Click="OnUndoClicked"
-                    Content="撤销" />
+                    Content="撤销"
+                    IsEnabled="{x:Bind ViewModel.CanExecuteUndo, Mode=OneWay}" />
             </InfoBar.ActionButton>
         </InfoBar>
 
@@ -136,7 +137,8 @@
                         AutomationProperties.AutomationId="TaxonomyCreateButton"
                         AutomationProperties.Name="新建当前类型词条"
                         Click="OnCreateClicked"
-                        Content="新建" />
+                        Content="新建"
+                        IsEnabled="{x:Bind ViewModel.CanCreate, Mode=OneWay}" />
                 </Grid>
 
                 <Border

@@ -119,6 +119,25 @@ public sealed class TaxonomyMergeDialogViewModelTests
     }
 
     [Fact]
+    public async Task Preview_after_summary_uses_the_planned_final_target_name()
+    {
+        TaxonomyManagementTermDto source = Term("Source");
+        TaxonomyManagementTermDto target = Term("Old target");
+        Fixture fixture = new([source, target], [source, target]);
+        await fixture.ViewModel.SelectTargetAsync(
+            target,
+            TestContext.Current.CancellationToken);
+
+        fixture.ViewModel.RenameTarget = true;
+        fixture.ViewModel.FinalNameText = "Final target";
+
+        TaxonomyMergePreviewDisplayRow row = Assert.Single(
+            fixture.ViewModel.PreviewDisplayRows);
+        Assert.Contains("Final target", row.AfterSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("Old target", row.AfterSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Whitespace_name_override_blocks_apply()
     {
         TaxonomyManagementTermDto source = Term("Source");

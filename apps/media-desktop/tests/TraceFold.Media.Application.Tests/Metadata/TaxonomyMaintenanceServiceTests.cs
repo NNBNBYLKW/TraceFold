@@ -175,6 +175,67 @@ public sealed class TaxonomyMaintenanceServiceTests
     }
 
     [Fact]
+    public async Task Cancellation_during_uncommitted_undo_restores_the_receipt()
+    {
+        TaxonomyMergePreparation preparation = Preparation();
+        TaxonomyMergeUndoReceipt receipt = MergeReceipt(preparation);
+        var undoStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new RecordingMaintenanceStore
+        {
+            MergeResult = Success(receipt),
+            UndoHandler = async (_, token) =>
+            {
+                undoStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                throw new InvalidOperationException("The cancelled undo continued.");
+            }
+        };
+        var service = Service(store);
+        await service.ApplyMergeAsync(
+            preparation,
+            null,
+            CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+
+        Task<TaxonomyMaintenanceUndoResult> undo = service.UndoLastAsync(
+            cancellation.Token);
+        await undoStarted.Task;
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => undo);
+
+        Assert.True(service.UndoState.IsAvailable);
+    }
+
+    [Fact]
+    public async Task Target_rename_publishes_taxonomy_refresh_without_changed_links()
+    {
+        TaxonomyMergePreparation preparation = Preparation();
+        TaxonomyMergeUndoReceipt receipt = MergeReceipt(preparation) with
+        {
+            TargetAfter = TaxonomyName.Create("Renamed target")
+        };
+        var store = new RecordingMaintenanceStore
+        {
+            MergeResult = Success(receipt)
+        };
+        var inbox = new RecordingInboxActivityNotifier();
+        var library = new RecordingLibraryActivityNotifier();
+        var service = new TaxonomyMaintenanceService(store, inbox, library);
+
+        TaxonomyMaintenanceResult result = await service.ApplyMergeAsync(
+            preparation,
+            "Renamed target",
+            CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal([InboxActivityKind.ItemChanged], inbox.Published);
+        LibraryActivityEventArgs changed = Assert.Single(library.Published);
+        Assert.Equal(LibraryActivityKind.TaxonomyChanged, changed.Kind);
+        Assert.Empty(changed.AssetIds);
+    }
+
+    [Fact]
     public async Task Notifications_are_coalesced_and_asset_ids_are_distinct()
     {
         TaxonomyMergePreparation preparation = Preparation();
@@ -288,6 +349,9 @@ public sealed class TaxonomyMaintenanceServiceTests
         public TaxonomyMaintenanceUndoResult UndoResult { get; init; } =
             new(true, 0, 0, [], false, null);
 
+        public Func<TaxonomyMaintenanceUndoReceipt, CancellationToken,
+            Task<TaxonomyMaintenanceUndoResult>>? UndoHandler { get; init; }
+
         public TaxonomyMaintenanceUndoReceipt? LastUndoReceipt { get; private set; }
 
         public Task<TaxonomyMergePrepareResult> PrepareMergeAsync(
@@ -324,7 +388,8 @@ public sealed class TaxonomyMaintenanceServiceTests
             CancellationToken cancellationToken)
         {
             LastUndoReceipt = receipt;
-            return Task.FromResult(UndoResult);
+            return UndoHandler?.Invoke(receipt, cancellationToken)
+                ?? Task.FromResult(UndoResult);
         }
     }
 

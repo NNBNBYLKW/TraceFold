@@ -104,6 +104,7 @@ public sealed class TaxonomyViewModelTests
         fixture.Dialogs.MergeHandler = (selected, _) =>
         {
             Assert.Equal([source.Id, target.Id], selected.Select(term => term.Id));
+            fixture.Dialogs.AppliedTargetId = target.Id;
             fixture.Terms.RemoveAll(term => term.Id == source.Id);
             return Success(canUndo: true);
         };
@@ -112,6 +113,28 @@ public sealed class TaxonomyViewModelTests
 
         Assert.Equal([target.Id], fixture.ViewModel.Selection.SelectedIds);
         Assert.Equal("词条已合并。", fixture.ViewModel.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Successful_merge_into_external_target_selects_that_target()
+    {
+        TaxonomyManagementTermDto source = Term("Source");
+        TaxonomyManagementTermDto externalTarget = Term("External target");
+        Fixture fixture = new(source, externalTarget);
+        await fixture.ViewModel.LoadAsync(TestContext.Current.CancellationToken);
+        fixture.ViewModel.ReplaceSelection([source]);
+        fixture.Dialogs.MergeHandler = (_, _) =>
+        {
+            fixture.Dialogs.AppliedTargetId = externalTarget.Id;
+            fixture.Terms.RemoveAll(term => term.Id == source.Id);
+            return Success(canUndo: true);
+        };
+
+        await fixture.ViewModel.MergeAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [externalTarget.Id],
+            fixture.ViewModel.Selection.SelectedIds);
     }
 
     [Fact]
@@ -239,6 +262,37 @@ public sealed class TaxonomyViewModelTests
         Assert.Null(fixture.ViewModel.RenameConflictTarget);
     }
 
+    [Fact]
+    public async Task Write_commands_are_serialized_through_one_gate()
+    {
+        TaxonomyManagementTermDto original = Term("Original");
+        Fixture fixture = new(original);
+        await fixture.ViewModel.LoadAsync(TestContext.Current.CancellationToken);
+        fixture.ViewModel.ReplaceSelection([original]);
+        fixture.Taxonomy.BlockCreate = true;
+
+        Task create = fixture.ViewModel.CreateAsync(
+            "Created",
+            TestContext.Current.CancellationToken);
+        await fixture.Taxonomy.CreateStarted.Task;
+        Task rename = fixture.ViewModel.RenameAsync(
+            "Renamed",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            await Task.Yield();
+            Assert.Equal(0, fixture.Taxonomy.RenameCallCount);
+        }
+        finally
+        {
+            fixture.Taxonomy.AllowCreate.TrySetResult();
+            await Task.WhenAll(create, rename);
+        }
+
+        Assert.Equal(1, fixture.Taxonomy.RenameCallCount);
+    }
+
     private static TaxonomyMaintenanceResult Success(bool canUndo) =>
         new(true, 0, 0, 1, canUndo, null);
 
@@ -262,8 +316,8 @@ public sealed class TaxonomyViewModelTests
         {
             Terms = [.. terms];
             Query = new FakeQueryService(Terms);
-            Taxonomy = new FakeTaxonomyService(Terms);
             Maintenance = new FakeMaintenanceService(Terms);
+            Taxonomy = new FakeTaxonomyService(Terms, Maintenance);
             Dialogs = new FakeDialogService();
             ViewModel = new TaxonomyViewModel(
                 Query,
@@ -327,11 +381,23 @@ public sealed class TaxonomyViewModelTests
         }
     }
 
-    private sealed class FakeTaxonomyService(List<TaxonomyManagementTermDto> terms)
+    private sealed class FakeTaxonomyService(
+        List<TaxonomyManagementTermDto> terms,
+        FakeMaintenanceService maintenance)
         : ITaxonomyService
     {
         public TaxonomyMutationResult RenameResult { get; set; } =
             new(true, null);
+
+        public bool BlockCreate { get; set; }
+
+        public TaskCompletionSource CreateStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource AllowCreate { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int RenameCallCount { get; private set; }
 
         public Task<IReadOnlyList<TaxonomyTermDto>> SearchAsync(
             TaxonomyKind kind,
@@ -339,12 +405,18 @@ public sealed class TaxonomyViewModelTests
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<TaxonomyTermDto>>([]);
 
-        public Task<TaxonomyTermDto> CreateAsync(
+        public async Task<TaxonomyTermDto> CreateAsync(
             TaxonomyKind kind,
             string name,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            CreateStarted.TrySetResult();
+            if (BlockCreate)
+            {
+                await AllowCreate.Task.WaitAsync(cancellationToken);
+            }
+
             var created = new TaxonomyManagementTermDto(
                 Guid.NewGuid(),
                 kind,
@@ -354,12 +426,13 @@ public sealed class TaxonomyViewModelTests
                 0,
                 0);
             terms.Add(created);
-            return Task.FromResult(new TaxonomyTermDto(
+            maintenance.InvalidateUndo();
+            return new TaxonomyTermDto(
                 created.Id,
                 created.Kind,
                 created.DisplayName,
                 created.NormalizedName,
-                0));
+                0);
         }
 
         public Task<TaxonomyMutationResult> RenameAsync(
@@ -368,6 +441,7 @@ public sealed class TaxonomyViewModelTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            RenameCallCount++;
             if (RenameResult.Succeeded)
             {
                 int index = terms.FindIndex(term => term.Id == id);
@@ -379,6 +453,8 @@ public sealed class TaxonomyViewModelTests
                         NormalizedName = TaxonomyName.Create(name).Normalized
                     };
                 }
+
+                maintenance.InvalidateUndo();
             }
 
             return Task.FromResult(RenameResult);
@@ -403,10 +479,12 @@ public sealed class TaxonomyViewModelTests
 
         public Guid? LastPreselectedTargetId { get; private set; }
 
+        public Guid? AppliedTargetId { get; set; }
+
         public IReadOnlyList<TaxonomyManagementTermDto> LastSelectedTerms
             { get; private set; } = [];
 
-        public Task<TaxonomyMaintenanceResult?> ShowMergeAsync(
+        public Task<TaxonomyMergeDialogResult?> ShowMergeAsync(
             IReadOnlyList<TaxonomyManagementTermDto> selectedTerms,
             Guid? preselectedTargetId,
             CancellationToken cancellationToken)
@@ -415,9 +493,16 @@ public sealed class TaxonomyViewModelTests
             MergeCallCount++;
             LastSelectedTerms = selectedTerms;
             LastPreselectedTargetId = preselectedTargetId;
-            return Task.FromResult(MergeHandler?.Invoke(
+            TaxonomyMaintenanceResult? result = MergeHandler?.Invoke(
                 selectedTerms,
-                preselectedTargetId) ?? MergeResult);
+                preselectedTargetId) ?? MergeResult;
+            return Task.FromResult(result is null
+                ? null
+                : new TaxonomyMergeDialogResult(
+                    AppliedTargetId
+                        ?? preselectedTargetId
+                        ?? selectedTerms[0].Id,
+                    result));
         }
 
         public Task<bool> ConfirmDeleteAsync(

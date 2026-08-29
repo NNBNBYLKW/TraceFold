@@ -162,6 +162,7 @@
                         </Border>
                     </Grid>
                     <ListView
+                        x:Name="AffectedFilesList"
                         Grid.Row="2"
                         AutomationProperties.AutomationId="TaxonomyMergeAffectedFiles"
                         AutomationProperties.Name="逐项受影响资料的合并前后预览"

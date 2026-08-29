@@ -22,7 +22,9 @@ public sealed class TaxonomyViewModel : ObservableObject
     private readonly ITaxonomyMaintenanceDialogService _dialogs;
     private readonly ILogger<TaxonomyViewModel>? _logger;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
     private long _reloadGeneration;
+    private int _pendingWriteCount;
     private TaxonomyKind _selectedKind = TaxonomyKind.Author;
     private string _searchText = string.Empty;
     private TaxonomyReferenceFilter _referenceFilter =
@@ -32,6 +34,7 @@ public sealed class TaxonomyViewModel : ObservableObject
         TaxonomySortDirection.Ascending;
     private string _statusMessage = string.Empty;
     private bool _isBusy;
+    private bool _isWriteBusy;
     private TaxonomyManagementTermDto? _renameConflictTarget;
     private bool _canUndoMaintenance;
     private string _undoBannerMessage = string.Empty;
@@ -54,7 +57,9 @@ public sealed class TaxonomyViewModel : ObservableObject
         _logger = logger;
         Selection = new TaxonomySelectionViewModel();
         Selection.PropertyChanged += OnSelectionPropertyChanged;
-        CreateCommand = new AsyncRelayCommand<string?>(CreateAsync);
+        CreateCommand = new AsyncRelayCommand<string?>(
+            CreateAsync,
+            _ => CanCreate);
         RenameCommand = new AsyncRelayCommand<string?>(
             RenameAsync,
             _ => CanRename);
@@ -66,7 +71,7 @@ public sealed class TaxonomyViewModel : ObservableObject
             () => CanDeleteSelection);
         UndoCommand = new AsyncRelayCommand(
             UndoMaintenanceAsync,
-            () => CanUndoMaintenance);
+            () => CanExecuteUndo);
         _maintenance.UndoStateChanged += OnUndoStateChanged;
         UpdateUndoState();
     }
@@ -180,7 +185,25 @@ public sealed class TaxonomyViewModel : ObservableObject
     public bool IsBusy
     {
         get => _isBusy;
-        private set => SetProperty(ref _isBusy, value);
+        private set
+        {
+            if (SetProperty(ref _isBusy, value))
+            {
+                NotifyWriteCommandState();
+            }
+        }
+    }
+
+    public bool IsWriteBusy
+    {
+        get => _isWriteBusy;
+        private set
+        {
+            if (SetProperty(ref _isWriteBusy, value))
+            {
+                NotifyWriteCommandState();
+            }
+        }
     }
 
     public IReadOnlyList<TaxonomyManagementTermDto> DeleteBlockers =>
@@ -249,22 +272,41 @@ public sealed class TaxonomyViewModel : ObservableObject
         }
     }
 
-    public bool CanMerge => Selection.SelectedCount >= 1;
+    public bool CanCreate => !IsBusy && !IsWriteBusy;
+
+    public bool CanMerge =>
+        Selection.SelectedCount >= 1 && !IsBusy && !IsWriteBusy;
 
     public bool CanDeleteSelection =>
-        Selection.SelectedCount >= 1 && DeleteBlockers.Count == 0;
+        Selection.SelectedCount >= 1
+        && DeleteBlockers.Count == 0
+        && !IsBusy
+        && !IsWriteBusy;
 
-    public bool CanRename => Selection.IsSingleSelection;
+    public bool CanRename =>
+        Selection.IsSingleSelection && !IsBusy && !IsWriteBusy;
 
     public bool CanDelete => CanDeleteSelection;
 
     public bool CanMergeRenameConflict =>
-        Selection.IsSingleSelection && RenameConflictTarget is not null;
+        Selection.IsSingleSelection
+        && RenameConflictTarget is not null
+        && !IsBusy
+        && !IsWriteBusy;
+
+    public bool CanExecuteUndo =>
+        CanUndoMaintenance && !IsBusy && !IsWriteBusy;
 
     public bool CanUndoMaintenance
     {
         get => _canUndoMaintenance;
-        private set => SetProperty(ref _canUndoMaintenance, value);
+        private set
+        {
+            if (SetProperty(ref _canUndoMaintenance, value))
+            {
+                OnPropertyChanged(nameof(CanExecuteUndo));
+            }
+        }
     }
 
     public string UndoBannerMessage
@@ -296,7 +338,14 @@ public sealed class TaxonomyViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
-    public async Task CreateAsync(
+    public Task CreateAsync(
+        string? name,
+        CancellationToken cancellationToken) =>
+        RunWriteAsync(
+            token => CreateCoreAsync(name, token),
+            cancellationToken);
+
+    private async Task CreateCoreAsync(
         string? name,
         CancellationToken cancellationToken)
     {
@@ -312,7 +361,6 @@ public sealed class TaxonomyViewModel : ObservableObject
                 SelectedKind,
                 name,
                 cancellationToken);
-            _maintenance.InvalidateUndo();
             RenameConflictTarget = null;
             await ReloadCurrentAsync(
                 created.Id,
@@ -326,7 +374,14 @@ public sealed class TaxonomyViewModel : ObservableObject
         }
     }
 
-    public async Task RenameAsync(
+    public Task RenameAsync(
+        string? name,
+        CancellationToken cancellationToken) =>
+        RunWriteAsync(
+            token => RenameCoreAsync(name, token),
+            cancellationToken);
+
+    private async Task RenameCoreAsync(
         string? name,
         CancellationToken cancellationToken)
     {
@@ -378,7 +433,6 @@ public sealed class TaxonomyViewModel : ObservableObject
             return;
         }
 
-        _maintenance.InvalidateUndo();
         RenameConflictTarget = null;
         await ReloadCurrentAsync(
             selected.Id,
@@ -387,7 +441,10 @@ public sealed class TaxonomyViewModel : ObservableObject
         StatusMessage = "词条已重命名。";
     }
 
-    public async Task MergeAsync(CancellationToken cancellationToken)
+    public Task MergeAsync(CancellationToken cancellationToken) =>
+        RunWriteAsync(MergeCoreAsync, cancellationToken);
+
+    private async Task MergeCoreAsync(CancellationToken cancellationToken)
     {
         IReadOnlyList<TaxonomyManagementTermDto> selected = Selection.Capture();
         if (selected.Count == 0)
@@ -397,15 +454,16 @@ public sealed class TaxonomyViewModel : ObservableObject
         }
 
         Guid? preselectedTargetId = RenameConflictTarget?.Id;
-        TaxonomyMaintenanceResult? result = await _dialogs.ShowMergeAsync(
+        TaxonomyMergeDialogResult? dialogResult = await _dialogs.ShowMergeAsync(
             selected,
             preselectedTargetId,
             cancellationToken);
-        if (result is null)
+        if (dialogResult is null)
         {
             return;
         }
 
+        TaxonomyMaintenanceResult result = dialogResult.MaintenanceResult;
         if (!result.Succeeded)
         {
             StatusMessage = MaintenanceFailureMessage(result.ErrorCode, "合并");
@@ -414,13 +472,17 @@ public sealed class TaxonomyViewModel : ObservableObject
 
         RenameConflictTarget = null;
         await ReloadCurrentAsync(
-            preselectedTargetId,
+            dialogResult.TargetId,
             preserveSelection: true,
             cancellationToken);
         StatusMessage = "词条已合并。";
     }
 
-    public async Task DeleteSelectionAsync(CancellationToken cancellationToken)
+    public Task DeleteSelectionAsync(CancellationToken cancellationToken) =>
+        RunWriteAsync(DeleteSelectionCoreAsync, cancellationToken);
+
+    private async Task DeleteSelectionCoreAsync(
+        CancellationToken cancellationToken)
     {
         IReadOnlyList<TaxonomyManagementTermDto> selected = Selection.Capture();
         if (selected.Count == 0)
@@ -476,7 +538,11 @@ public sealed class TaxonomyViewModel : ObservableObject
     public Task DeleteAsync(CancellationToken cancellationToken) =>
         DeleteSelectionAsync(cancellationToken);
 
-    public async Task UndoMaintenanceAsync(CancellationToken cancellationToken)
+    public Task UndoMaintenanceAsync(CancellationToken cancellationToken) =>
+        RunWriteAsync(UndoMaintenanceCoreAsync, cancellationToken);
+
+    private async Task UndoMaintenanceCoreAsync(
+        CancellationToken cancellationToken)
     {
         TaxonomyMaintenanceUndoResult result =
             await _maintenance.UndoLastAsync(cancellationToken);
@@ -674,6 +740,54 @@ public sealed class TaxonomyViewModel : ObservableObject
         RenameCommand.NotifyCanExecuteChanged();
         MergeCommand.NotifyCanExecuteChanged();
         DeleteSelectionCommand.NotifyCanExecuteChanged();
+    }
+
+    private async Task RunWriteAsync(
+        Func<CancellationToken, Task> operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        int pending = Interlocked.Increment(ref _pendingWriteCount);
+        if (pending == 1)
+        {
+            IsWriteBusy = true;
+        }
+
+        bool entered = false;
+        try
+        {
+            await _writeGate.WaitAsync(cancellationToken);
+            entered = true;
+            await operation(cancellationToken);
+        }
+        finally
+        {
+            if (entered)
+            {
+                _writeGate.Release();
+            }
+
+            if (Interlocked.Decrement(ref _pendingWriteCount) == 0)
+            {
+                IsWriteBusy = false;
+            }
+        }
+    }
+
+    private void NotifyWriteCommandState()
+    {
+        OnPropertyChanged(nameof(CanCreate));
+        OnPropertyChanged(nameof(CanMerge));
+        OnPropertyChanged(nameof(CanDeleteSelection));
+        OnPropertyChanged(nameof(CanRename));
+        OnPropertyChanged(nameof(CanDelete));
+        OnPropertyChanged(nameof(CanMergeRenameConflict));
+        OnPropertyChanged(nameof(CanExecuteUndo));
+        CreateCommand.NotifyCanExecuteChanged();
+        RenameCommand.NotifyCanExecuteChanged();
+        MergeCommand.NotifyCanExecuteChanged();
+        DeleteSelectionCommand.NotifyCanExecuteChanged();
+        UndoCommand.NotifyCanExecuteChanged();
     }
 
     private void SetSelectionStatus()

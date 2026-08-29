@@ -59,107 +59,115 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
                 TaxonomyMaintenanceErrorCodes.SelectionInvalid);
         }
 
-        await using MediaDesktopDbContext context =
-            await _contextFactory.CreateDbContextAsync(cancellationToken);
-        await using IDbContextTransaction transaction =
-            await context.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            TaxonomyMergePrepareResult reloaded =
-                await PrepareMergeInContextAsync(
-                    context,
-                    preparation.Selection,
-                    cancellationToken);
-            if (!reloaded.Succeeded || reloaded.Preparation is null)
+            await using MediaDesktopDbContext context =
+                await _contextFactory.CreateDbContextAsync(cancellationToken);
+            await using IDbContextTransaction transaction =
+                await context.Database.BeginTransactionAsync(cancellationToken);
+            try
             {
-                throw new TaxonomyMaintenancePlanningException(
-                    TaxonomyMaintenanceErrorCodes.PreviewStale);
-            }
+                TaxonomyMergePrepareResult reloaded =
+                    await PrepareMergeInContextAsync(
+                        context,
+                        preparation.Selection,
+                        cancellationToken);
+                if (!reloaded.Succeeded || reloaded.Preparation is null)
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.PreviewStale);
+                }
 
-            TaxonomyMergePreparation current = reloaded.Preparation with
-            {
-                OperationId = preparation.OperationId,
-            };
-            if (!MergePreparationsEqual(preparation, current))
-            {
-                throw new TaxonomyMaintenancePlanningException(
-                    TaxonomyMaintenanceErrorCodes.PreviewStale);
-            }
+                TaxonomyMergePreparation current = reloaded.Preparation with
+                {
+                    OperationId = preparation.OperationId,
+                };
+                if (!MergePreparationsEqual(preparation, current))
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.PreviewStale);
+                }
 
-            TaxonomyMergePlan plan = TaxonomyMergePlanner.Build(
-                current,
-                finalName);
-            var receipt = new TaxonomyMergeUndoReceipt(
-                preparation.OperationId,
-                current.Target,
-                plan.FinalName,
-                current.Sources.ToArray(),
-                plan.Owners.Select(owner => new TaxonomyMergeUndoOwner(
-                    owner.Owner,
-                    checked(owner.BeforeVersion + 1),
-                    owner.Before,
-                    owner.After)).ToArray());
+                TaxonomyMergePlan plan = TaxonomyMergePlanner.Build(
+                    current,
+                    finalName);
+                var receipt = new TaxonomyMergeUndoReceipt(
+                    preparation.OperationId,
+                    current.Target,
+                    plan.FinalName,
+                    current.Sources.ToArray(),
+                    plan.Owners.Select(owner => new TaxonomyMergeUndoOwner(
+                        owner.Owner,
+                        checked(owner.BeforeVersion + 1),
+                        owner.Before,
+                        owner.After)).ToArray());
 
-            DateTimeOffset now = _timeProvider.GetUtcNow();
-            foreach (TaxonomyMergePlanOwner owner in plan.Owners)
-            {
-                await ApplyOwnerAsync(
-                    context,
-                    plan.Kind,
-                    owner,
-                    now,
-                    cancellationToken);
-            }
+                DateTimeOffset now = _timeProvider.GetUtcNow();
+                foreach (TaxonomyMergePlanOwner owner in plan.Owners)
+                {
+                    await ApplyOwnerAsync(
+                        context,
+                        plan.Kind,
+                        owner,
+                        now,
+                        cancellationToken);
+                }
 
-            Guid[] sourceIds = plan.Sources.Select(source => source.Id).ToArray();
-            TaxonomyTermRow[] sourceRows = await context.TaxonomyTerms
-                .Where(term => sourceIds.Contains(term.Id))
-                .ToArrayAsync(cancellationToken);
-            TaxonomyTermRow? targetRow = await context.TaxonomyTerms
-                .SingleOrDefaultAsync(
-                    term => term.Id == plan.Target.Id,
-                    cancellationToken);
-            if (sourceRows.Length != sourceIds.Length || targetRow is null)
-            {
-                throw new TaxonomyMaintenancePlanningException(
-                    TaxonomyMaintenanceErrorCodes.PreviewStale);
-            }
+                Guid[] sourceIds = plan.Sources.Select(source => source.Id).ToArray();
+                TaxonomyTermRow[] sourceRows = await context.TaxonomyTerms
+                    .Where(term => sourceIds.Contains(term.Id))
+                    .ToArrayAsync(cancellationToken);
+                TaxonomyTermRow? targetRow = await context.TaxonomyTerms
+                    .SingleOrDefaultAsync(
+                        term => term.Id == plan.Target.Id,
+                        cancellationToken);
+                if (sourceRows.Length != sourceIds.Length || targetRow is null)
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.PreviewStale);
+                }
 
-            context.TaxonomyTerms.RemoveRange(sourceRows);
-            await context.SaveChangesAsync(cancellationToken);
-
-            if (!StringComparer.Ordinal.Equals(
-                    targetRow.DisplayName,
-                    plan.FinalName.Display)
-                || !StringComparer.Ordinal.Equals(
-                    targetRow.NormalizedName,
-                    plan.FinalName.Normalized))
-            {
-                targetRow.DisplayName = plan.FinalName.Display;
-                targetRow.NormalizedName = plan.FinalName.Normalized;
-                targetRow.UpdatedAtUtc = now;
+                context.TaxonomyTerms.RemoveRange(sourceRows);
                 await context.SaveChangesAsync(cancellationToken);
-            }
 
-            await transaction.CommitAsync(cancellationToken);
-            return new TaxonomyMaintenanceStoreResult(
-                true,
-                plan.Owners.Select(owner => owner.Owner).ToArray(),
-                plan.Sources.Count,
-                receipt,
-                null);
-        }
-        catch (TaxonomyMaintenancePlanningException error)
-        {
-            await transaction.RollbackAsync(CancellationToken.None);
-            return StoreFailure(error.ErrorCode);
+                if (!StringComparer.Ordinal.Equals(
+                        targetRow.DisplayName,
+                        plan.FinalName.Display)
+                    || !StringComparer.Ordinal.Equals(
+                        targetRow.NormalizedName,
+                        plan.FinalName.Normalized))
+                {
+                    targetRow.DisplayName = plan.FinalName.Display;
+                    targetRow.NormalizedName = plan.FinalName.Normalized;
+                    targetRow.UpdatedAtUtc = now;
+                    await context.SaveChangesAsync(cancellationToken);
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+                return new TaxonomyMaintenanceStoreResult(
+                    true,
+                    plan.Owners.Select(owner => owner.Owner).ToArray(),
+                    plan.Sources.Count,
+                    receipt,
+                    null);
+            }
+            catch (TaxonomyMaintenancePlanningException error)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+                return StoreFailure(error.ErrorCode);
+            }
+            catch (Exception error) when (error is DbUpdateException
+                or SqliteException)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+                return StoreFailure(
+                    TaxonomyMaintenanceErrorCodes.PersistenceFailed);
+            }
         }
         catch (Exception error) when (error is DbUpdateException
             or SqliteException)
         {
-            await transaction.RollbackAsync(CancellationToken.None);
-            return StoreFailure(
-                TaxonomyMaintenanceErrorCodes.PersistenceFailed);
+            return StoreFailure(TaxonomyMaintenanceErrorCodes.PersistenceFailed);
         }
     }
 
@@ -246,71 +254,79 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
             return StoreFailure(TaxonomyMaintenanceErrorCodes.DeleteInUse);
         }
 
-        await using MediaDesktopDbContext context =
-            await _contextFactory.CreateDbContextAsync(cancellationToken);
-        await using IDbContextTransaction transaction =
-            await context.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            Guid[] selectedIds = preparation.Selection.TermIds.ToArray();
-            TaxonomyTermRow[] loaded = await context.TaxonomyTerms
-                .Where(term => selectedIds.Contains(term.Id))
-                .ToArrayAsync(cancellationToken);
-            if (loaded.Length != selectedIds.Length
-                || loaded.Any(term => term.Kind != KindKey(
-                    preparation.Selection.Kind)))
+            await using MediaDesktopDbContext context =
+                await _contextFactory.CreateDbContextAsync(cancellationToken);
+            await using IDbContextTransaction transaction =
+                await context.Database.BeginTransactionAsync(cancellationToken);
+            try
             {
-                throw new TaxonomyMaintenancePlanningException(
-                    TaxonomyMaintenanceErrorCodes.PreviewStale);
-            }
+                Guid[] selectedIds = preparation.Selection.TermIds.ToArray();
+                TaxonomyTermRow[] loaded = await context.TaxonomyTerms
+                    .Where(term => selectedIds.Contains(term.Id))
+                    .ToArrayAsync(cancellationToken);
+                if (loaded.Length != selectedIds.Length
+                    || loaded.Any(term => term.Kind != KindKey(
+                        preparation.Selection.Kind)))
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.PreviewStale);
+                }
 
-            IReadOnlyDictionary<Guid, TaxonomyTermRow> byId =
-                loaded.ToDictionary(term => term.Id);
-            TaxonomyTermSnapshot[] currentTerms = selectedIds
-                .Select(id => ToSnapshot(byId[id]))
-                .ToArray();
-            if (!SnapshotSetsEqual(preparation.Terms, currentTerms))
+                IReadOnlyDictionary<Guid, TaxonomyTermRow> byId =
+                    loaded.ToDictionary(term => term.Id);
+                TaxonomyTermSnapshot[] currentTerms = selectedIds
+                    .Select(id => ToSnapshot(byId[id]))
+                    .ToArray();
+                if (!SnapshotSetsEqual(preparation.Terms, currentTerms))
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.PreviewStale);
+                }
+
+                IReadOnlyDictionary<Guid, ReferenceCounts> counts =
+                    await LoadReferenceCountsAsync(
+                        context,
+                        preparation.Selection.Kind,
+                        selectedIds,
+                        cancellationToken);
+                if (counts.Values.Any(count => count.Total > 0))
+                {
+                    throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.DeleteInUse);
+                }
+
+                var receipt = new TaxonomyDeleteUndoReceipt(
+                    preparation.OperationId,
+                    currentTerms);
+                context.TaxonomyTerms.RemoveRange(loaded);
+                await context.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new TaxonomyMaintenanceStoreResult(
+                    true,
+                    [],
+                    currentTerms.Length,
+                    receipt,
+                    null);
+            }
+            catch (TaxonomyMaintenancePlanningException error)
             {
-                throw new TaxonomyMaintenancePlanningException(
-                    TaxonomyMaintenanceErrorCodes.PreviewStale);
+                await transaction.RollbackAsync(CancellationToken.None);
+                return StoreFailure(error.ErrorCode);
             }
-
-            IReadOnlyDictionary<Guid, ReferenceCounts> counts =
-                await LoadReferenceCountsAsync(
-                    context,
-                    preparation.Selection.Kind,
-                    selectedIds,
-                    cancellationToken);
-            if (counts.Values.Any(count => count.Total > 0))
+            catch (Exception error) when (error is DbUpdateException
+                or SqliteException)
             {
-                throw new TaxonomyMaintenancePlanningException(
-                    TaxonomyMaintenanceErrorCodes.DeleteInUse);
+                await transaction.RollbackAsync(CancellationToken.None);
+                return StoreFailure(
+                    TaxonomyMaintenanceErrorCodes.PersistenceFailed);
             }
-
-            var receipt = new TaxonomyDeleteUndoReceipt(
-                preparation.OperationId,
-                currentTerms);
-            context.TaxonomyTerms.RemoveRange(loaded);
-            await context.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return new TaxonomyMaintenanceStoreResult(
-                true,
-                [],
-                currentTerms.Length,
-                receipt,
-                null);
-        }
-        catch (TaxonomyMaintenancePlanningException error)
-        {
-            await transaction.RollbackAsync(CancellationToken.None);
-            return StoreFailure(error.ErrorCode);
         }
         catch (Exception error) when (error is DbUpdateException
             or SqliteException)
         {
-            await transaction.RollbackAsync(CancellationToken.None);
-            return StoreFailure(
-                TaxonomyMaintenanceErrorCodes.PersistenceFailed);
+            return StoreFailure(TaxonomyMaintenanceErrorCodes.PersistenceFailed);
         }
     }
 
@@ -325,39 +341,49 @@ public sealed class EfTaxonomyMaintenanceStore : ITaxonomyMaintenanceStore
                 retryable: false);
         }
 
-        await using MediaDesktopDbContext context =
-            await _contextFactory.CreateDbContextAsync(cancellationToken);
-        await using IDbContextTransaction transaction =
-            await context.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            TaxonomyMaintenanceUndoResult result = receipt switch
+            await using MediaDesktopDbContext context =
+                await _contextFactory.CreateDbContextAsync(cancellationToken);
+            await using IDbContextTransaction transaction =
+                await context.Database.BeginTransactionAsync(cancellationToken);
+            try
             {
-                TaxonomyMergeUndoReceipt merge => await UndoMergeInContextAsync(
-                    context,
-                    merge,
-                    cancellationToken),
-                TaxonomyDeleteUndoReceipt delete => await UndoDeleteInContextAsync(
-                    context,
-                    delete,
-                    cancellationToken),
-                _ => throw new TaxonomyMaintenancePlanningException(
-                    TaxonomyMaintenanceErrorCodes.UndoConflict),
-            };
-            await transaction.CommitAsync(cancellationToken);
-            return result;
-        }
-        catch (TaxonomyMaintenancePlanningException)
-        {
-            await transaction.RollbackAsync(CancellationToken.None);
-            return UndoFailure(
-                TaxonomyMaintenanceErrorCodes.UndoConflict,
-                retryable: false);
+                TaxonomyMaintenanceUndoResult result = receipt switch
+                {
+                    TaxonomyMergeUndoReceipt merge => await UndoMergeInContextAsync(
+                        context,
+                        merge,
+                        cancellationToken),
+                    TaxonomyDeleteUndoReceipt delete => await UndoDeleteInContextAsync(
+                        context,
+                        delete,
+                        cancellationToken),
+                    _ => throw new TaxonomyMaintenancePlanningException(
+                        TaxonomyMaintenanceErrorCodes.UndoConflict),
+                };
+                await transaction.CommitAsync(cancellationToken);
+                return result;
+            }
+            catch (TaxonomyMaintenancePlanningException)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+                return UndoFailure(
+                    TaxonomyMaintenanceErrorCodes.UndoConflict,
+                    retryable: false);
+            }
+            catch (Exception error) when (error is DbUpdateException
+                or SqliteException)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+                return UndoFailure(
+                    TaxonomyMaintenanceErrorCodes.PersistenceFailed,
+                    retryable: true);
+            }
         }
         catch (Exception error) when (error is DbUpdateException
             or SqliteException)
         {
-            await transaction.RollbackAsync(CancellationToken.None);
             return UndoFailure(
                 TaxonomyMaintenanceErrorCodes.PersistenceFailed,
                 retryable: true);

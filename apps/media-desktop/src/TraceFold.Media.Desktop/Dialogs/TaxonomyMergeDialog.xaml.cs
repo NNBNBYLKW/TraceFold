@@ -18,9 +18,9 @@ public sealed partial class TaxonomyMergeDialog : ContentDialog
 
     public TaxonomyMergeDialogViewModel ViewModel { get; }
 
-    public TaxonomyMaintenanceResult? Result { get; private set; }
+    public TaxonomyMergeDialogResult? Result { get; private set; }
 
-    public async Task<TaxonomyMaintenanceResult?> ShowMergeAsync(
+    public async Task<TaxonomyMergeDialogResult?> ShowMergeAsync(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -40,7 +40,14 @@ public sealed partial class TaxonomyMergeDialog : ContentDialog
         {
             await ViewModel.InitializeAsync(_operationToken);
             SynchronizeSelectedTarget();
-            TargetSearchBox.Focus(FocusState.Programmatic);
+            if (ViewModel.HasPreselectedTarget)
+            {
+                AffectedFilesList.Focus(FocusState.Programmatic);
+            }
+            else
+            {
+                TargetSearchBox.Focus(FocusState.Programmatic);
+            }
         });
     }
 
@@ -86,7 +93,9 @@ public sealed partial class TaxonomyMergeDialog : ContentDialog
                 await ViewModel.ApplyAsync(_operationToken);
             if (result?.Succeeded == true)
             {
-                Result = result;
+                Result = new TaxonomyMergeDialogResult(
+                    ViewModel.Target!.Id,
+                    result);
                 Hide();
                 return;
             }

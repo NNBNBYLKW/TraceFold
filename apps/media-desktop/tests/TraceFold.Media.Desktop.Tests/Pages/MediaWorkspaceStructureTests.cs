@@ -475,6 +475,37 @@ public sealed class MediaWorkspaceStructureTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Taxonomy_merge_dialog_moves_focus_past_a_prefilled_target()
+    {
+        string codeBehind = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "TaxonomyMergeDialog.xaml.cs"),
+            TestContext.Current.CancellationToken);
+        string xaml = await File.ReadAllTextAsync(
+            DesktopSource("Dialogs", "TaxonomyMergeDialog.xaml"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "ViewModel.HasPreselectedTarget",
+            codeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AffectedFilesList.Focus",
+            codeBehind,
+            StringComparison.Ordinal);
+        string affectedMarker =
+            "AutomationProperties.AutomationId=\"TaxonomyMergeAffectedFiles\"";
+        int markerIndex = xaml.IndexOf(affectedMarker, StringComparison.Ordinal);
+        int elementStart = xaml.LastIndexOf("<ListView", markerIndex,
+            StringComparison.Ordinal);
+        int elementEnd = xaml.IndexOf('>', markerIndex);
+        Assert.True(elementStart >= 0 && elementEnd > markerIndex);
+        Assert.Contains(
+            "x:Name=\"AffectedFilesList\"",
+            xaml[elementStart..(elementEnd + 1)],
+            StringComparison.Ordinal);
+    }
+
     private static string DesktopSource(
         string folder,
         string filename,
