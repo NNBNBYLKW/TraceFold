@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B')][string] $StageCheckpoint,
+    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C')][string] $StageCheckpoint,
     [Parameter(Mandatory)][string] $FfmpegSourceRoot,
     [string] $NugetPackageSource
 )

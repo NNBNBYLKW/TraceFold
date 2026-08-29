@@ -13,6 +13,9 @@ public static class PackageProbeOptions
     public const string Stage5BLibraryScenario = "stage5b-library";
     public const string Stage5BRootNamePrefix = "tracefold-media-desktop-stage5b-probe-";
     public const string Stage5BResultFilename = "stage5b-probe-result.json";
+    public const string Stage5CTaxonomyScenario = "stage5c-taxonomy";
+    public const string Stage5CRootNamePrefix = "tracefold-media-desktop-stage5c-probe-";
+    public const string Stage5CResultFilename = "stage5c-probe-result.json";
 
     public static PackageProbeOptionResult Parse(IReadOnlyList<string> arguments)
     {
@@ -189,9 +192,12 @@ public static class PackageProbeOptions
         {
             Stage5ABatchScenario => PackageProbeScenarioKind.Stage5ABatch,
             Stage5BLibraryScenario => PackageProbeScenarioKind.Stage5BLibrary,
+            Stage5CTaxonomyScenario => PackageProbeScenarioKind.Stage5CTaxonomy,
             _ => default
         };
-        if (scenarioText is not (Stage5ABatchScenario or Stage5BLibraryScenario))
+        if (scenarioText is not (Stage5ABatchScenario
+            or Stage5BLibraryScenario
+            or Stage5CTaxonomyScenario))
         {
             return Invalid("probe.invalid_arguments");
         }

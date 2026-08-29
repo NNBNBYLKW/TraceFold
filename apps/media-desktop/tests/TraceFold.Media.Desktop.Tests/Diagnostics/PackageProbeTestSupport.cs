@@ -1,5 +1,6 @@
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Desktop.Diagnostics;
+using System.Text.Json;
 
 namespace TraceFold.Media.Desktop.Tests.Diagnostics;
 
@@ -38,6 +39,18 @@ internal sealed class OwnedProbeRoot : IDisposable
         }
 
         return new OwnedProbeRoot(System.IO.Path.GetFullPath(path), token, tokenText);
+    }
+
+    public static OwnedProbeRoot CreateStage5C() =>
+        CreateWithFixtures(PackageProbeOptions.Stage5CRootNamePrefix);
+
+    public Stage5CTaxonomyProbeResult ReadStage5CResult()
+    {
+        string json = File.ReadAllText(System.IO.Path.Combine(
+            Path,
+            PackageProbeOptions.Stage5CResultFilename));
+        return JsonSerializer.Deserialize<Stage5CTaxonomyProbeResult>(json)
+            ?? throw new InvalidDataException("The Stage 5C probe result is invalid.");
     }
 
     public void PrepareCrashResume(IngestFaultPoint point)
@@ -127,6 +140,14 @@ internal static class PackageProbeRequests
             root.Path,
             root.TokenText,
             PackageProbeScenarioKind.Stage5BLibrary,
+            null,
+            null);
+
+    public static PackageProbeRequest Stage5CTaxonomy(OwnedProbeRoot root) =>
+        new(
+            root.Path,
+            root.TokenText,
+            PackageProbeScenarioKind.Stage5CTaxonomy,
             null,
             null);
 }

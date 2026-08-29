@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $PackageDirectory,
-    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B')][string] $StageCheckpoint
+    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C')][string] $StageCheckpoint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +46,9 @@ $probePrefix = if ($StageCheckpoint -eq '5A') {
 }
 elseif ($StageCheckpoint -eq '5B') {
     'tracefold-media-desktop-stage5b-probe-'
+}
+elseif ($StageCheckpoint -eq '5C') {
+    'tracefold-media-desktop-stage5c-probe-'
 }
 else {
     'tracefold-media-desktop-stage4-probe-'
@@ -308,6 +311,17 @@ try {
         $probeNameLabel = 'Stage 5B'
         $probeResultFilename = 'stage5b-probe-result.json'
     }
+    elseif ($StageCheckpoint -eq '5C') {
+        $probeArguments = @(
+            '--package-probe-root',
+            ('"{0}"' -f $probeRoot),
+            '--package-probe-token',
+            $probeToken,
+            '--package-probe-scenario',
+            'stage5c-taxonomy')
+        $probeNameLabel = 'Stage 5C'
+        $probeResultFilename = 'stage5c-probe-result.json'
+    }
     else {
         $probeArguments = @(
             '--stage4-package-probe-root',
@@ -388,6 +402,29 @@ try {
             if (-not (Test-Path -LiteralPath (Join-Path $probeRoot "library\$formalFile"))) {
                 throw 'Stage 5B probe formal asset is missing.'
             }
+        }
+    }
+    elseif ($StageCheckpoint -eq '5C') {
+        foreach ($caseProperty in @(
+                'Succeeded',
+                'QueryPassed',
+                'MergePassed',
+                'MixedDeleteBlocked',
+                'DeleteUndoPassed',
+                'MergeUndoPassed',
+                'VersioningPassed',
+                'PhysicalFilesUnchanged',
+                'InternalStorageClean')) {
+            if (-not [bool]$result.$caseProperty) {
+                throw "Stage 5C package probe case failed: $caseProperty"
+            }
+        }
+        if (-not [string]::IsNullOrEmpty([string]$result.ErrorCode)) {
+            throw 'Stage 5C package probe reported an unexpected error code.'
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $probeRoot 'library\stage5c-formal.jpg')) -or
+            -not (Test-Path -LiteralPath (Join-Path $probeRoot 'inbox\stage5c-pending.jpg'))) {
+            throw 'Stage 5C probe media fixture is missing.'
         }
     }
     else {
@@ -483,6 +520,10 @@ try {
     elseif ($StageCheckpoint -eq '5B') {
         Write-Output 'PASS: Stage 5B strict filter, atomic apply, matching preview, and undo verified'
         Write-Output 'PASS: Stage 5B physical-file invariance and clean internal storage verified'
+    }
+    elseif ($StageCheckpoint -eq '5C') {
+        Write-Output 'PASS: Stage 5C taxonomy query, merge, delete guards, and undo verified'
+        Write-Output 'PASS: Stage 5C versioning, physical-file invariance, and clean storage verified'
     }
     else {
         Write-Output 'PASS: Stage 4A registered replace, Keep Both, unmanaged replace, and reopen flows verified'
