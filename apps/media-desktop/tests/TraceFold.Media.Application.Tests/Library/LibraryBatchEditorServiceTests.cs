@@ -168,6 +168,29 @@ public sealed class LibraryBatchEditorServiceTests
     }
 
     [Fact]
+    public async Task Related_taxonomy_change_invalidates_the_batch_receipt()
+    {
+        LibraryBatchEditorDto editor = Editor(Asset());
+        LibrarySelectionEntry selection = editor.Assets[0].Selection;
+        var store = new RecordingLibraryBatchEditStore(editor);
+        store.ApplyResults.Enqueue(Success(Receipt(selection)));
+        var notifier = new RecordingLibraryActivityNotifier();
+        LibraryBatchEditorService service = CreateService(store, notifier);
+        await service.ApplyAsync(
+            [selection],
+            LibraryBatchEditDraft.Create(
+                null,
+                Definition(new PrefixNamingRule("X-"))),
+            CancellationToken.None);
+
+        notifier.Publish(
+            LibraryActivityKind.TaxonomyChanged,
+            [selection.AssetId]);
+
+        Assert.False(service.UndoState.IsAvailable);
+    }
+
+    [Fact]
     public async Task Failed_new_batch_preserves_prior_receipt_and_second_undo_is_unavailable()
     {
         LibraryBatchEditorDto editor = Editor(Asset());

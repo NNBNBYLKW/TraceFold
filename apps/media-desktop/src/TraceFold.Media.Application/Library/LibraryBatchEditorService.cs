@@ -250,7 +250,8 @@ public sealed class LibraryBatchEditorService : ILibraryBatchEditorService
         object? sender,
         LibraryActivityEventArgs args)
     {
-        if (args.Kind != LibraryActivityKind.SingleMetadataChanged)
+        if (args.Kind is not (LibraryActivityKind.SingleMetadataChanged
+            or LibraryActivityKind.TaxonomyChanged))
         {
             return;
         }

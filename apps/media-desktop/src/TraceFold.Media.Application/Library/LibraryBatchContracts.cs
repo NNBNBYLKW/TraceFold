@@ -232,6 +232,7 @@ public interface ILibraryBatchEditorService
 public enum LibraryActivityKind
 {
     SingleMetadataChanged,
+    TaxonomyChanged,
     BatchChanged,
     UndoCompleted
 }
