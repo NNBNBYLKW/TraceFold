@@ -39,6 +39,9 @@ public static class DependencyInjection
             provider.GetRequiredService<TaxonomyService>());
         services.AddSingleton<ITaxonomyService>(provider =>
             provider.GetRequiredService<TaxonomyService>());
+        services.AddSingleton<TaxonomyManagementQueryService>();
+        services.AddSingleton<ITaxonomyManagementQueryService>(provider =>
+            provider.GetRequiredService<TaxonomyManagementQueryService>());
         services.AddSingleton<LibraryQueryService>();
         services.AddSingleton<ILibraryQueryService>(provider =>
             provider.GetRequiredService<LibraryQueryService>());
