@@ -36,6 +36,31 @@ public sealed class PackageProbeRefactorTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Smoke_cleanup_waits_for_every_owned_process_before_removing_logs()
+    {
+        string script = File.ReadAllText(RepositoryFile(
+            "scripts",
+            "smoke-media-desktop-package.ps1"));
+
+        Assert.Contains(
+            "function Stop-OwnedProcessAndWait",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$Process.WaitForExit(5000)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Stop-OwnedProcessAndWait -Process $_ -AllowedPaths @($packageFfmpegPath, $packageFfprobePath)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Stop-OwnedProcessAndWait -Process $_ -AllowedPaths @($exePath)",
+            script,
+            StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("stage5a-batch-extra")]
     [InlineData("stage5b-library-extra")]

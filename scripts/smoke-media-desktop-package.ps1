@@ -106,6 +106,45 @@ function Get-PackageFfmpegProcesses {
     })
 }
 
+function Stop-OwnedProcessAndWait {
+    param(
+        [Parameter(Mandatory)][Diagnostics.Process] $Process,
+        [Parameter(Mandatory)][string[]] $AllowedPaths
+    )
+
+    try {
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            return
+        }
+        $processPath = [IO.Path]::GetFullPath($Process.Path)
+    }
+    catch [ArgumentException] {
+        return
+    }
+    catch [InvalidOperationException] {
+        return
+    }
+
+    $owned = $false
+    foreach ($allowedPath in $AllowedPaths) {
+        if ([StringComparer]::OrdinalIgnoreCase.Equals(
+                $processPath,
+                [IO.Path]::GetFullPath($allowedPath))) {
+            $owned = $true
+            break
+        }
+    }
+    if (-not $owned) {
+        throw "Refusing to stop an unowned process: $processPath"
+    }
+
+    Stop-Process -Id $Process.Id -Force -ErrorAction Stop
+    if (-not $Process.WaitForExit(5000)) {
+        throw "Owned process did not exit within five seconds: $($Process.Id)"
+    }
+}
+
 function Assert-DirectTempChild {
     param(
         [Parameter(Mandatory)][string] $Path,
@@ -606,20 +645,12 @@ try {
 finally {
     @(Get-PackageFfmpegProcesses) |
         ForEach-Object {
-            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            Stop-OwnedProcessAndWait -Process $_ -AllowedPaths @($packageFfmpegPath, $packageFfprobePath)
         }
     @($probeProcess, $fatalLaunch, $secondary, $primary) |
         Where-Object { $null -ne $_ } |
         ForEach-Object {
-            try {
-                $_.Refresh()
-                if (-not $_.HasExited -and
-                    [IO.Path]::GetFullPath($_.Path) -eq $exePath) {
-                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-                }
-            }
-            catch {
-            }
+            Stop-OwnedProcessAndWait -Process $_ -AllowedPaths @($exePath)
         }
     if ($null -eq $oldDataRoot) {
         Remove-Item Env:\TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT -ErrorAction SilentlyContinue
