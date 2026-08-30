@@ -34,6 +34,31 @@ public sealed class ProcessingToolDiagnosticProbeTests
         Assert.Equal(2, reader.Arguments.Count);
     }
 
+    [Fact]
+    public async Task Check_exposes_only_a_bounded_safe_version_token()
+    {
+        using ToolRoot root = ToolRoot.WithPlaceholderExecutables();
+        var reads = HealthyReads(root);
+        reads[root.FfmpegPath] = new(
+            0,
+            "ffmpeg version 7.1 C:\\Users\\private-user\\secret-video.mp4",
+            false);
+
+        SystemDiagnosticItem item = Assert.Single(await Probe(
+            root,
+            new FakeExecutableVersionReader(reads))
+            .CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(SystemDiagnosticSeverity.Healthy, item.Severity);
+        SystemDiagnosticFact version = Assert.Single(item.Facts, fact =>
+            fact.Key == "tools.ffmpeg.version");
+        Assert.Equal("ffmpeg version 7.1", version.Value);
+        Assert.DoesNotContain("private-user", version.Value,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-video", version.Value,
+            StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(true, false, "diagnostics.tools.ffmpeg_missing")]
     [InlineData(false, true, "diagnostics.tools.ffprobe_missing")]
@@ -89,6 +114,8 @@ public sealed class ProcessingToolDiagnosticProbeTests
     [InlineData("ffmpeg", 0, "", false,
         "diagnostics.tools.version_unknown")]
     [InlineData("ffprobe", 0, "not a version", false,
+        "diagnostics.tools.version_unknown")]
+    [InlineData("ffmpeg", 0, "ffmpeg version C:\\Users\\private-user", false,
         "diagnostics.tools.version_unknown")]
     [InlineData("ffmpeg", 0, "ffmpeg version 7.1", true,
         "diagnostics.tools.timeout")]

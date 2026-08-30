@@ -350,18 +350,14 @@ public sealed class ProcessingToolDiagnosticProbe(
                     ToolObservationState.LaunchFailed, Version: null);
             }
 
-            string expectedPrefix = $"{tool} version ";
-            if (string.IsNullOrWhiteSpace(result.FirstLine)
-                || !result.FirstLine.StartsWith(
-                    expectedPrefix,
-                    StringComparison.OrdinalIgnoreCase))
+            if (!TryNormalizeVersion(tool, result.FirstLine, out string? version))
             {
                 return new(tool, candidate.Path,
                     ToolObservationState.VersionUnknown, Version: null);
             }
 
             return new(tool, candidate.Path,
-                ToolObservationState.Available, result.FirstLine);
+                ToolObservationState.Available, version);
         }
         catch (OperationCanceledException)
         {
@@ -376,6 +372,47 @@ public sealed class ProcessingToolDiagnosticProbe(
             return new(tool, candidate.Path,
                 ToolObservationState.LaunchFailed, Version: null);
         }
+    }
+
+    private static bool TryNormalizeVersion(
+        string tool,
+        string? firstLine,
+        out string? version)
+    {
+        const int maximumTokenLength = 128;
+        string expectedPrefix = $"{tool} version ";
+        version = null;
+        if (string.IsNullOrWhiteSpace(firstLine)
+            || !firstLine.StartsWith(
+                expectedPrefix,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> remainder = firstLine.AsSpan(expectedPrefix.Length);
+        int separator = remainder.IndexOfAny(" \t\r\n");
+        ReadOnlySpan<char> token = separator >= 0
+            ? remainder[..separator]
+            : remainder;
+        if (token.IsEmpty
+            || token.Length > maximumTokenLength
+            || !token.ContainsAnyInRange('0', '9'))
+        {
+            return false;
+        }
+
+        foreach (char character in token)
+        {
+            if (!char.IsAsciiLetterOrDigit(character)
+                && character is not ('.' or '-' or '_' or '+'))
+            {
+                return false;
+            }
+        }
+
+        version = $"{tool} version {token.ToString()}";
+        return true;
     }
 
     private static (string Code, string Conclusion, string Guidance)? SelectFailure(
