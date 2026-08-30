@@ -57,6 +57,13 @@ public static class DesktopCompositionRoot
                 services.AddSingleton<LibraryViewModel>();
                 services.AddSingleton<TaxonomyViewModel>();
                 services.AddSingleton<IProcessStarter, WindowsProcessStarter>();
+                services.AddSingleton<IDiagnosticClipboardPlatform,
+                    WindowsDiagnosticClipboardPlatform>();
+                services.AddSingleton<IDiagnosticClipboardService,
+                    WindowsDiagnosticClipboardService>();
+                services.AddSingleton<IRegisteredLogFolderService,
+                    WindowsRegisteredLogFolderService>();
+                services.AddSingleton<SystemDiagnosticsViewModel>();
                 services.AddSingleton<IAssetRevealService, WindowsAssetRevealService>();
                 services.AddSingleton<IRecoveryRevealService,
                     WindowsRecoveryRevealService>();

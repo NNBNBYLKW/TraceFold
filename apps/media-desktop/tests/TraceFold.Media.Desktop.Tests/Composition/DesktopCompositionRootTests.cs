@@ -5,6 +5,7 @@ using TraceFold.Media.Application.Processing;
 using TraceFold.Media.Desktop.Composition;
 using TraceFold.Media.Desktop.Dialogs;
 using TraceFold.Media.Desktop.Pages;
+using TraceFold.Media.Desktop.Services;
 using TraceFold.Media.Infrastructure.Workers;
 using Xunit;
 
@@ -49,9 +50,19 @@ public sealed class DesktopCompositionRootTests
             Assert.Same(
                 host.Services.GetRequiredService<TaxonomyViewModel>(),
                 host.Services.GetRequiredService<TaxonomyViewModel>());
+            Assert.IsType<WindowsDiagnosticClipboardPlatform>(
+                host.Services.GetRequiredService<IDiagnosticClipboardPlatform>());
+            Assert.IsType<WindowsDiagnosticClipboardService>(
+                host.Services.GetRequiredService<IDiagnosticClipboardService>());
+            Assert.IsType<WindowsRegisteredLogFolderService>(
+                host.Services.GetRequiredService<IRegisteredLogFolderService>());
+            Assert.Same(
+                host.Services.GetRequiredService<SystemDiagnosticsViewModel>(),
+                host.Services.GetRequiredService<SystemDiagnosticsViewModel>());
             IServiceProviderIsService serviceProbe =
                 host.Services.GetRequiredService<IServiceProviderIsService>();
             Assert.True(serviceProbe.IsService(typeof(TaxonomyPage)));
+            Assert.True(serviceProbe.IsService(typeof(SettingsPage)));
         }
         finally
         {

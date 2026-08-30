@@ -148,6 +148,10 @@ public sealed class SystemDiagnosticsViewModelTests
                 SystemDiagnosticSeverity.Healthy, order: 0),
             Item("folders.good", SystemDiagnosticCategory.FoldersAndStorage,
                 SystemDiagnosticSeverity.Healthy, order: 0),
+            Item("tools.good", SystemDiagnosticCategory.ProcessingTools,
+                SystemDiagnosticSeverity.Healthy, order: 0),
+            Item("background.good", SystemDiagnosticCategory.BackgroundWork,
+                SystemDiagnosticSeverity.Healthy, order: 0),
             Item("database.attention", SystemDiagnosticCategory.Database,
                 SystemDiagnosticSeverity.Attention, order: 2),
             Item("database.unavailable", SystemDiagnosticCategory.Database,
@@ -164,9 +168,21 @@ public sealed class SystemDiagnosticsViewModelTests
             {
                 SystemDiagnosticCategory.FoldersAndStorage,
                 SystemDiagnosticCategory.Database,
+                SystemDiagnosticCategory.ProcessingTools,
+                SystemDiagnosticCategory.BackgroundWork,
                 SystemDiagnosticCategory.RuntimeAndLogs
             },
             viewModel.Groups.Select(group => group.Category));
+        Assert.Equal(
+            new[]
+            {
+                "DiagnosticsFoldersGroup",
+                "DiagnosticsDatabaseGroup",
+                "DiagnosticsToolsGroup",
+                "DiagnosticsBackgroundGroup",
+                "DiagnosticsRuntimeGroup"
+            },
+            viewModel.Groups.Select(group => group.AutomationId));
         SystemDiagnosticGroupViewModel database = viewModel.Groups[1];
         Assert.Equal(
             new[]
@@ -178,6 +194,16 @@ public sealed class SystemDiagnosticsViewModelTests
             database.Items.Select(item => item.Severity));
         Assert.False(string.IsNullOrWhiteSpace(database.StatusText));
         Assert.False(string.IsNullOrWhiteSpace(database.IconGlyph));
+        Assert.Equal("DiagnosticsDatabaseGroup", database.AutomationId);
+        Assert.Equal(
+            "DiagnosticItem-database.unavailable",
+            database.Items[0].AutomationId);
+        Assert.Equal(
+            "DiagnosticErrorCode-database.unavailable",
+            database.Items[0].ErrorCodeAutomationId);
+        Assert.Equal(
+            "database.unavailable，不可用",
+            database.Items[0].AccessibleName);
         Assert.True(database.Items[0].ShowDetails);
         Assert.False(database.Items[2].ShowDetails);
     }
@@ -194,6 +220,11 @@ public sealed class SystemDiagnosticsViewModelTests
         await SingleAction(viewModel).ExecuteCommand.ExecuteAsync(null);
 
         Assert.Equal(SystemDiagnosticActionTarget.WorkDirectory, target);
+        SystemDiagnosticActionViewModel action = SingleAction(viewModel);
+        Assert.Equal(
+            "DiagnosticAction-runtime.problem-NavigateToFolderSettings",
+            action.AutomationId);
+        Assert.Equal("执行", action.AutomationName);
     }
 
     [Fact]

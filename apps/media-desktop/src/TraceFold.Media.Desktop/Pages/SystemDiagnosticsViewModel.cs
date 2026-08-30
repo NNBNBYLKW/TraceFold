@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml;
 using TraceFold.Media.Application.Diagnostics;
 using TraceFold.Media.Desktop.Services;
 
@@ -101,8 +102,16 @@ public sealed class SystemDiagnosticsViewModel : ObservableObject
     public string PageMessage
     {
         get => _pageMessage;
-        private set => SetProperty(ref _pageMessage, value);
+        private set
+        {
+            if (SetProperty(ref _pageMessage, value))
+            {
+                OnPropertyChanged(nameof(HasPageMessage));
+            }
+        }
     }
+
+    public bool HasPageMessage => !string.IsNullOrWhiteSpace(PageMessage);
 
     public Task ActivateAsync(CancellationToken cancellationToken)
     {
@@ -311,6 +320,7 @@ public sealed class SystemDiagnosticsViewModel : ObservableObject
         [.. item.Actions.Select(action =>
         {
             var projected = new SystemDiagnosticActionViewModel(
+                item.Id,
                 action.Kind,
                 action.Target,
                 action.Label,
@@ -351,6 +361,9 @@ public sealed class SystemDiagnosticsViewModel : ObservableObject
         }
     }
 
+    public void ReportUiBoundaryFailure() =>
+        PageMessage = "诊断检查失败：diagnostics.run_failed";
+
     private static int SeverityOrder(SystemDiagnosticSeverity severity) =>
         severity switch
         {
@@ -388,7 +401,18 @@ public sealed record SystemDiagnosticGroupViewModel(
     SystemDiagnosticSeverity Severity,
     string StatusText,
     string IconGlyph,
-    IReadOnlyList<SystemDiagnosticItemViewModel> Items);
+    IReadOnlyList<SystemDiagnosticItemViewModel> Items)
+{
+    public string AutomationId => Category switch
+    {
+        SystemDiagnosticCategory.FoldersAndStorage => "DiagnosticsFoldersGroup",
+        SystemDiagnosticCategory.Database => "DiagnosticsDatabaseGroup",
+        SystemDiagnosticCategory.ProcessingTools => "DiagnosticsToolsGroup",
+        SystemDiagnosticCategory.BackgroundWork => "DiagnosticsBackgroundGroup",
+        SystemDiagnosticCategory.RuntimeAndLogs => "DiagnosticsRuntimeGroup",
+        _ => throw new ArgumentOutOfRangeException(nameof(Category))
+    };
+}
 
 public sealed record SystemDiagnosticItemViewModel(
     string Id,
@@ -402,7 +426,18 @@ public sealed record SystemDiagnosticItemViewModel(
     string? ErrorCode,
     bool ShowDetails,
     IReadOnlyList<SystemDiagnosticFactViewModel> Facts,
-    IReadOnlyList<SystemDiagnosticActionViewModel> Actions);
+    IReadOnlyList<SystemDiagnosticActionViewModel> Actions)
+{
+    public string AccessibleName => $"{Title}，{StatusText}";
+
+    public string AutomationId => $"DiagnosticItem-{Id}";
+
+    public string ErrorCodeAutomationId => $"DiagnosticErrorCode-{Id}";
+
+    public Visibility DetailsVisibility => ShowDetails
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+}
 
 public sealed record SystemDiagnosticFactViewModel(
     string Key,
@@ -413,6 +448,7 @@ public sealed record SystemDiagnosticFactViewModel(
 public sealed class SystemDiagnosticActionViewModel
 {
     internal SystemDiagnosticActionViewModel(
+        string stableItemId,
         SystemDiagnosticActionKind kind,
         SystemDiagnosticActionTarget target,
         string label,
@@ -420,10 +456,12 @@ public sealed class SystemDiagnosticActionViewModel
         Func<SystemDiagnosticActionViewModel, Task> execute,
         Func<bool> canExecute)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stableItemId);
         Kind = kind;
         Target = target;
         Label = label;
         ErrorCode = errorCode;
+        AutomationId = $"DiagnosticAction-{stableItemId}-{kind}";
         ExecuteCommand = new AsyncRelayCommand(
             () => execute(this),
             canExecute);
@@ -434,6 +472,10 @@ public sealed class SystemDiagnosticActionViewModel
     public SystemDiagnosticActionTarget Target { get; }
 
     public string Label { get; }
+
+    public string AutomationId { get; }
+
+    public string AutomationName => Label;
 
     public IAsyncRelayCommand ExecuteCommand { get; }
 

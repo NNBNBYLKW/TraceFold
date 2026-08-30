@@ -1,5 +1,7 @@
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Serilog;
+using TraceFold.Media.Application.Diagnostics;
 
 namespace TraceFold.Media.Desktop.Pages;
 
@@ -8,14 +10,22 @@ public sealed partial class SettingsPage : Page
     private bool _autoScanReady;
     private bool _handlingAutoScan;
 
-    public SettingsPage(SettingsViewModel viewModel)
+    public SettingsPage(
+        SettingsViewModel viewModel,
+        SystemDiagnosticsViewModel diagnosticsViewModel)
     {
         ViewModel = viewModel;
+        DiagnosticsViewModel = diagnosticsViewModel;
         InitializeComponent();
         Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
+        DiagnosticsViewModel.FolderSettingsNavigationRequested +=
+            OnFolderSettingsNavigationRequested;
     }
 
     public SettingsViewModel ViewModel { get; }
+
+    public SystemDiagnosticsViewModel DiagnosticsViewModel { get; }
 
     private async void OnLoaded(
         object sender,
@@ -32,6 +42,57 @@ public sealed partial class SettingsPage : Page
             Log.Error(exception, "DesktopSettingsLoadFailed");
             ViewModel.StatusMessage = "读取设置失败，请查看本地日志。";
         }
+    }
+
+    private async void OnSettingsTabSelectionChanged(
+        object sender,
+        SelectionChangedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        if (!ReferenceEquals(SettingsTabs.SelectedItem, SystemDiagnosticsTab))
+        {
+            return;
+        }
+
+        try
+        {
+            await DiagnosticsViewModel.ActivateAsync(CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            Log.Error("DesktopSystemDiagnosticsActivationFailed");
+            DiagnosticsViewModel.ReportUiBoundaryFailure();
+        }
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        DiagnosticsViewModel.CancelCurrentRun();
+    }
+
+    private void OnFolderSettingsNavigationRequested(
+        object? sender,
+        SystemDiagnosticActionTarget target)
+    {
+        _ = sender;
+        TextBox? folderField = target switch
+        {
+            SystemDiagnosticActionTarget.InboxDirectory => InboxFolderPath,
+            SystemDiagnosticActionTarget.LibraryDirectory => LibraryFolderPath,
+            SystemDiagnosticActionTarget.WorkDirectory => WorkFolderPath,
+            _ => null
+        };
+        if (folderField is null)
+        {
+            return;
+        }
+
+        SettingsTabs.SelectedItem = FolderSettingsTab;
+        folderField.Focus(FocusState.Programmatic);
+        folderField.SelectAll();
     }
 
     private async void OnAutoScanToggled(
