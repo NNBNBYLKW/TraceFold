@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using TraceFold.Media.Application.Diagnostics;
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
@@ -15,6 +16,13 @@ public static class DependencyInjection
     public static IServiceCollection AddMediaApplication(
         this IServiceCollection services)
     {
+        services.AddSingleton(SystemDiagnosticsOptions.Production);
+        services.AddSingleton<DiagnosticSummaryFormatter>();
+        services.AddSingleton<IDiagnosticSummaryFormatter>(provider =>
+            provider.GetRequiredService<DiagnosticSummaryFormatter>());
+        services.AddSingleton<SystemDiagnosticsService>();
+        services.AddSingleton<ISystemDiagnosticsService>(provider =>
+            provider.GetRequiredService<SystemDiagnosticsService>());
         services.AddSingleton<DirectorySettingsService>();
         services.AddSingleton<IStartupCoordinator, StartupCoordinator>();
         services.AddSingleton<CandidateGroupingService>();
