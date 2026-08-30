@@ -8,6 +8,7 @@
         <TabView
             x:Name="SettingsTabs"
             AutomationProperties.AutomationId="SettingsTabs"
+            AutomationProperties.Name="设置分类"
             IsAddTabButtonVisible="False"
             SelectedIndex="0"
             SelectionChanged="OnSettingsTabSelectionChanged">
@@ -221,6 +222,7 @@
                                         Margin="0,0,0,12"
                                         Padding="16"
                                         AutomationProperties.AutomationId="{x:Bind AutomationId}"
+                                        AutomationProperties.Name="{x:Bind AccessibleName}"
                                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                         BorderThickness="1"
@@ -272,6 +274,7 @@
                                                                     <TextBlock
                                                                         x:Name="DiagnosticErrorCode"
                                                                         AutomationProperties.AutomationId="{x:Bind ErrorCodeAutomationId}"
+                                                                        AutomationProperties.Name="诊断错误代码"
                                                                         FontFamily="Consolas"
                                                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                                         IsTextSelectionEnabled="True"

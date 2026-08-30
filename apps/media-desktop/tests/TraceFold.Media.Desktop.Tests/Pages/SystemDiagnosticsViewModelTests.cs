@@ -195,6 +195,7 @@ public sealed class SystemDiagnosticsViewModelTests
         Assert.False(string.IsNullOrWhiteSpace(database.StatusText));
         Assert.False(string.IsNullOrWhiteSpace(database.IconGlyph));
         Assert.Equal("DiagnosticsDatabaseGroup", database.AutomationId);
+        Assert.Equal("数据库，不可用", database.AccessibleName);
         Assert.Equal(
             "DiagnosticItem-database.unavailable",
             database.Items[0].AutomationId);

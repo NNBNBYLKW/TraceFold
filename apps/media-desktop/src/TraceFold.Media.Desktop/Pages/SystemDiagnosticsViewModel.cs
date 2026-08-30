@@ -403,6 +403,8 @@ public sealed record SystemDiagnosticGroupViewModel(
     string IconGlyph,
     IReadOnlyList<SystemDiagnosticItemViewModel> Items)
 {
+    public string AccessibleName => $"{Title}，{StatusText}";
+
     public string AutomationId => Category switch
     {
         SystemDiagnosticCategory.FoldersAndStorage => "DiagnosticsFoldersGroup",

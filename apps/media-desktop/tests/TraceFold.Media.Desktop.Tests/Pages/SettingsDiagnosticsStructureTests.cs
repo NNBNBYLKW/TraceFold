@@ -71,11 +71,15 @@ public sealed class SettingsDiagnosticsStructureTests
         XElement action = ElementByName(document, "DiagnosticActionButton");
 
         Assert.Equal("{x:Bind AutomationId}", AutomationId(group));
+        Assert.Equal("{x:Bind AccessibleName}", AutomationName(group));
         Assert.Equal("{x:Bind AutomationId}", AutomationId(item));
         Assert.Equal("{x:Bind AccessibleName}", AutomationName(item));
         Assert.Equal("{x:Bind ErrorCodeAutomationId}", AutomationId(error));
         Assert.Equal("{x:Bind AutomationId}", AutomationId(action));
         Assert.Equal("{x:Bind AutomationName}", AutomationName(action));
+        AssertChineseAccessibleName(
+            ElementByAutomationId(document, "SettingsTabs"));
+        AssertChineseAccessibleName(error);
 
         Assert.NotNull(item.Descendants().SingleOrDefault(element =>
             Attribute(element, "Glyph") == "{x:Bind IconGlyph}"));
