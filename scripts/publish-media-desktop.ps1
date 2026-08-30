@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C')][string] $StageCheckpoint,
+    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C','5C-B')][string] $StageCheckpoint,
     [Parameter(Mandatory)][string] $FfmpegSourceRoot,
     [string] $NugetPackageSource
 )
@@ -13,6 +13,7 @@ $archiveName = "$packageName.zip"
 $packageDir = [IO.Path]::GetFullPath((Join-Path $distRoot $packageName))
 $zipPath = [IO.Path]::GetFullPath((Join-Path $distRoot $archiveName))
 $stageSlug = $StageCheckpoint.ToLowerInvariant()
+$versionStageSlug = $StageCheckpoint.Replace('-', '').ToLowerInvariant()
 $stagingName = ".tracefold-stage$stageSlug-publish-$([Guid]::NewGuid().ToString('N'))"
 $stagingRoot = [IO.Path]::GetFullPath((Join-Path $distRoot $stagingName))
 $stagingPackage = [IO.Path]::GetFullPath((Join-Path $stagingRoot $packageName))
@@ -231,7 +232,7 @@ $trackedChanges = @(& git -C $repoRoot status --porcelain --untracked-files=no)
 if ($LASTEXITCODE -ne 0 -or $trackedChanges.Count -ne 0) {
     throw 'Refusing to package tracked source changes that are not committed.'
 }
-$informationalVersion = "4.0.0-stage$stageSlug+$sourceCommit"
+$informationalVersion = "4.0.0-stage$versionStageSlug+$sourceCommit"
 
 try {
     Invoke-DotNet -DotNetArguments @(

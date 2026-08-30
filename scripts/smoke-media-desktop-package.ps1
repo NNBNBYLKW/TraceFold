@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $PackageDirectory,
-    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C')][string] $StageCheckpoint
+    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C','5C-B')][string] $StageCheckpoint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,7 +41,10 @@ $secondary = $null
 $fatalLaunch = $null
 $probeProcess = $null
 $probeToken = [Guid]::NewGuid().ToString('D')
-$probePrefix = if ($StageCheckpoint -eq '5A') {
+$probePrefix = if ($StageCheckpoint -eq '5C-B') {
+    'tracefold-media-desktop-stage5cb-probe-'
+}
+elseif ($StageCheckpoint -eq '5A') {
     'tracefold-media-desktop-stage5a-probe-'
 }
 elseif ($StageCheckpoint -eq '5B') {
@@ -84,10 +87,12 @@ function Get-PackageProcesses {
 }
 
 function Get-PackageFfmpegProcesses {
-    return @(Get-Process -Name 'ffmpeg' -ErrorAction SilentlyContinue |
+    return @(Get-Process -Name 'ffmpeg', 'ffprobe' -ErrorAction SilentlyContinue |
         Where-Object {
             try {
-                [IO.Path]::GetFullPath($_.Path) -eq $packageFfmpegPath
+                $processPath = [IO.Path]::GetFullPath($_.Path)
+                $processPath -eq $packageFfmpegPath -or
+                    $processPath -eq $packageFfprobePath
             }
             catch {
                 $false
@@ -289,7 +294,18 @@ try {
             -LiteralPath (Join-Path $fixtureSource $fixtureName) `
             -Destination $probeFixtures
     }
-    if ($StageCheckpoint -eq '5A') {
+    if ($StageCheckpoint -eq '5C-B') {
+        $probeArguments = @(
+            '--package-probe-root',
+            ('"{0}"' -f $probeRoot),
+            '--package-probe-token',
+            $probeToken,
+            '--package-probe-scenario',
+            'stage5cb-diagnostics')
+        $probeNameLabel = 'Stage 5C-B'
+        $probeResultFilename = 'stage5cb-diagnostics-probe-result.json'
+    }
+    elseif ($StageCheckpoint -eq '5A') {
         $probeArguments = @(
             '--package-probe-root',
             ('"{0}"' -f $probeRoot),
@@ -349,8 +365,52 @@ try {
     if (-not (Test-Path -LiteralPath $probeResultPath -PathType Leaf)) {
         throw "$probeNameLabel package probe result is missing."
     }
-    $result = Get-Content -LiteralPath $probeResultPath -Raw | ConvertFrom-Json
-    if ($StageCheckpoint -eq '5A') {
+    $probeResultJson = Get-Content -LiteralPath $probeResultPath -Raw
+    $result = $probeResultJson | ConvertFrom-Json
+    if ($StageCheckpoint -eq '5C-B') {
+        foreach ($caseProperty in @(
+                'Succeeded',
+                'AllCategoriesObserved',
+                'PackagedEnvironmentHealthy',
+                'FailureIsolationPassed',
+                'RedactionPassed',
+                'BusinessDataUnchanged',
+                'SettingsUnchanged',
+                'BackgroundStateUnchanged',
+                'MediaFilesUnchanged',
+                'TemporaryArtifactsClean',
+                'ToolProcessesClean')) {
+            if (-not [bool]$result.$caseProperty) {
+                throw "Stage 5C-B package probe case failed: $caseProperty"
+            }
+        }
+        if (-not [string]::IsNullOrEmpty([string]$result.ErrorCode)) {
+            throw 'Stage 5C-B package probe reported an unexpected error code.'
+        }
+        foreach ($privateValue in @(
+                $probeRoot,
+                $probeToken,
+                '.db',
+                '.log',
+                '.jpg',
+                'stage5cb-formal',
+                'stage5cb-pending',
+                'Metadata Sentinel')) {
+            if ($probeResultJson.IndexOf(
+                    $privateValue,
+                    [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw 'Stage 5C-B result JSON contains a private value.'
+            }
+        }
+        if ($probeResultJson -match
+            '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}') {
+            throw 'Stage 5C-B result JSON contains an identifier.'
+        }
+        if (@(Get-PackageFfmpegProcesses).Count -ne 0) {
+            throw 'Stage 5C-B probe left a package media-tool process running.'
+        }
+    }
+    elseif ($StageCheckpoint -eq '5A') {
         foreach ($caseProperty in @(
                 'Succeeded',
                 'AtomicMetadata',
@@ -514,7 +574,11 @@ try {
     }
 
     Write-Output 'PASS: native window, single instance, offline startup, and clean exit verified'
-    if ($StageCheckpoint -eq '5A') {
+    if ($StageCheckpoint -eq '5C-B') {
+        Write-Output 'PASS: Stage 5C-B diagnostics categories, isolation, and redaction verified'
+        Write-Output 'PASS: Stage 5C-B read-only state and child-process cleanup verified'
+    }
+    elseif ($StageCheckpoint -eq '5A') {
         Write-Output 'PASS: Stage 5A batch metadata, processing, partial ingest, and clean storage verified'
     }
     elseif ($StageCheckpoint -eq '5B') {

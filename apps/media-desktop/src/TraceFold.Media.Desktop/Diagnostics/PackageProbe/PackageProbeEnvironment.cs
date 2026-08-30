@@ -365,6 +365,8 @@ public sealed class PackageProbeEnvironment
         PackageProbeScenarioKind.Stage5ABatch => PackageProbeOptions.Stage5AResultFilename,
         PackageProbeScenarioKind.Stage5BLibrary => PackageProbeOptions.Stage5BResultFilename,
         PackageProbeScenarioKind.Stage5CTaxonomy => PackageProbeOptions.Stage5CResultFilename,
+        PackageProbeScenarioKind.Stage5CBDiagnostics =>
+            PackageProbeOptions.Stage5CBResultFilename,
         _ => throw new ArgumentOutOfRangeException(nameof(scenario))
     };
 
@@ -476,6 +478,8 @@ public sealed class PackageProbeEnvironment
         PackageProbeScenarioKind.Stage5ABatch => PackageProbeOptions.Stage5ARootNamePrefix,
         PackageProbeScenarioKind.Stage5BLibrary => PackageProbeOptions.Stage5BRootNamePrefix,
         PackageProbeScenarioKind.Stage5CTaxonomy => PackageProbeOptions.Stage5CRootNamePrefix,
+        PackageProbeScenarioKind.Stage5CBDiagnostics =>
+            PackageProbeOptions.Stage5CBRootNamePrefix,
         _ => throw new ArgumentOutOfRangeException(nameof(scenario))
     };
 

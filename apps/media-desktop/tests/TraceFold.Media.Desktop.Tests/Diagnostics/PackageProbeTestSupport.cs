@@ -44,6 +44,9 @@ internal sealed class OwnedProbeRoot : IDisposable
     public static OwnedProbeRoot CreateStage5C() =>
         CreateWithFixtures(PackageProbeOptions.Stage5CRootNamePrefix);
 
+    public static OwnedProbeRoot CreateStage5CB() =>
+        CreateWithFixtures(PackageProbeOptions.Stage5CBRootNamePrefix);
+
     public Stage5CTaxonomyProbeResult ReadStage5CResult()
     {
         string json = File.ReadAllText(System.IO.Path.Combine(
@@ -51,6 +54,16 @@ internal sealed class OwnedProbeRoot : IDisposable
             PackageProbeOptions.Stage5CResultFilename));
         return JsonSerializer.Deserialize<Stage5CTaxonomyProbeResult>(json)
             ?? throw new InvalidDataException("The Stage 5C probe result is invalid.");
+    }
+
+    public Stage5CBDiagnosticsProbeResult ReadStage5CBResult()
+    {
+        string json = File.ReadAllText(System.IO.Path.Combine(
+            Path,
+            PackageProbeOptions.Stage5CBResultFilename));
+        return JsonSerializer.Deserialize<Stage5CBDiagnosticsProbeResult>(json)
+            ?? throw new InvalidDataException(
+                "The Stage 5C-B probe result is invalid.");
     }
 
     public void PrepareCrashResume(IngestFaultPoint point)
@@ -148,6 +161,14 @@ internal static class PackageProbeRequests
             root.Path,
             root.TokenText,
             PackageProbeScenarioKind.Stage5CTaxonomy,
+            null,
+            null);
+
+    public static PackageProbeRequest Stage5CBDiagnostics(OwnedProbeRoot root) =>
+        new(
+            root.Path,
+            root.TokenText,
+            PackageProbeScenarioKind.Stage5CBDiagnostics,
             null,
             null);
 }

@@ -22,6 +22,8 @@ public static class PackageProbeRunner
             PackageProbeScenarioKind.Stage5BLibrary => new Stage5BLibraryProbeScenario(),
             PackageProbeScenarioKind.Stage5CTaxonomy =>
                 new Stage5CTaxonomyProbeScenario(),
+            PackageProbeScenarioKind.Stage5CBDiagnostics =>
+                new Stage5CBDiagnosticsProbeScenario(),
             _ => throw new InvalidOperationException("The package probe scenario is not supported.")
         };
         return await scenario.RunAsync(environment.Request, environment, cancellationToken);

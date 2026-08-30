@@ -11,7 +11,8 @@ public enum PackageProbeScenarioKind
     Stage4CrashResume,
     Stage5ABatch,
     Stage5BLibrary,
-    Stage5CTaxonomy
+    Stage5CTaxonomy,
+    Stage5CBDiagnostics
 }
 
 public sealed record PackageProbeRequest(
