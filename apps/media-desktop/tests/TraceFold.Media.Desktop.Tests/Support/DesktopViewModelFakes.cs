@@ -1,4 +1,5 @@
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Application.Diagnostics;
 using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Desktop.Services;
@@ -70,4 +71,59 @@ internal sealed class FakeDatabaseInitializer : IDatabaseInitializer
 {
     public Task InitializeAsync(CancellationToken cancellationToken) =>
         Task.CompletedTask;
+}
+
+internal sealed class RecordingDiagnosticClipboardService
+    : IDiagnosticClipboardService
+{
+    public DiagnosticDesktopActionResult Result { get; set; } =
+        DiagnosticDesktopActionResult.Success();
+
+    public string? CopiedText { get; private set; }
+
+    public int CallCount { get; private set; }
+
+    public Task<DiagnosticDesktopActionResult> CopyAsync(
+        string text,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CallCount++;
+        CopiedText = text;
+        return Task.FromResult(Result);
+    }
+}
+
+internal sealed class RecordingRegisteredLogFolderService
+    : IRegisteredLogFolderService
+{
+    public DiagnosticDesktopActionResult Result { get; set; } =
+        DiagnosticDesktopActionResult.Success();
+
+    public int CallCount { get; private set; }
+
+    public Task<DiagnosticDesktopActionResult> OpenAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CallCount++;
+        return Task.FromResult(Result);
+    }
+}
+
+internal sealed class RecordingDiagnosticSummaryFormatter(string summary)
+    : IDiagnosticSummaryFormatter
+{
+    public SystemDiagnosticsSnapshot? Snapshot { get; private set; }
+
+    public TimeZoneInfo? TimeZone { get; private set; }
+
+    public string Format(
+        SystemDiagnosticsSnapshot snapshot,
+        TimeZoneInfo timeZone)
+    {
+        Snapshot = snapshot;
+        TimeZone = timeZone;
+        return summary;
+    }
 }
