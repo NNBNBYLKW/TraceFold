@@ -261,6 +261,7 @@ try {
         '-p:Version=4.0.0',
         '-p:FileVersion=4.0.0.0',
         "-p:InformationalVersion=$informationalVersion",
+        '-p:IncludeSourceRevisionInInformationalVersion=false',
         "-p:TraceFoldFfmpegSourceRoot=$ffmpegRoot",
         '--no-restore',
         "-p:RestorePackagesPath=$localPackageSource",

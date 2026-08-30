@@ -37,6 +37,19 @@ public sealed class PackageProbeRefactorTests
     }
 
     [Fact]
+    public void Publish_keeps_the_exact_informational_version_without_sdk_suffixes()
+    {
+        string script = File.ReadAllText(RepositoryFile(
+            "scripts",
+            "publish-media-desktop.ps1"));
+
+        Assert.Contains(
+            "-p:IncludeSourceRevisionInInformationalVersion=false",
+            script,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Smoke_cleanup_waits_for_every_owned_process_before_removing_logs()
     {
         string script = File.ReadAllText(RepositoryFile(
