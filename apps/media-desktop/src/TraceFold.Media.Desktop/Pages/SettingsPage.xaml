@@ -271,6 +271,7 @@
                                                                         AutomationProperties.AutomationId="{x:Bind ErrorCodeAutomationId}"
                                                                         FontFamily="Consolas"
                                                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                                        IsTextSelectionEnabled="True"
                                                                         Text="{x:Bind ErrorCode}"
                                                                         TextWrapping="Wrap" />
                                                                     <ItemsControl ItemsSource="{x:Bind Facts}">

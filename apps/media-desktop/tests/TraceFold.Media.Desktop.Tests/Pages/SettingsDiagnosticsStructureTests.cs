@@ -117,6 +117,68 @@ public sealed class SettingsDiagnosticsStructureTests
         Assert.DoesNotContain("explorer.exe", code, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Diagnostics_controls_keep_native_keyboard_and_readability_contracts()
+    {
+        XDocument document = XDocument.Load(
+            DesktopSource("Pages", "SettingsPage.xaml"));
+        foreach (string id in new[]
+        {
+            "SystemDiagnosticsTab",
+            "DiagnosticsRefreshButton",
+            "DiagnosticsCopySummaryButton",
+            "InboxFolderPath",
+            "LibraryFolderPath",
+            "WorkFolderPath"
+        })
+        {
+            XElement control = ElementByAutomationId(document, id);
+            Assert.NotEqual("False", Attribute(control, "IsTabStop"));
+        }
+
+        XElement action = ElementByName(document, "DiagnosticActionButton");
+        Assert.Equal("Button", action.Name.LocalName);
+        Assert.Equal("{x:Bind ExecuteCommand}", Attribute(action, "Command"));
+        Assert.NotEqual("False", Attribute(action, "IsTabStop"));
+
+        XElement tabs = ElementByAutomationId(document, "SettingsTabs");
+        Assert.Equal(
+            "OnSettingsTabSelectionChanged",
+            Attribute(tabs, "SelectionChanged"));
+        Assert.Null(Attribute(tabs, "PointerPressed"));
+        Assert.Null(Attribute(tabs, "Tapped"));
+
+        XElement error = ElementByName(document, "DiagnosticErrorCode");
+        Assert.Equal("True", Attribute(error, "IsTextSelectionEnabled"));
+    }
+
+    [Fact]
+    public void Literal_automation_ids_are_unique_and_template_ids_are_bound()
+    {
+        XDocument document = XDocument.Load(
+            DesktopSource("Pages", "SettingsPage.xaml"));
+        string[] literalIds = document.Descendants()
+            .Select(AutomationId)
+            .Where(value => value is not null
+                && !value.StartsWith("{x:Bind ", StringComparison.Ordinal))
+            .Cast<string>()
+            .ToArray();
+
+        Assert.Equal(literalIds.Length, literalIds.Distinct(
+            StringComparer.Ordinal).Count());
+        foreach (string name in new[]
+        {
+            "DiagnosticGroupRoot",
+            "DiagnosticItemRoot",
+            "DiagnosticActionButton"
+        })
+        {
+            Assert.Equal(
+                "{x:Bind AutomationId}",
+                AutomationId(ElementByName(document, name)));
+        }
+    }
+
     private static XElement ElementByAutomationId(
         XDocument document,
         string id) => Assert.Single(ElementsByAutomationId(document, id));
