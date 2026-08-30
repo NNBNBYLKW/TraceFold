@@ -1,7 +1,9 @@
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using TraceFold.Media.Application.Common;
+using TraceFold.Media.Application.Diagnostics;
 using TraceFold.Media.Application.Ingest;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
@@ -12,6 +14,7 @@ using TraceFold.Media.Application.Settings;
 using TraceFold.Media.Application.Storage;
 using TraceFold.Media.Application.Startup;
 using TraceFold.Media.Infrastructure.Filesystem;
+using TraceFold.Media.Infrastructure.Diagnostics;
 using TraceFold.Media.Infrastructure.MediaTools;
 using TraceFold.Media.Infrastructure.Paths;
 using TraceFold.Media.Infrastructure.Persistence;
@@ -80,6 +83,26 @@ public static class DependencyInjection
             ?? Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg")));
         services.AddSingleton<BundledMediaToolLocator>();
         services.AddSingleton<IMediaTool, FfmpegMediaTool>();
+        services.AddSingleton<IVolumeSpaceReader, WindowsVolumeSpaceReader>();
+        services.AddSingleton<IDatabaseDiagnosticReader,
+            EfDatabaseDiagnosticReader>();
+        services.AddSingleton<IControlledProcessRunner, ControlledProcessRunner>();
+        services.AddSingleton<IExecutableVersionReader,
+            ControlledExecutableVersionReader>();
+        services.AddSingleton<IBackgroundWorkSummaryStore,
+            EfBackgroundWorkSummaryStore>();
+        services.AddSingleton(RuntimeDiagnosticOptions.FromAssembly(
+            AppContext.BaseDirectory,
+            Assembly.GetEntryAssembly() ?? typeof(DependencyInjection).Assembly));
+        services.AddSingleton<ISystemDiagnosticProbe,
+            FolderAndDiskDiagnosticProbe>();
+        services.AddSingleton<ISystemDiagnosticProbe, DatabaseDiagnosticProbe>();
+        services.AddSingleton<ISystemDiagnosticProbe,
+            ProcessingToolDiagnosticProbe>();
+        services.AddSingleton<ISystemDiagnosticProbe,
+            BackgroundWorkDiagnosticProbe>();
+        services.AddSingleton<ISystemDiagnosticProbe,
+            RuntimeAndLogDiagnosticProbe>();
         services.AddSingleton<IScanPreferencesStore, EfScanPreferencesStore>();
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IApplicationLifetimeToken, HostApplicationLifetimeToken>();
