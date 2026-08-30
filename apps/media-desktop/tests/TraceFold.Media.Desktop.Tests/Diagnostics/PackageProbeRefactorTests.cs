@@ -19,6 +19,23 @@ public sealed class PackageProbeRefactorTests
             Count(script, "\"-p:RestorePackagesPath=$localPackageSource\""));
     }
 
+    [Fact]
+    public void Stage5CB_smoke_cross_checks_manifest_commit_and_version_identity()
+    {
+        string script = File.ReadAllText(RepositoryFile(
+            "scripts",
+            "smoke-media-desktop-package.ps1"));
+
+        Assert.Contains(
+            "$expectedStage5CBVersion = \"4.0.0-stage5cb+$($packageVersion.SourceCommit)\"",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[string]$packageVersion.InformationalVersion -cne $expectedStage5CBVersion",
+            script,
+            StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("stage5a-batch-extra")]
     [InlineData("stage5b-library-extra")]

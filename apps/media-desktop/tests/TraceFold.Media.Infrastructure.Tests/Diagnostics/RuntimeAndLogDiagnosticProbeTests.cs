@@ -12,8 +12,10 @@ namespace TraceFold.Media.Infrastructure.Tests.Diagnostics;
 
 public sealed class RuntimeAndLogDiagnosticProbeTests
 {
+    private const string SourceCommit =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string InformationalVersion =
-        "4.0.0-stage5cb+expected";
+        "4.0.0-stage5cb+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     [Fact]
     public async Task Missing_manifest_is_attention_in_a_development_layout()
@@ -44,6 +46,37 @@ public sealed class RuntimeAndLogDiagnosticProbeTests
     }
 
     [Fact]
+    public async Task Manifest_source_commit_must_match_the_version_suffix()
+    {
+        using RuntimeFixture fixture = RuntimeFixture.Create(logDirectory: true);
+        fixture.WriteManifest(
+            stageCheckpoint: "5C-B",
+            sourceCommit: new string('b', 40),
+            informationalVersion: InformationalVersion);
+
+        SystemDiagnosticItem item = Assert.Single(await fixture.Probe()
+            .CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(SystemDiagnosticSeverity.Unavailable, item.Severity);
+        Assert.Equal("diagnostics.runtime.manifest_invalid", item.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Manifest_rejects_a_matching_but_noncanonical_version()
+    {
+        const string noncanonical = "4.0.0-stage5cb+short";
+        using RuntimeFixture fixture = RuntimeFixture.Create(logDirectory: true);
+        fixture.WriteManifest("5C-B", SourceCommit, noncanonical);
+
+        SystemDiagnosticItem item = Assert.Single(await fixture.Probe(
+                informationalVersion: noncanonical)
+            .CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(SystemDiagnosticSeverity.Unavailable, item.Severity);
+        Assert.Equal("diagnostics.runtime.manifest_invalid", item.ErrorCode);
+    }
+
+    [Fact]
     public async Task Valid_manifest_and_writable_log_root_are_healthy()
     {
         using RuntimeFixture fixture = RuntimeFixture.Create(logDirectory: true);
@@ -58,7 +91,7 @@ public sealed class RuntimeAndLogDiagnosticProbeTests
             && fact.Value == "5C-B"
             && fact.Sensitivity == SystemDiagnosticFactSensitivity.Shareable);
         Assert.Contains(item.Facts, fact => fact.Key == "runtime.source_commit"
-            && fact.Value == new string('a', 40)
+            && fact.Value == SourceCommit
             && fact.Sensitivity == SystemDiagnosticFactSensitivity.Shareable);
         Assert.Contains(item.Facts, fact => fact.Key == "runtime.logs.writable"
             && fact.Value == "是");
@@ -252,7 +285,7 @@ public sealed class RuntimeAndLogDiagnosticProbeTests
     private static string ValidManifestJson() => JsonSerializer.Serialize(new
     {
         StageCheckpoint = "5C-B",
-        SourceCommit = new string('a', 40),
+        SourceCommit,
         InformationalVersion
     });
 
@@ -290,14 +323,15 @@ public sealed class RuntimeAndLogDiagnosticProbeTests
         }
 
         public RuntimeAndLogDiagnosticProbe Probe(
-            IDirectoryProbe? directoryProbe = null) =>
+            IDirectoryProbe? directoryProbe = null,
+            string informationalVersion = InformationalVersion) =>
             new(
                 new RuntimeDiagnosticOptions(
                     PackageRoot,
                     new RuntimeProductIdentity(
                         "4.0.0",
                         "4.0.0.0",
-                        InformationalVersion)),
+                        informationalVersion)),
                 new FixedAppDataPathProvider(new AppDataPaths(
                     DataRoot,
                     Path.Combine(DataRoot, "media-desktop.db"),

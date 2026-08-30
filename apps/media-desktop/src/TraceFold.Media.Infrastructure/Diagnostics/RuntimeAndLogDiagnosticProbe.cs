@@ -96,6 +96,7 @@ public sealed class RuntimeAndLogDiagnosticProbe(
     IDirectoryProbe directoryProbe) : ISystemDiagnosticProbe
 {
     private const int MaximumManifestBytes = 64 * 1024;
+    private const string Stage5CBVersionPrefix = "4.0.0-stage5cb+";
 
     private static readonly JsonSerializerOptions ManifestJsonOptions = new()
     {
@@ -281,17 +282,29 @@ public sealed class RuntimeAndLogDiagnosticProbe(
         }
     }
 
-    private bool IsValid(PackageVersionManifest? manifest) =>
-        manifest is not null
-        && string.Equals(
-            manifest.StageCheckpoint,
-            "5C-B",
-            StringComparison.Ordinal)
-        && IsLowercaseCommit(manifest.SourceCommit)
-        && string.Equals(
-            manifest.InformationalVersion,
-            options.ProductIdentity.InformationalVersion,
-            StringComparison.Ordinal);
+    private bool IsValid(PackageVersionManifest? manifest)
+    {
+        if (manifest is null
+            || !string.Equals(
+                manifest.StageCheckpoint,
+                "5C-B",
+                StringComparison.Ordinal)
+            || !IsLowercaseCommit(manifest.SourceCommit))
+        {
+            return false;
+        }
+
+        string expectedInformationalVersion =
+            Stage5CBVersionPrefix + manifest.SourceCommit;
+        return string.Equals(
+                manifest.InformationalVersion,
+                expectedInformationalVersion,
+                StringComparison.Ordinal)
+            && string.Equals(
+                options.ProductIdentity.InformationalVersion,
+                expectedInformationalVersion,
+                StringComparison.Ordinal);
+    }
 
     private static bool IsLowercaseCommit(string? value) =>
         value is { Length: 40 }

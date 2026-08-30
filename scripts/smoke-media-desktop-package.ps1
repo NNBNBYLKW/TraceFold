@@ -30,6 +30,12 @@ if ($packageVersion.StageCheckpoint -ne $StageCheckpoint -or
     [string]$packageVersion.SourceCommit -notmatch '^[0-9a-f]{40}$') {
     throw 'Package version manifest does not identify the checkpoint source commit.'
 }
+if ($StageCheckpoint -eq '5C-B') {
+    $expectedStage5CBVersion = "4.0.0-stage5cb+$($packageVersion.SourceCommit)"
+    if ([string]$packageVersion.InformationalVersion -cne $expectedStage5CBVersion) {
+        throw 'Stage 5C-B manifest version does not match its source commit.'
+    }
+}
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $smokeName = "tracefold-media-desktop-smoke-$([Guid]::NewGuid().ToString('N'))"
