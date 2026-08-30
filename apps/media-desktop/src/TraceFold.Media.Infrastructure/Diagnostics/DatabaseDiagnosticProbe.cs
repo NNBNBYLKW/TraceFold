@@ -19,7 +19,7 @@ public interface IDatabaseDiagnosticReader
 }
 
 public sealed class EfDatabaseDiagnosticReader(
-    IDbContextFactory<MediaDesktopDbContext> contextFactory)
+    IReadOnlyDiagnosticDbContextFactory contextFactory)
     : IDatabaseDiagnosticReader
 {
     public async Task<DatabaseDiagnosticRead> ReadAsync(

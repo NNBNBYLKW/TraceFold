@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using TraceFold.Media.Application.Diagnostics;
 using TraceFold.Media.Infrastructure.Diagnostics;
+using TraceFold.Media.Infrastructure.Paths;
 using TraceFold.Media.Infrastructure.Persistence;
 using TraceFold.Media.Infrastructure.Tests.Support;
 using Xunit;
@@ -26,7 +28,7 @@ public sealed class BackgroundWorkDiagnosticProbeTests
             completedIngest: 5,
             failedIngest: 2);
         var store = new EfBackgroundWorkSummaryStore(
-            database.CreateContextFactory());
+            ReadOnlyFactoryFor(database));
 
         BackgroundWorkSummary result = await store.LoadAsync(
             TestContext.Current.CancellationToken);
@@ -138,6 +140,31 @@ public sealed class BackgroundWorkDiagnosticProbeTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await new BackgroundWorkDiagnosticProbe(store)
                 .CheckAsync(cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Store_does_not_create_a_missing_database()
+    {
+        using TestDirectory root = TestDirectory.Create();
+        string databasePath = Path.Combine(root.Path, "media-desktop.db");
+        var store = new EfBackgroundWorkSummaryStore(
+            new ReadOnlyDiagnosticDbContextFactory(
+                new LocalAppDataPathProvider(root.Path)));
+
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await store.LoadAsync(TestContext.Current.CancellationToken));
+
+        Assert.False(File.Exists(databasePath));
+    }
+
+    private static IReadOnlyDiagnosticDbContextFactory ReadOnlyFactoryFor(
+        TestMediaDatabase database)
+    {
+        using MediaDesktopDbContext context = database.CreateContextFactory()
+            .CreateDbContext();
+        string databasePath = context.Database.GetDbConnection().DataSource;
+        return new ReadOnlyDiagnosticDbContextFactory(
+            new LocalAppDataPathProvider(Path.GetDirectoryName(databasePath)));
     }
 
     private sealed class FixedBackgroundWorkStore(BackgroundWorkSummary summary)

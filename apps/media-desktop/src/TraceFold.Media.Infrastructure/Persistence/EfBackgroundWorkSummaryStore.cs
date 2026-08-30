@@ -6,7 +6,7 @@ using TraceFold.Media.Domain.Processing;
 namespace TraceFold.Media.Infrastructure.Persistence;
 
 public sealed class EfBackgroundWorkSummaryStore(
-    IDbContextFactory<MediaDesktopDbContext> contextFactory)
+    IReadOnlyDiagnosticDbContextFactory contextFactory)
     : IBackgroundWorkSummaryStore
 {
     public async Task<BackgroundWorkSummary> LoadAsync(

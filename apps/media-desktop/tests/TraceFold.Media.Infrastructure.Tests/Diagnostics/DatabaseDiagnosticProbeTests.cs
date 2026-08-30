@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using TraceFold.Media.Application.Diagnostics;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Infrastructure.Diagnostics;
+using TraceFold.Media.Infrastructure.Paths;
 using TraceFold.Media.Infrastructure.Persistence;
 using TraceFold.Media.Infrastructure.Tests.Support;
 using Xunit;
@@ -162,7 +163,8 @@ public sealed class DatabaseDiagnosticProbeTests
             "SELECT COUNT(*) FROM metadata_drafts");
 
         SystemDiagnosticItem item = Assert.Single(await
-            new DatabaseDiagnosticProbe(new EfDatabaseDiagnosticReader(factory))
+            new DatabaseDiagnosticProbe(new EfDatabaseDiagnosticReader(
+                ReadOnlyFactoryFor(databasePath)))
                 .CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(SystemDiagnosticSeverity.Healthy, item.Severity);
@@ -182,15 +184,33 @@ public sealed class DatabaseDiagnosticProbeTests
         IDbContextFactory<MediaDesktopDbContext> factory =
             database.CreateContextFactory();
         string[] before = await ReadAppliedMigrationsAsync(factory);
+        string databasePath = await ReadDatabasePathAsync(factory);
 
         SystemDiagnosticItem item = Assert.Single(await
-            new DatabaseDiagnosticProbe(new EfDatabaseDiagnosticReader(factory))
+            new DatabaseDiagnosticProbe(new EfDatabaseDiagnosticReader(
+                ReadOnlyFactoryFor(databasePath)))
                 .CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(SystemDiagnosticSeverity.Unavailable, item.Severity);
         Assert.Equal("diagnostics.database.migration_mismatch", item.ErrorCode);
         Assert.Equal(before, await ReadAppliedMigrationsAsync(factory));
         Assert.Equal(oldMigration, Assert.Single(before.TakeLast(1)));
+    }
+
+    [Fact]
+    public async Task Ef_reader_does_not_create_a_missing_database()
+    {
+        using TestDirectory root = TestDirectory.Create();
+        string databasePath = Path.Combine(root.Path, "media-desktop.db");
+
+        SystemDiagnosticItem item = Assert.Single(await
+            new DatabaseDiagnosticProbe(new EfDatabaseDiagnosticReader(
+                ReadOnlyFactoryFor(databasePath)))
+                .CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(SystemDiagnosticSeverity.Unavailable, item.Severity);
+        Assert.Equal("diagnostics.database.unavailable", item.ErrorCode);
+        Assert.False(File.Exists(databasePath));
     }
 
     private static async Task<SystemDiagnosticItem> CheckQuickCheckAsync(
@@ -222,6 +242,11 @@ public sealed class DatabaseDiagnosticProbeTests
         return [.. await context.Database.GetAppliedMigrationsAsync(
             TestContext.Current.CancellationToken)];
     }
+
+    private static IReadOnlyDiagnosticDbContextFactory ReadOnlyFactoryFor(
+        string databasePath) =>
+        new ReadOnlyDiagnosticDbContextFactory(new LocalAppDataPathProvider(
+            Path.GetDirectoryName(databasePath)));
 
     private static FileSnapshot Snapshot(string path)
     {

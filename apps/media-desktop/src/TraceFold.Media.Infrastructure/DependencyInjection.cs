@@ -84,6 +84,8 @@ public static class DependencyInjection
         services.AddSingleton<BundledMediaToolLocator>();
         services.AddSingleton<IMediaTool, FfmpegMediaTool>();
         services.AddSingleton<IVolumeSpaceReader, WindowsVolumeSpaceReader>();
+        services.AddSingleton<IReadOnlyDiagnosticDbContextFactory,
+            ReadOnlyDiagnosticDbContextFactory>();
         services.AddSingleton<IDatabaseDiagnosticReader,
             EfDatabaseDiagnosticReader>();
         services.AddSingleton<IControlledProcessRunner, ControlledProcessRunner>();
