@@ -86,6 +86,23 @@ public sealed class SettingsDiagnosticsStructureTests
     }
 
     [Fact]
+    public void Diagnostic_facts_and_actions_remain_visible_for_healthy_items()
+    {
+        XDocument document = XDocument.Load(
+            DesktopSource("Pages", "SettingsPage.xaml"));
+        XElement issueDetails = ElementByName(document, "DiagnosticIssueDetails");
+        XElement facts = ElementByName(document, "DiagnosticFacts");
+        XElement actions = ElementByName(document, "DiagnosticActions");
+
+        Assert.Equal("{x:Bind DetailsVisibility}",
+            Attribute(issueDetails, "Visibility"));
+        Assert.DoesNotContain(facts, issueDetails.Descendants());
+        Assert.DoesNotContain(actions, issueDetails.Descendants());
+        Assert.Equal("{x:Bind Facts}", Attribute(facts, "ItemsSource"));
+        Assert.Equal("{x:Bind Actions}", Attribute(actions, "ItemsSource"));
+    }
+
+    [Fact]
     public async Task Code_behind_activates_cancels_and_focuses_only_registered_fields()
     {
         string code = await File.ReadAllTextAsync(
