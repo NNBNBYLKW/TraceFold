@@ -182,6 +182,133 @@ internal sealed class TestMediaDatabase : IAsyncDisposable
         return id;
     }
 
+    public async Task SeedBackgroundWorkFixtureAsync(
+        int queued,
+        int running,
+        int interrupted,
+        int failed,
+        int recoveryBlocked,
+        int cleanupPending,
+        int completedProcessing,
+        int cancelledProcessing,
+        int completedIngest,
+        int failedIngest)
+    {
+        int[] counts =
+        [
+            queued,
+            running,
+            interrupted,
+            failed,
+            recoveryBlocked,
+            cleanupPending,
+            completedProcessing,
+            cancelledProcessing,
+            completedIngest,
+            failedIngest
+        ];
+        if (counts.Any(count => count < 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(queued));
+        }
+
+        await using var context = new MediaDesktopDbContext(_options);
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-30T00:00:00Z");
+        await SeedProcessingStatusAsync(context, "queued", queued, now);
+        await SeedProcessingStatusAsync(context, "running", running, now);
+        await SeedProcessingStatusAsync(context, "interrupted", interrupted, now);
+        await SeedProcessingStatusAsync(context, "failed", failed, now);
+        await SeedProcessingStatusAsync(
+            context, "succeeded", completedProcessing, now);
+        await SeedProcessingStatusAsync(
+            context, "cancelled", cancelledProcessing, now);
+        await SeedIngestStageAsync(
+            context, "recoveryblocked", recoveryBlocked, now);
+        await SeedIngestStageAsync(
+            context, "cleanuppending", cleanupPending, now);
+        await SeedIngestStageAsync(context, "completed", completedIngest, now);
+        await SeedIngestStageAsync(context, "failed", failedIngest, now);
+        await transaction.CommitAsync();
+    }
+
+    private static async Task SeedProcessingStatusAsync(
+        MediaDesktopDbContext context,
+        string status,
+        int count,
+        DateTimeOffset now)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            Guid inboxId = Guid.NewGuid();
+            Guid planId = Guid.NewGuid();
+            Guid jobId = Guid.NewGuid();
+            string filename = $"private-video-{inboxId:N}.mp4";
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_items
+                    (id, state, media_kind, actual_filename, grouping_rule,
+                     required_capability, is_retryable, created_at_utc, updated_at_utc)
+                VALUES
+                    ({inboxId}, {"requiresprocessing"}, {"video"}, {filename},
+                     {"merge-mp4-m4a"}, {"merge-mp4-m4a"}, {false}, {now}, {now})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO processing_plans
+                    (id, inbox_item_id, processor_key, processor_version,
+                     processor_display_name, capability, output_filename,
+                     work_directory_relative_path, step_keys_json, created_at_utc)
+                VALUES
+                    ({planId}, {inboxId}, {"merge-mp4-m4a"}, {"1"}, {"合并"},
+                     {"merge-mp4-m4a"}, {filename}, {jobId.ToString("N")},
+                     {"[]"}, {now})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO processing_jobs
+                    (id, plan_id, inbox_item_id, active_inbox_item_id, attempt,
+                     status, progress_percent, is_retryable, correlation_id,
+                     queued_at_utc, updated_at_utc)
+                VALUES
+                    ({jobId}, {planId}, {inboxId}, {inboxId}, 1, {status}, 0,
+                     {false}, {Guid.NewGuid().ToString("N")}, {now}, {now})
+                """);
+        }
+    }
+
+    private static async Task SeedIngestStageAsync(
+        MediaDesktopDbContext context,
+        string stage,
+        int count,
+        DateTimeOffset now)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            Guid inboxId = Guid.NewGuid();
+            Guid operationId = Guid.NewGuid();
+            string filename = $"private-video-{inboxId:N}.mp4";
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO inbox_items
+                    (id, state, media_kind, actual_filename, grouping_rule,
+                     is_retryable, created_at_utc, updated_at_utc)
+                VALUES
+                    ({inboxId}, {"ingesting"}, {"video"}, {filename}, {"direct"},
+                     {false}, {now}, {now})
+                """);
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO ingest_operations
+                    (id, inbox_item_id, active_inbox_item_id, stage, disposition,
+                     source_path, source_size, source_last_write_time_utc,
+                     source_sha256, target_filename, backup_state,
+                     cleanup_attempt_count, metadata_snapshot_json,
+                     created_at_utc, updated_at_utc)
+                VALUES
+                    ({operationId}, {inboxId}, {inboxId}, {stage}, {"create"},
+                     {$"T:\\private\\inbox\\{filename}"}, 1, {now},
+                     {operationId.ToString("N").PadRight(64, 'A')}, {filename},
+                     {"notrequired"}, 0, {"{}"}, {now}, {now})
+                """);
+        }
+    }
+
     public async Task<Guid[]> SeedEditableInboxItemsAsync(int count)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
