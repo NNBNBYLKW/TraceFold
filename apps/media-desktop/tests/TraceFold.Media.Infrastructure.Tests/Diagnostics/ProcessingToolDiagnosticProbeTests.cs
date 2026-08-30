@@ -228,6 +228,50 @@ public sealed class ProcessingToolDiagnosticProbeTests
     }
 
     [Fact]
+    public async Task Controlled_runner_bounds_inherited_streams_and_kills_descendants()
+    {
+        using TestDirectory root = TestDirectory.Create();
+        string childPidPath = Path.Combine(root.Path, "child.pid");
+        string escapedPidPath = childPidPath.Replace("'", "''",
+            StringComparison.Ordinal);
+        string command = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+        string script =
+            "$ping=Join-Path $env:SystemRoot 'System32\\ping.exe'; "
+            + "$child=Start-Process -FilePath $ping "
+            + "-ArgumentList '-n 30 127.0.0.1' -NoNewWindow -PassThru; "
+            + $"[IO.File]::WriteAllText('{escapedPidPath}', [string]$child.Id)";
+        var runner = new ControlledProcessRunner();
+        Task<ControlledProcessResult> run = runner.RunAsync(
+            command,
+            ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+            TimeSpan.FromMilliseconds(400),
+            TestContext.Current.CancellationToken);
+
+        int? childPid = null;
+        try
+        {
+            ControlledProcessResult result = await run.WaitAsync(
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            Assert.True(result.TimedOut);
+            childPid = await ReadProcessIdAsync(childPidPath);
+            await AssertProcessExitedAsync(childPid.Value, TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            childPid ??= await TryReadProcessIdAsync(childPidPath);
+            if (childPid is int processId)
+            {
+                TryKillProcessTree(processId);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Controlled_runner_caps_stdout_and_stderr_at_exactly_eight_kibibytes()
     {
         var runner = new ControlledProcessRunner();
@@ -299,6 +343,45 @@ public sealed class ProcessingToolDiagnosticProbeTests
         }
 
         Assert.Fail($"Process {processId} was still running after cancellation.");
+    }
+
+    private static async Task<int> ReadProcessIdAsync(string path) =>
+        await TryReadProcessIdAsync(path)
+        ?? throw new Xunit.Sdk.XunitException("The child process id was not recorded.");
+
+    private static async Task<int?> TryReadProcessIdAsync(string path)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < TimeSpan.FromSeconds(2))
+        {
+            if (File.Exists(path)
+                && int.TryParse(await File.ReadAllTextAsync(
+                    path,
+                    TestContext.Current.CancellationToken), out int processId))
+            {
+                return processId;
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+
+        return null;
+    }
+
+    private static void TryKillProcessTree(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (ArgumentException)
+        {
+            // The owned test process already exited.
+        }
     }
 
     private sealed class FakeExecutableVersionReader(
