@@ -36,4 +36,20 @@ public sealed class LocalDirectoryProbeTests
         Assert.False(writable);
         Assert.False(Directory.Exists(missing));
     }
+
+    [Fact]
+    public async Task CanWriteAsync_honors_pre_cancelled_token_without_probe_residue()
+    {
+        using var temp = TestDirectory.Create();
+        var probe = new LocalDirectoryProbe();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await probe.CanWriteAsync(temp.Path, cancellation.Token));
+
+        Assert.Empty(Directory.GetFiles(
+            temp.Path,
+            ".tracefold-write-probe-*.tmp"));
+    }
 }
