@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using TraceFold.Media.Application.Diagnostics;
 using TraceFold.Media.Infrastructure.Diagnostics;
@@ -240,33 +241,101 @@ public sealed class ProcessingToolDiagnosticProbeTests
             "v1.0",
             "powershell.exe");
         string script =
-            "$ping=Join-Path $env:SystemRoot 'System32\\ping.exe'; "
+            // Deliberately exceed the execution deadline during setup. Readiness
+            // must come from the child marker, not from interpreter startup speed.
+            "Start-Sleep -Milliseconds 800; "
+            + "$ping=Join-Path $env:SystemRoot 'System32\\ping.exe'; "
             + "$child=Start-Process -FilePath $ping "
             + "-ArgumentList '-n 30 127.0.0.1' -NoNewWindow -PassThru; "
             + $"[IO.File]::WriteAllText('{escapedPidPath}', [string]$child.Id)";
-        var runner = new ControlledProcessRunner();
-        Task<ControlledProcessResult> run = runner.RunAsync(
-            command,
-            ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-            TimeSpan.FromMilliseconds(400),
-            TestContext.Current.CancellationToken);
-
-        int? childPid = null;
+        Process? child = null;
         try
         {
-            ControlledProcessResult result = await run.WaitAsync(
-                TimeSpan.FromSeconds(3),
-                TestContext.Current.CancellationToken);
+            var runner = new ControlledProcessRunner(parentId =>
+            {
+                // This callback runs after job assignment and before the runner
+                // arms its timeout, so the ready child can be established, pinned
+                // and proven alive before the execution budget starts.
+                using Process parent = Process.GetProcessById(parentId);
+                _ = parent.SafeHandle;
+                Stopwatch setup = Stopwatch.StartNew();
+                TimeSpan setupLimit = TimeSpan.FromSeconds(15);
+                int? readyChildId = null;
+                while (setup.Elapsed < setupLimit)
+                {
+                    TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if (File.Exists(childPidPath)
+                            && int.TryParse(File.ReadAllText(childPidPath), out int value)
+                            && value > 0)
+                        {
+                            readyChildId = value;
+                            break;
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        // The marker can be visible while WriteAllText still owns it.
+                    }
+
+                    Thread.Sleep(20);
+                }
+
+                Assert.True(readyChildId.HasValue,
+                    "Fixture setup did not record the child before the separate setup deadline.");
+                child = Process.GetProcessById(readyChildId.Value);
+                _ = child.SafeHandle;
+                Assert.False(child.HasExited,
+                    "The inherited-stream child must be alive before timing starts.");
+                int remaining = (int)Math.Max(
+                    0,
+                    (setupLimit - setup.Elapsed).TotalMilliseconds);
+                Assert.True(parent.WaitForExit(remaining),
+                    "Fixture parent did not exit during setup.");
+                Assert.False(child.HasExited,
+                    "The child must outlive its parent before timing starts.");
+            });
+            ControlledProcessResult result = await runner.RunAsync(
+                command,
+                ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+                TimeSpan.FromMilliseconds(400),
+                TestContext.Current.CancellationToken).WaitAsync(
+                    TimeSpan.FromSeconds(3),
+                    TestContext.Current.CancellationToken);
+
+            // The parent is gone, so only the inherited stream handles keep the
+            // run alive: the runner must time out and then kill the child.
             Assert.True(result.TimedOut);
-            childPid = await ReadProcessIdAsync(childPidPath);
-            await AssertProcessExitedAsync(childPid.Value, TimeSpan.FromSeconds(2));
+            Assert.NotNull(child);
+            await child.WaitForExitAsync(TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            Assert.True(child.HasExited);
         }
         finally
         {
-            childPid ??= await TryReadProcessIdAsync(childPidPath);
-            if (childPid is int processId)
+            if (child is not null)
             {
-                TryKillProcessTree(processId);
+                try
+                {
+                    if (!child.HasExited)
+                    {
+                        child.Kill(entireProcessTree: true);
+                        child.WaitForExit(2000);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // The owned fixture child already exited.
+                }
+                catch (Win32Exception)
+                {
+                    // The owned fixture child could not be signalled.
+                }
+                finally
+                {
+                    child.Dispose();
+                }
             }
         }
     }
@@ -343,45 +412,6 @@ public sealed class ProcessingToolDiagnosticProbeTests
         }
 
         Assert.Fail($"Process {processId} was still running after cancellation.");
-    }
-
-    private static async Task<int> ReadProcessIdAsync(string path) =>
-        await TryReadProcessIdAsync(path)
-        ?? throw new Xunit.Sdk.XunitException("The child process id was not recorded.");
-
-    private static async Task<int?> TryReadProcessIdAsync(string path)
-    {
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        while (stopwatch.Elapsed < TimeSpan.FromSeconds(2))
-        {
-            if (File.Exists(path)
-                && int.TryParse(await File.ReadAllTextAsync(
-                    path,
-                    TestContext.Current.CancellationToken), out int processId))
-            {
-                return processId;
-            }
-
-            await Task.Delay(25, TestContext.Current.CancellationToken);
-        }
-
-        return null;
-    }
-
-    private static void TryKillProcessTree(int processId)
-    {
-        try
-        {
-            using Process process = Process.GetProcessById(processId);
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch (ArgumentException)
-        {
-            // The owned test process already exited.
-        }
     }
 
     private sealed class FakeExecutableVersionReader(
