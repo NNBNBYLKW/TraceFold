@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
         alias="TRACEFOLD_API_ENV",
     )
     debug: bool = Field(
-        default=True,
+        default=False,
         alias="TRACEFOLD_API_DEBUG",
     )
     api_host: str = Field(
@@ -82,6 +82,12 @@ class Settings(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @model_validator(mode="after")
+    def prevent_production_tracebacks(self) -> Settings:
+        if self.api_env == "production" and self.debug:
+            raise ValueError("TRACEFOLD_API_DEBUG must be false in production.")
+        return self
 
     @property
     def is_development(self) -> bool:

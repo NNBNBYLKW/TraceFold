@@ -481,6 +481,7 @@ Phase 1 当前推荐只先确定 API 的最小必要变量。
 
 - `TRACEFOLD_API_ENABLE_DOCS` 可选，但很实用，适合开发期保留
 - 如你想进一步收紧，也可以 Phase 1 先不加它
+- 生产环境必须设置 `TRACEFOLD_API_DEBUG=false`；应用会拒绝带调试模式的生产配置。未配置时调试模式默认关闭。
 
 ---
 
