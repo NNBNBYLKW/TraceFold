@@ -126,7 +126,7 @@ def test_application_startup_recovers_prepared_ingest_before_serving(settings) -
         operation_id = operation.id
 
     application = create_app(settings)
-    with TestClient(application):
+    with TestClient(application, base_url="http://127.0.0.1"):
         assert application.state.runtime_state.ingest_enabled is True
         with application.state.session_factory() as session:
             recovered = session.get(IngestOperation, operation_id)

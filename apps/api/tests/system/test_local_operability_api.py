@@ -58,7 +58,7 @@ def _api_client(
 
     monkeypatch.setattr("app.main.init_db", lambda: None)
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://127.0.0.1") as test_client:
         yield test_client
     app.dependency_overrides.clear()
 

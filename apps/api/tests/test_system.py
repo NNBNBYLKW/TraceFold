@@ -5,7 +5,7 @@ from app.main import app
 
 def test_ping(monkeypatch) -> None:
     monkeypatch.setattr("app.main.init_db", lambda: None)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.get("/api/ping")
 
     assert response.status_code == 200
@@ -20,7 +20,7 @@ def test_ping(monkeypatch) -> None:
 
 def test_healthz(monkeypatch) -> None:
     monkeypatch.setattr("app.main.init_db", lambda: None)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.get("/api/healthz")
 
     assert response.status_code == 200

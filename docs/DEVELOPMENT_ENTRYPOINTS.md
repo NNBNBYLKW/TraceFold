@@ -115,6 +115,8 @@ cd apps/api
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
+The API accepts only loopback `Host` values (`127.0.0.1`, `localhost`, and `[::1]`). Browser requests from other origins are rejected before they reach API handlers; local frontends on the documented development ports remain allowed. Keep the listener on loopback. A network-facing deployment requires separate authentication and an explicit host policy.
+
 ### 4. Point Web At The Shared API
 
 In `apps/web/.env`:

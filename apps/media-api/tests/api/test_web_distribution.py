@@ -35,7 +35,7 @@ def client_with_web(
     application = create_app(settings.model_copy(update={"web_dist_dir": web_dist}))
     engine = application.state.session_factory.kw["bind"]
     Base.metadata.create_all(engine)
-    with TestClient(application) as test_client:
+    with TestClient(application, base_url="http://127.0.0.1") as test_client:
         yield test_client
     Base.metadata.drop_all(engine)
     engine.dispose()

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+import re
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from media_api.api.dependencies import RuntimeState
 from media_api.api.errors import install_error_contract
@@ -23,6 +26,21 @@ from media_api.settings.router import build_settings_router
 from media_api.settings.service import SettingsService
 from media_api.taxonomy.router import build_taxonomy_router
 from media_api.web_distribution import install_web_distribution
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+LOOPBACK_AUTHORITY = re.compile(
+    r"(?:127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?",
+    re.IGNORECASE,
+)
+
+
+def _trusted_loopback_host(authority: str) -> bool:
+    match = LOOPBACK_AUTHORITY.fullmatch(authority)
+    if match is None:
+        return False
+    port = match.group(1)
+    return port is None or 0 < int(port) <= 65535
 
 
 def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
@@ -107,7 +125,6 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
         title="TraceFold Media API",
         lifespan=coordinator.lifespan,
     )
-    install_error_contract(app)
     origins = (
         [resolved.web_origin]
         if resolved.web_origin is not None
@@ -120,6 +137,36 @@ def create_app(settings: BootstrapSettings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["Content-Type", "Idempotency-Key", "X-Correlation-ID"],
     )
+    @app.middleware("http")
+    async def guard_local_browser_requests(request: Request, call_next):
+        if not _trusted_loopback_host(request.headers.get("host", "")):
+            return JSONResponse(
+                {"error": {"code": "INVALID_HOST", "message": "请求主机无效。", "details": {}}},
+                status_code=400,
+            )
+        if request.method != "OPTIONS":
+            origin = request.headers.get("origin")
+            same_loopback_origin = (
+                request.url.hostname in LOOPBACK_HOSTS
+                and origin == str(request.base_url).rstrip("/")
+            )
+            # CORS does not stop simple cross-site requests from reaching handlers.
+            if origin is not None and origin not in origins and not same_loopback_origin:
+                return JSONResponse(
+                    {"error": {"code": "HTTP_403", "message": "请求无法完成。", "details": {}}},
+                    status_code=403,
+                )
+            fetch_site = request.headers.get("sec-fetch-site")
+            if origin is None and (
+                fetch_site not in (None, "none", "same-origin")
+            ):
+                return JSONResponse(
+                    {"error": {"code": "HTTP_403", "message": "请求无法完成。", "details": {}}},
+                    status_code=403,
+                )
+        return await call_next(request)
+
+    install_error_contract(app)
     app.state.settings = resolved
     app.state.runtime_state = runtime_state
     app.state.event_bus = event_bus

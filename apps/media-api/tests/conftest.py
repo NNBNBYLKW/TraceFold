@@ -35,7 +35,7 @@ def client(settings: BootstrapSettings) -> Generator[TestClient, None, None]:
     engine = session_factory.kw["bind"]
     Base.metadata.create_all(engine)
     application = create_app(settings)
-    with TestClient(application) as test_client:
+    with TestClient(application, base_url="http://127.0.0.1") as test_client:
         yield test_client
     Base.metadata.drop_all(engine)
     engine.dispose()

@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             engine=engine,
             db_url=args.db_url,
         )
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1") as client:
             report = run_smoke_checks(client=client, db=db)
     finally:
         app.dependency_overrides.clear()

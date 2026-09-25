@@ -24,6 +24,7 @@ export function MediaPreview({ src, alt, mediaType }: MediaPreviewProps) {
       className="media-preview"
       src={apiClient.url(src)}
       alt={alt}
+      crossOrigin="anonymous"
       loading="lazy"
       onError={() => setFailed(true)}
     />

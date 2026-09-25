@@ -42,9 +42,18 @@ def test_inbox_preview_serves_registered_image_without_changing_status(
     item = _seed_inbox_image(client, storage, fixture)
 
     response = client.get(f"/api/inbox/items/{item.id}/preview")
+    mixed_loopback_browser = client.get(
+        f"/api/inbox/items/{item.id}/preview",
+        headers={
+            "Origin": "http://localhost:3100",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/jpeg"
+    assert mixed_loopback_browser.status_code == 200
+    assert mixed_loopback_browser.headers["access-control-allow-origin"] == "http://localhost:3100"
     cached = storage.previews_dir / f"{storage.sha256(storage.inbox_dir / fixture.name)}.jpg"
     assert cached.exists()
     with Image.open(cached) as image:

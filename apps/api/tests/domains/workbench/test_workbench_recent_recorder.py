@@ -62,7 +62,7 @@ def api_client(
 
     monkeypatch.setattr("app.main.init_db", lambda: None)
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://127.0.0.1") as test_client:
         yield test_client
     app.dependency_overrides.clear()
 
@@ -141,6 +141,24 @@ def test_recent_view_is_recorded_only_after_successful_read(api_client: TestClie
     assert recent is not None
     assert recent.object_type == "pending"
     assert recent.action_type == "viewed"
+
+
+@pytest.mark.parametrize("fetch_site", ["cross-site", "same-site"])
+def test_cross_site_detail_get_cannot_change_recent_views(
+    api_client: TestClient, db: Session, fetch_site: str
+) -> None:
+    pending_item = _seed_pending_item(db)
+
+    blocked = api_client.get(
+        f"/api/pending/{pending_item.id}",
+        headers={"Sec-Fetch-Site": fetch_site},
+    )
+    assert blocked.status_code == 403
+    assert db.query(WorkbenchRecentContext).count() == 0
+
+    allowed = api_client.get(f"/api/pending/{pending_item.id}")
+    assert allowed.status_code == 200
+    assert db.query(WorkbenchRecentContext).count() == 1
 
 
 def test_recent_action_is_recorded_only_after_successful_action(api_client: TestClient, db: Session) -> None:

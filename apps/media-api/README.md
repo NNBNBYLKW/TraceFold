@@ -18,6 +18,8 @@ uvicorn media_api.main:create_app --factory --host 127.0.0.1 --port 8100
 
 在 Bash 中激活环境可使用 `source .venv/bin/activate`。Web 应用使用其他端口或来源时，在 `.env` 中增加 `TRACEFOLD_MEDIA_WEB_ORIGIN=http://127.0.0.1:3100`。
 
+API 只接受 `127.0.0.1`、`localhost` 和 `[::1]` 的 `Host`；浏览器跨来源请求在进入业务处理前会被拒绝。保持服务监听在回环地址；若需要从局域网或公网访问，须另行设计鉴权和主机允许策略。
+
 ## 运行路径
 
 四个启动参数都按当前工作目录解析为绝对路径：

@@ -64,7 +64,7 @@ def api_client(
 
     monkeypatch.setattr("app.main.init_db", lambda: None)
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://127.0.0.1") as test_client:
         yield test_client
     app.dependency_overrides.clear()
 
@@ -334,7 +334,7 @@ def test_pending_action_internal_failure_uses_uniform_error_envelope(
     monkeypatch.setattr("app.main.settings.debug", False)
     local_app = create_app()
     local_app.dependency_overrides[get_db] = override_get_db
-    with TestClient(local_app, raise_server_exceptions=False) as test_client:
+    with TestClient(local_app, base_url="http://127.0.0.1", raise_server_exceptions=False) as test_client:
         response = test_client.post(
             f"/api/pending/{pending_item.id}/confirm",
             json={"note": "boom"},

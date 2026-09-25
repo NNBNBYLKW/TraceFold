@@ -29,7 +29,7 @@ def test_runtime_status_endpoint_returns_shared_status_payload(
         ),
     )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.get("/api/system/status")
 
     assert response.status_code == 200
