@@ -15,13 +15,14 @@ class FeishuAdapterSettings(BaseSettings):
 
     app_id: str = Field(..., alias="TRACEFOLD_FEISHU_APP_ID")
     app_secret: str = Field(..., alias="TRACEFOLD_FEISHU_APP_SECRET")
+    verification_token: str = Field(..., alias="TRACEFOLD_FEISHU_VERIFICATION_TOKEN")
     api_base_url: str = Field(..., alias="TRACEFOLD_FEISHU_API_BASE_URL")
     open_base_url: str = Field("https://open.feishu.cn/open-apis", alias="TRACEFOLD_FEISHU_OPEN_BASE_URL")
     timeout_seconds: float = Field(5.0, alias="TRACEFOLD_FEISHU_TIMEOUT_SECONDS")
     debug: bool = Field(False, alias="TRACEFOLD_FEISHU_DEBUG")
     log_enabled: bool = Field(True, alias="TRACEFOLD_FEISHU_LOG_ENABLED")
 
-    @field_validator("app_id", "app_secret")
+    @field_validator("app_id", "app_secret", "verification_token")
     @classmethod
     def validate_non_blank_secret_fields(cls, value: str) -> str:
         normalized = value.strip()

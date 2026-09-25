@@ -53,6 +53,7 @@ Current variables:
 
 - `TRACEFOLD_FEISHU_APP_ID`
 - `TRACEFOLD_FEISHU_APP_SECRET`
+- `TRACEFOLD_FEISHU_VERIFICATION_TOKEN`
 - `TRACEFOLD_FEISHU_API_BASE_URL`
 - `TRACEFOLD_FEISHU_OPEN_BASE_URL`
 - `TRACEFOLD_FEISHU_TIMEOUT_SECONDS`
@@ -64,6 +65,7 @@ Minimal local example:
 ```env
 TRACEFOLD_FEISHU_APP_ID=replace-me
 TRACEFOLD_FEISHU_APP_SECRET=replace-me
+TRACEFOLD_FEISHU_VERIFICATION_TOKEN=replace-me
 TRACEFOLD_FEISHU_API_BASE_URL=http://127.0.0.1:8000/api
 TRACEFOLD_FEISHU_OPEN_BASE_URL=https://open.feishu.cn/open-apis
 TRACEFOLD_FEISHU_TIMEOUT_SECONDS=5
@@ -74,7 +76,7 @@ TRACEFOLD_FEISHU_LOG_ENABLED=true
 ## Minimal Startup Path
 
 1. Start the TraceFold API first.
-2. Fill `apps/feishu/.env`.
+2. Fill `apps/feishu/.env`. Copy the Verification Token from the Feishu developer console's event subscription settings into `TRACEFOLD_FEISHU_VERIFICATION_TOKEN`; keep it private. The adapter refuses to start without a non-blank token.
 3. Start the Feishu webhook app:
 
 ```powershell
@@ -88,11 +90,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8100
 http://127.0.0.1:8100/feishu/events
 ```
 
-Use your actual reachable development URL if Feishu cannot reach localhost directly.
+Use your actual reachable development URL if Feishu cannot reach localhost directly. Use HTTPS for a network-reachable webhook. This adapter handles unencrypted event callbacks; do not enable Encrypt Key for this endpoint.
 
 ## URL Verification Behavior
 
-The current webhook app supports the standard verification-style callback shape by returning:
+The webhook checks the top-level `token` on URL verification requests and `header.token` on v2 message events against the configured Verification Token before taking any action. Missing or incorrect tokens receive HTTP 403. A valid verification request returns:
 
 ```json
 {"challenge": "<incoming challenge>"}

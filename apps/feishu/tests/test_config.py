@@ -7,6 +7,7 @@ from apps.feishu.app.core.config import FeishuAdapterSettings
 def test_settings_load_from_environment(monkeypatch):
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_ID", "app-id")
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("TRACEFOLD_FEISHU_VERIFICATION_TOKEN", "verification-token")
     monkeypatch.setenv("TRACEFOLD_FEISHU_API_BASE_URL", "http://localhost:8000/api")
     monkeypatch.setenv("TRACEFOLD_FEISHU_OPEN_BASE_URL", "https://open.feishu.cn/open-apis")
     monkeypatch.setenv("TRACEFOLD_FEISHU_TIMEOUT_SECONDS", "7")
@@ -17,6 +18,7 @@ def test_settings_load_from_environment(monkeypatch):
 
     assert settings.app_id == "app-id"
     assert settings.app_secret == "app-secret"
+    assert settings.verification_token == "verification-token"
     assert settings.api_base_url == "http://localhost:8000/api"
     assert settings.open_base_url == "https://open.feishu.cn/open-apis"
     assert settings.timeout_seconds == 7
@@ -27,6 +29,7 @@ def test_settings_load_from_environment(monkeypatch):
 def test_settings_reject_blank_app_id(monkeypatch):
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_ID", "   ")
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("TRACEFOLD_FEISHU_VERIFICATION_TOKEN", "verification-token")
     monkeypatch.setenv("TRACEFOLD_FEISHU_API_BASE_URL", "http://localhost:8000/api")
 
     with pytest.raises(ValidationError):
@@ -36,6 +39,7 @@ def test_settings_reject_blank_app_id(monkeypatch):
 def test_settings_reject_non_http_api_base_url(monkeypatch):
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_ID", "app-id")
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("TRACEFOLD_FEISHU_VERIFICATION_TOKEN", "verification-token")
     monkeypatch.setenv("TRACEFOLD_FEISHU_API_BASE_URL", "localhost:8000/api")
 
     with pytest.raises(ValidationError):
@@ -45,8 +49,23 @@ def test_settings_reject_non_http_api_base_url(monkeypatch):
 def test_settings_reject_non_positive_timeout(monkeypatch):
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_ID", "app-id")
     monkeypatch.setenv("TRACEFOLD_FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("TRACEFOLD_FEISHU_VERIFICATION_TOKEN", "verification-token")
     monkeypatch.setenv("TRACEFOLD_FEISHU_API_BASE_URL", "http://localhost:8000/api")
     monkeypatch.setenv("TRACEFOLD_FEISHU_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(ValidationError):
+        FeishuAdapterSettings()
+
+
+@pytest.mark.parametrize("token", [None, "   "])
+def test_settings_require_non_blank_verification_token(monkeypatch, token):
+    monkeypatch.setenv("TRACEFOLD_FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("TRACEFOLD_FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("TRACEFOLD_FEISHU_API_BASE_URL", "http://localhost:8000/api")
+    if token is None:
+        monkeypatch.delenv("TRACEFOLD_FEISHU_VERIFICATION_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("TRACEFOLD_FEISHU_VERIFICATION_TOKEN", token)
 
     with pytest.raises(ValidationError):
         FeishuAdapterSettings()
