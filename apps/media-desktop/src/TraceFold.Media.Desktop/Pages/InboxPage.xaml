@@ -4,8 +4,14 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:TraceFold.Media.Desktop.Controls"
     xmlns:pages="using:TraceFold.Media.Desktop.Pages">
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" ColumnDefinitions="*,360">
-        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,*">
+    <controls:ResponsiveInspectorHost
+        x:Name="WorkspaceHost"
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+        DrawerOpened="OnInspectorDrawerOpened"
+        DrawerClosed="OnInspectorDrawerClosed"
+        LayoutModeChanged="OnWorkspaceLayoutModeChanged">
+        <controls:ResponsiveInspectorHost.PrimaryContent>
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,*">
             <Grid Margin="24,18,20,8" ColumnDefinitions="*,Auto">
                 <StackPanel>
                     <TextBlock
@@ -29,7 +35,7 @@
                     TextTrimming="CharacterEllipsis" />
             </Grid>
 
-            <Grid Grid.Row="1" Margin="24,8,20,14" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+            <Grid Grid.Row="1" Margin="24,8,20,14" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="10">
                 <AutoSuggestBox
                     AutomationProperties.AutomationId="InboxSearchBox"
                     PlaceholderText="搜索文件名或显示名称"
@@ -46,6 +52,15 @@
                     AutomationProperties.AutomationId="InboxRefreshButton"
                     Command="{x:Bind ViewModel.RefreshCommand}"
                     Content="立即刷新" />
+                <Button
+                    x:Name="InboxInspectorOpenButton"
+                    Grid.Column="3"
+                    AutomationProperties.AutomationId="InboxInspectorOpenButton"
+                    AutomationProperties.Name="打开待入库文件资料面板"
+                    Click="OnInspectorOpenClick"
+                    Content="查看资料"
+                    IsEnabled="{x:Bind ViewModel.Selection.HasSelection, Mode=OneWay}"
+                    Visibility="Collapsed" />
             </Grid>
 
             <Border
@@ -95,103 +110,138 @@
                 </Grid>
             </Border>
 
-            <GridView
-                x:Name="InboxGrid"
+            <Grid
                 Grid.Row="3"
+                Margin="36,0,32,4"
+                AutomationProperties.AutomationId="InboxListHeader"
+                AutomationProperties.Name="待入库文件列表表头"
+                ColumnDefinitions="32,*,160,110"
+                ColumnSpacing="8"
+                Style="{StaticResource TraceFoldMediaRowHeaderStyle}">
+                <TextBlock Grid.Column="1" Text="显示名称" />
+                <TextBlock Grid.Column="2" Text="实际文件名" />
+                <TextBlock Grid.Column="3" Text="状态" />
+            </Grid>
+
+            <ListView
+                x:Name="InboxGrid"
+                Grid.Row="4"
                 Margin="16,0,12,16"
-                Padding="8"
                 AutomationProperties.AutomationId="InboxGrid"
                 AutomationProperties.Name="待入库文件列表"
                 IsItemClickEnabled="True"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
+                ContainerContentChanging="OnInboxContainerContentChanging"
                 SelectionChanged="OnSelectionChanged"
-                SelectionMode="Extended">
-                <GridView.KeyboardAccelerators>
+                SelectionMode="Extended"
+                ScrollViewer.HorizontalScrollMode="Disabled"
+                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                Style="{StaticResource TraceFoldMediaListStyle}">
+                <ListView.KeyboardAccelerators>
                     <KeyboardAccelerator Modifiers="Control" Key="A" Invoked="OnSelectAllAccelerator" />
                     <KeyboardAccelerator Key="Escape" Invoked="OnClearSelectionAccelerator" />
-                </GridView.KeyboardAccelerators>
-                <GridView.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <ItemsWrapGrid Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </GridView.ItemsPanel>
-                <GridView.ItemTemplate>
+                </ListView.KeyboardAccelerators>
+                <ListView.ItemTemplate>
                     <DataTemplate x:DataType="pages:InboxCardViewModel">
-                        <Border
-                            Width="190"
-                            Margin="4"
-                            Padding="10"
+                        <Grid
+                            Height="{StaticResource TraceFoldFileRowHeight}"
+                            ColumnDefinitions="32,*,160,110"
+                            ColumnSpacing="8"
                             AutomationProperties.AutomationId="{x:Bind AutomationId}"
-                            AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}"
-                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8">
-                            <Grid RowDefinitions="120,Auto,Auto,Auto,Auto">
-                                <Border
-                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                                    CornerRadius="5">
-                                    <Grid>
-                                        <Image
-                                            Source="{x:Bind ThumbnailSource}"
-                                            Stretch="UniformToFill"
-                                            Visibility="{x:Bind ThumbnailVisibility}" />
-                                        <FontIcon
-                                            FontSize="30"
-                                            Glyph="{x:Bind FallbackGlyph}"
-                                            Visibility="{x:Bind FallbackVisibility}" />
-                                    </Grid>
-                                </Border>
+                            AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}">
+                            <Border
+                                Width="28"
+                                Height="28"
+                                VerticalAlignment="Center"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                CornerRadius="4">
+                                <Grid>
+                                    <Image
+                                        Source="{x:Bind ThumbnailSource}"
+                                        Stretch="UniformToFill"
+                                        Visibility="{x:Bind ThumbnailVisibility}" />
+                                    <FontIcon
+                                        FontSize="16"
+                                        Glyph="{x:Bind FallbackGlyph}"
+                                        Visibility="{x:Bind FallbackVisibility}" />
+                                </Grid>
+                            </Border>
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                FontWeight="SemiBold"
+                                Text="{x:Bind DisplayName, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis"
+                                TextWrapping="NoWrap" />
+                            <TextBlock
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ActualFilename, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis"
+                                TextWrapping="NoWrap" />
+                            <Grid Grid.Column="3" RowDefinitions="*,Auto">
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    FontSize="12"
+                                    Text="{x:Bind StatusText, Mode=OneWay}"
+                                    TextTrimming="CharacterEllipsis"
+                                    TextWrapping="NoWrap" />
                                 <TextBlock
                                     Grid.Row="1"
-                                    Margin="0,9,0,0"
-                                    FontWeight="SemiBold"
-                                    Text="{x:Bind DisplayName}"
-                                    TextTrimming="CharacterEllipsis" />
-                                <TextBlock
-                                    Grid.Row="2"
-                                    Margin="0,3,0,0"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="{x:Bind StatusText}" />
-                                <TextBlock
-                                    Grid.Row="3"
-                                    Margin="0,4,0,0"
+                                    FontSize="11"
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                    Text="{x:Bind ProgressText}"
-                                    Visibility="{x:Bind ProcessingVisibility}" />
-                                <ProgressBar
-                                    Grid.Row="4"
-                                    Margin="0,5,0,0"
-                                    Maximum="100"
-                                    Value="{x:Bind ProcessingProgress}"
-                                    Visibility="{x:Bind ProcessingVisibility}" />
+                                    Text="{x:Bind ProgressText, Mode=OneWay}"
+                                    TextTrimming="CharacterEllipsis"
+                                    TextWrapping="NoWrap"
+                                    Visibility="{x:Bind ProcessingVisibility, Mode=OneWay}" />
                             </Grid>
-                        </Border>
+                        </Grid>
                     </DataTemplate>
-                </GridView.ItemTemplate>
-            </GridView>
+                </ListView.ItemTemplate>
+            </ListView>
         </Grid>
-
+        </controls:ResponsiveInspectorHost.PrimaryContent>
+        <controls:ResponsiveInspectorHost.InspectorContent>
         <Border
-            Grid.Column="1"
             Padding="20"
             AutomationProperties.AutomationId="InspectorPane"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1,0,0,0">
+            <Border.KeyboardAccelerators>
+                <KeyboardAccelerator Key="Escape" Invoked="OnClearSelectionAccelerator" />
+            </Border.KeyboardAccelerators>
             <ScrollViewer>
-                <Grid RowDefinitions="Auto,Auto,Auto">
-                <StackPanel
-                    Spacing="12"
-                    Visibility="{x:Bind ViewModel.InspectorVisibility, Mode=OneWay}">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="资料" />
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+                    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                        <TextBlock
+                            x:Name="InboxInspectorHeading"
+                            AutomationProperties.AutomationId="InboxInspectorHeading"
+                            AutomationProperties.Name="待入库文件资料标题"
+                            IsTabStop="True"
+                            Style="{ThemeResource SubtitleTextBlockStyle}"
+                            Text="资料" />
                         <TextBlock
                             Grid.Column="1"
                             VerticalAlignment="Center"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="{x:Bind ViewModel.Inspector.State, Mode=OneWay}" />
+                            Text="{x:Bind ViewModel.Inspector.State, Mode=OneWay}"
+                            Visibility="{x:Bind ViewModel.InspectorVisibility, Mode=OneWay}" />
+                        <Button
+                            x:Name="InboxInspectorCloseButton"
+                            Grid.Column="2"
+                            AutomationProperties.AutomationId="InboxInspectorCloseButton"
+                            AutomationProperties.Name="关闭待入库文件资料面板"
+                            Click="OnInspectorCloseClick"
+                            Content="关闭"
+                            Visibility="Collapsed" />
                     </Grid>
+                <StackPanel
+                    Grid.Row="1"
+                    Margin="0,12,0,0"
+                    Spacing="12"
+                    Visibility="{x:Bind ViewModel.InspectorVisibility, Mode=OneWay}">
                     <controls:MediaPreviewControl
                         x:Name="PreviewControl"
                         Descriptor="{x:Bind ViewModel.Inspector.Preview, Mode=OneWay}" />
@@ -347,6 +397,7 @@
                     </Grid>
                 </StackPanel>
                 <StackPanel
+                    Grid.Row="1"
                     Spacing="14"
                     AutomationProperties.AutomationId="InboxBatchSummary"
                     AutomationProperties.Name="所选待入库文件的批量摘要"
@@ -369,7 +420,7 @@
                         TextWrapping="Wrap" />
                 </StackPanel>
                 <StackPanel
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Margin="0,18,0,0"
                     Spacing="8"
                     Visibility="{x:Bind ViewModel.BatchSummary.IngestProgressVisibility, Mode=OneWay}">
@@ -390,7 +441,7 @@
                         Content="当前项完成后停止" />
                 </StackPanel>
                 <StackPanel
-                    Grid.Row="2"
+                    Grid.Row="3"
                     Margin="0,18,0,0"
                     Spacing="8"
                     AutomationProperties.AutomationId="InboxBatchIngestResult"
@@ -419,5 +470,6 @@
                 </Grid>
             </ScrollViewer>
         </Border>
-    </Grid>
+        </controls:ResponsiveInspectorHost.InspectorContent>
+    </controls:ResponsiveInspectorHost>
 </Page>

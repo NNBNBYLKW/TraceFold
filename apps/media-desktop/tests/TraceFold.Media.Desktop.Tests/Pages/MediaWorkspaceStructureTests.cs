@@ -8,6 +8,58 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 public sealed class MediaWorkspaceStructureTests
 {
     [Fact]
+    public void Inbox_uses_one_responsive_inspector_and_fixed_height_list_rows()
+    {
+        string xaml = File.ReadAllText(DesktopSource("Pages", "InboxPage.xaml"));
+        XDocument document = XDocument.Parse(xaml);
+        XElement host = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost");
+        Assert.Equal("WorkspaceHost", (string?)host.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName == "Name"));
+        XElement list = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ListView"
+            && (string?)element.Attribute("{http://schemas.microsoft.com/winfx/2006/xaml}Name") == "InboxGrid");
+        XElement header = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "InboxListHeader");
+        Assert.Equal("32,*,160,110", (string?)header.Attribute("ColumnDefinitions"));
+        Assert.Equal("{StaticResource TraceFoldMediaListStyle}", (string?)list.Attribute("Style"));
+        Assert.Equal("Disabled", (string?)list.Attribute("ScrollViewer.HorizontalScrollMode"));
+        XElement row = Assert.Single(list.Descendants(), element =>
+            element.Name.LocalName == "DataTemplate");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("ColumnDefinitions") == "32,*,160,110");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("Height") == "{StaticResource TraceFoldFileRowHeight}");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("AutomationProperties.Name") == "{x:Bind AccessibleName, Mode=OneWay}");
+        Assert.DoesNotContain("ItemsWrapGrid", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Width=\"190\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("RowDefinitions=\"120,", xaml, StringComparison.Ordinal);
+
+        foreach (string id in new[]
+        {
+            "InboxListHeader", "InboxInspectorOpenButton", "InboxInspectorCloseButton", "InboxInspectorHeading"
+        })
+        {
+            AssertElementHasAccessibleName(xaml, id);
+        }
+
+        XElement heading = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "InboxInspectorHeading");
+        Assert.DoesNotContain(heading.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "InspectorVisibility", StringComparison.Ordinal) == true);
+
+        Assert.Contains("Key=\"Escape\"", xaml, StringComparison.Ordinal);
+        string code = File.ReadAllText(DesktopSource("Pages", "InboxPage.xaml.cs"));
+        Assert.Contains("WorkspaceHost.CloseDrawer()", code, StringComparison.Ordinal);
+        Assert.Contains("FocusSelectedInboxItem", code, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.SetName(args.ItemContainer, card.AccessibleName)",
+            code, StringComparison.Ordinal);
+        Assert.DoesNotContain("GridViewItem", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Inbox_page_contains_native_workspace_and_preview_controls()
     {
         string inboxXaml = await File.ReadAllTextAsync(

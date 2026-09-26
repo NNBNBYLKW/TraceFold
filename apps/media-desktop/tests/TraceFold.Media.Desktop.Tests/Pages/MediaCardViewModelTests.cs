@@ -9,6 +9,21 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 
 public sealed class MediaCardViewModelTests
 {
+    [Fact]
+    public void Inbox_row_accessible_name_contains_visible_name_and_status()
+    {
+        var row = new InboxCardViewModel(new InboxCardDto(
+            Guid.NewGuid(),
+            "photo.jpg",
+            "旅行记录",
+            MediaKind.Image,
+            InboxItemState.ReadyToTag,
+            "待补资料",
+            true));
+
+        Assert.Equal("待入库文件 旅行记录，状态 待补资料", row.AccessibleName);
+    }
+
     [Theory]
     [InlineData(typeof(InboxCardViewModel))]
     [InlineData(typeof(LibraryCardViewModel))]

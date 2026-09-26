@@ -1,6 +1,8 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
 using TraceFold.Media.Desktop.Controls;
@@ -11,6 +13,7 @@ public sealed partial class InboxPage : Page
 {
     private bool _synchronizingPickers;
     private bool _synchronizingGridSelection;
+    private bool _restoreListFocusAfterRefresh;
 
     public InboxPage(
         InboxViewModel viewModel,
@@ -43,6 +46,7 @@ public sealed partial class InboxPage : Page
     {
         _ = sender;
         _ = args;
+        UpdateInspectorButtonVisibility();
         await ViewModel.LoadAsync(CancellationToken.None);
     }
 
@@ -72,6 +76,11 @@ public sealed partial class InboxPage : Page
         {
             SynchronizePickers();
         }
+
+        if (!ViewModel.Selection.HasSelection)
+        {
+            WorkspaceHost.CloseDrawer();
+        }
     }
 
     private void OnGridItemsReplacing(object? sender, EventArgs args)
@@ -79,6 +88,7 @@ public sealed partial class InboxPage : Page
         _ = sender;
         _ = args;
         _synchronizingGridSelection = true;
+        _restoreListFocusAfterRefresh = IsFocusWithinInboxList();
     }
 
     private void OnGridItemsReplaced(object? sender, EventArgs args)
@@ -101,6 +111,18 @@ public sealed partial class InboxPage : Page
         {
             _synchronizingGridSelection = false;
         }
+
+        if (_restoreListFocusAfterRefresh)
+        {
+            _restoreListFocusAfterRefresh = false;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (IsLoaded)
+                {
+                    FocusSelectedInboxItem();
+                }
+            });
+        }
     }
 
     private void OnSelectAllAccelerator(
@@ -117,8 +139,81 @@ public sealed partial class InboxPage : Page
         KeyboardAcceleratorInvokedEventArgs args)
     {
         _ = sender;
-        InboxGrid.SelectedItems.Clear();
+        if (WorkspaceHost.IsDrawerOpen)
+        {
+            WorkspaceHost.CloseDrawer();
+        }
+        else
+        {
+            InboxGrid.SelectedItems.Clear();
+        }
+
         args.Handled = true;
+    }
+
+    private void OnInboxContainerContentChanging(
+        ListViewBase sender,
+        ContainerContentChangingEventArgs args)
+    {
+        _ = sender;
+        if (args.Item is InboxCardViewModel card && args.ItemContainer is not null)
+        {
+            AutomationProperties.SetName(args.ItemContainer, card.AccessibleName);
+        }
+    }
+
+    private void OnInspectorOpenClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        WorkspaceHost.OpenDrawer();
+    }
+
+    private void OnInspectorCloseClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        WorkspaceHost.CloseDrawer();
+    }
+
+    private void OnInspectorDrawerOpened(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (IsLoaded && WorkspaceHost.IsDrawerOpen)
+            {
+                WorkspaceHost.UpdateLayout();
+                InboxInspectorHeading.Focus(FocusState.Programmatic);
+            }
+        });
+    }
+
+    private void OnInspectorDrawerClosed(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        if (IsLoaded)
+        {
+            FocusSelectedInboxItem();
+        }
+    }
+
+    private void OnWorkspaceLayoutModeChanged(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        UpdateInspectorButtonVisibility();
+    }
+
+    private void UpdateInspectorButtonVisibility()
+    {
+        Visibility visibility = WorkspaceHost.LayoutMode == WorkspaceLayoutMode.Compact
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        InboxInspectorOpenButton.Visibility = visibility;
+        InboxInspectorCloseButton.Visibility = visibility;
     }
 
     private void OnCancelSelectionClick(object sender, RoutedEventArgs args)
@@ -150,22 +245,67 @@ public sealed partial class InboxPage : Page
                     break;
                 }
 
-                InboxGrid.ScrollIntoView(item);
-                InboxGrid.UpdateLayout();
-                if (InboxGrid.ContainerFromItem(item) is GridViewItem container)
-                {
-                    container.Focus(FocusState.Programmatic);
-                }
-                else
-                {
-                    InboxGrid.Focus(FocusState.Programmatic);
-                }
+                FocusInboxItem(item);
 
                 break;
             default:
                 InboxTitle.Focus(FocusState.Programmatic);
                 break;
         }
+    }
+
+    private void FocusSelectedInboxItem()
+    {
+        InboxCardViewModel? item = ViewModel.Selection.SingleSelectedItem;
+        if (item is null && ViewModel.Selection.HasSelection)
+        {
+            Guid firstId = ViewModel.Selection.SelectedIds[0];
+            item = ViewModel.Items.FirstOrDefault(card => card.Id == firstId);
+        }
+
+        if (item is null)
+        {
+            InboxGrid.Focus(FocusState.Programmatic);
+            return;
+        }
+
+        FocusInboxItem(item);
+    }
+
+    private void FocusInboxItem(InboxCardViewModel item)
+    {
+        InboxGrid.ScrollIntoView(item);
+        InboxGrid.UpdateLayout();
+        if (InboxGrid.ContainerFromItem(item) is ListViewItem container)
+        {
+            container.Focus(FocusState.Programmatic);
+        }
+        else
+        {
+            // A virtualized row may be realized only after the next layout pass.
+            InboxGrid.Focus(FocusState.Programmatic);
+        }
+    }
+
+    private bool IsFocusWithinInboxList()
+    {
+        if (XamlRoot is null)
+        {
+            return false;
+        }
+
+        DependencyObject? focused = FocusManager.GetFocusedElement(XamlRoot) as DependencyObject;
+        while (focused is not null)
+        {
+            if (ReferenceEquals(focused, InboxGrid))
+            {
+                return true;
+            }
+
+            focused = VisualTreeHelper.GetParent(focused);
+        }
+
+        return false;
     }
 
     private void OnAuthorSelectionChanged(object? sender, EventArgs args)
