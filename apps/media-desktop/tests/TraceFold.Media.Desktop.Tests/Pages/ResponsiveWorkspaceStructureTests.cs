@@ -142,8 +142,13 @@ public sealed class ResponsiveWorkspaceStructureTests
         Assert.Contains("const double InitialWidthDip = 1280", code, StringComparison.Ordinal);
         Assert.Contains("const double InitialHeightDip = 800", code, StringComparison.Ordinal);
         Assert.Contains("WorkspaceLayoutPolicy.PhysicalPixels(", code, StringComparison.Ordinal);
-        Assert.Contains("AppWindow.Resize(", code, StringComparison.Ordinal);
+        Assert.Contains("AppWindow.ResizeClient(", code, StringComparison.Ordinal);
         Assert.Contains("RasterizationScale", code, StringComparison.Ordinal);
+        Assert.Contains("AppWindow.ClientSize", code, StringComparison.Ordinal);
+        Assert.Contains("PreferredMinimumWidth", code, StringComparison.Ordinal);
+        Assert.Contains("PreferredMinimumHeight", code, StringComparison.Ordinal);
+        Assert.Contains("TraceFoldMinViewportWidth", code, StringComparison.Ordinal);
+        Assert.Contains("TraceFoldMinViewportHeight", code, StringComparison.Ordinal);
     }
 
     private static XElement ElementByName(XDocument document, string localName) =>
