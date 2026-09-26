@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using TraceFold.Media.Application.Library;
@@ -46,6 +47,7 @@ public sealed partial class LibraryPage : Page
         _ = args;
         await ViewModel.LoadAsync(CancellationToken.None);
         SynchronizeSortControls();
+        UpdateInspectorButtonVisibility();
     }
 
     private async void OnUnloaded(object sender, RoutedEventArgs args)
@@ -125,8 +127,118 @@ public sealed partial class LibraryPage : Page
         KeyboardAcceleratorInvokedEventArgs args)
     {
         _ = sender;
-        LibraryGrid.SelectedItems.Clear();
+        if (WorkspaceHost.IsDrawerOpen)
+        {
+            WorkspaceHost.CloseDrawer();
+        }
+        else
+        {
+            LibraryGrid.SelectedItems.Clear();
+        }
+
         args.Handled = true;
+    }
+
+    private void OnLibraryContainerContentChanging(
+        ListViewBase sender,
+        ContainerContentChangingEventArgs args)
+    {
+        _ = sender;
+        if (args.Item is LibraryCardViewModel card && args.ItemContainer is not null)
+        {
+            AutomationProperties.SetName(args.ItemContainer, card.AccessibleName);
+        }
+    }
+
+    private void OnInspectorOpenClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        WorkspaceHost.OpenDrawer();
+    }
+
+    private void OnInspectorCloseClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        WorkspaceHost.CloseDrawer();
+    }
+
+    private void OnInspectorDrawerOpened(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (IsLoaded && WorkspaceHost.IsDrawerOpen)
+            {
+                WorkspaceHost.UpdateLayout();
+                LibraryInspectorHeading.Focus(FocusState.Programmatic);
+            }
+        });
+    }
+
+    private void OnInspectorDrawerClosed(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        if (IsLoaded)
+        {
+            FocusSelectedLibraryItem();
+        }
+    }
+
+    private void OnWorkspaceLayoutModeChanged(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        UpdateInspectorButtonVisibility();
+    }
+
+    /// <summary>
+    /// Layout-mode changes only show or hide the compact drawer affordances; they never
+    /// reload, refilter or flush anything.
+    /// </summary>
+    private void UpdateInspectorButtonVisibility()
+    {
+        Visibility visibility = WorkspaceHost.LayoutMode == WorkspaceLayoutMode.Compact
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        LibraryInspectorOpenButton.Visibility = visibility;
+        LibraryInspectorCloseButton.Visibility = visibility;
+    }
+
+    private void FocusSelectedLibraryItem()
+    {
+        LibraryCardViewModel? item = ViewModel.Selection.SingleSelectedItem;
+        if (item is null && ViewModel.Selection.HasSelection)
+        {
+            Guid firstId = ViewModel.Selection.SelectedIds[0];
+            item = ViewModel.Items.FirstOrDefault(card => card.Id == firstId);
+        }
+
+        if (item is null)
+        {
+            LibraryGrid.Focus(FocusState.Programmatic);
+            return;
+        }
+
+        FocusLibraryItem(item);
+    }
+
+    private void FocusLibraryItem(LibraryCardViewModel item)
+    {
+        LibraryGrid.ScrollIntoView(item);
+        LibraryGrid.UpdateLayout();
+        if (LibraryGrid.ContainerFromItem(item) is ListViewItem container)
+        {
+            container.Focus(FocusState.Programmatic);
+        }
+        else
+        {
+            // A virtualized row may be realized only after the next layout pass.
+            LibraryGrid.Focus(FocusState.Programmatic);
+        }
     }
 
     private void OnClearSelectionClick(object sender, RoutedEventArgs args)
