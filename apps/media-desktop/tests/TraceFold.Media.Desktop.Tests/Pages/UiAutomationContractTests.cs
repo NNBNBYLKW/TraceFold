@@ -139,6 +139,19 @@ public sealed class UiAutomationContractTests
             Assert.Matches("[\u4e00-\u9fff]", AutomationName(button)));
     }
 
+    [Theory]
+    [InlineData("InboxPage.xaml")]
+    [InlineData("LibraryPage.xaml")]
+    public void Media_row_binds_its_deterministic_accessible_name(string file)
+    {
+        XElement row = LoadProductXaml(file).Descendants().Single(element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value
+                == "{x:Bind AutomationId}");
+
+        Assert.Equal("{x:Bind AccessibleName, Mode=OneWay}",
+            row.Attribute("AutomationProperties.Name")?.Value);
+    }
+
     /// <summary>
     /// Resolves the effective control behind an automation id and the accessible name that
     /// belongs to it. A taxonomy picker input id lives on the use site and its accessible
