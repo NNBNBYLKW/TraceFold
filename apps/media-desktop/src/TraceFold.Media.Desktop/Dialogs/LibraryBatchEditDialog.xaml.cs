@@ -15,6 +15,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         ViewModel = viewModel;
         InitializeComponent();
+        SizeChanged += OnViewportSizeChanged;
     }
 
     public LibraryBatchEditDialogViewModel ViewModel { get; }
@@ -38,6 +39,8 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        UpdateViewportBounds();
+        MetadataFirstInput.StartBringIntoView();
         MetadataFirstInput.Focus(FocusState.Programmatic);
         try
         {
@@ -384,12 +387,41 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
                 && ViewModel.Naming.PreviewRows.Count > 0)
             {
                 PreviewList.SelectedIndex = 0;
+                PreviewList.StartBringIntoView();
                 PreviewList.Focus(FocusState.Programmatic);
             }
             else
             {
+                DialogStatus.StartBringIntoView();
                 DialogStatus.Focus(FocusState.Programmatic);
             }
+        }
+    }
+
+    private void OnViewportSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        UpdateViewportBounds();
+    }
+
+    private void UpdateViewportBounds()
+    {
+        if (XamlRoot is null)
+        {
+            return;
+        }
+
+        double maxWidth = Math.Max(320, XamlRoot.Size.Width - 112);
+        double maxHeight = Math.Max(240, XamlRoot.Size.Height - 160);
+        if (DialogRoot.MaxWidth != maxWidth)
+        {
+            DialogRoot.MaxWidth = maxWidth;
+        }
+
+        if (DialogRoot.MaxHeight != maxHeight)
+        {
+            DialogRoot.MaxHeight = maxHeight;
         }
     }
 

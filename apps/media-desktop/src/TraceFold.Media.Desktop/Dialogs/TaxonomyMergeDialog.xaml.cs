@@ -14,6 +14,7 @@ public sealed partial class TaxonomyMergeDialog : ContentDialog
         ArgumentNullException.ThrowIfNull(viewModel);
         ViewModel = viewModel;
         InitializeComponent();
+        SizeChanged += OnViewportSizeChanged;
     }
 
     public TaxonomyMergeDialogViewModel ViewModel { get; }
@@ -36,16 +37,19 @@ public sealed partial class TaxonomyMergeDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        UpdateViewportBounds();
         await RunGuardedAsync(async () =>
         {
             await ViewModel.InitializeAsync(_operationToken);
             SynchronizeSelectedTarget();
             if (ViewModel.HasPreselectedTarget)
             {
+                AffectedFilesList.StartBringIntoView();
                 AffectedFilesList.Focus(FocusState.Programmatic);
             }
             else
             {
+                TargetSearchBox.StartBringIntoView();
                 TargetSearchBox.Focus(FocusState.Programmatic);
             }
         });
@@ -104,10 +108,12 @@ public sealed partial class TaxonomyMergeDialog : ContentDialog
                 TaxonomyMaintenanceErrorCodes.NameInvalid
                 or TaxonomyMaintenanceErrorCodes.NameConflict)
             {
+                FinalNameInput.StartBringIntoView();
                 FinalNameInput.Focus(FocusState.Programmatic);
             }
             else
             {
+                TargetResultsList.StartBringIntoView();
                 TargetResultsList.Focus(FocusState.Programmatic);
             }
         });
@@ -119,6 +125,22 @@ public sealed partial class TaxonomyMergeDialog : ContentDialog
         _ = args;
         Result = null;
         Hide();
+    }
+
+    private void OnViewportSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        UpdateViewportBounds();
+    }
+
+    private void UpdateViewportBounds()
+    {
+        if (XamlRoot is null) return;
+        double width = Math.Max(320, XamlRoot.Size.Width - 112);
+        double height = Math.Max(240, XamlRoot.Size.Height - 160);
+        if (DialogRoot.MaxWidth != width) DialogRoot.MaxWidth = width;
+        if (DialogRoot.MaxHeight != height) DialogRoot.MaxHeight = height;
     }
 
     private void SynchronizeSelectedTarget()

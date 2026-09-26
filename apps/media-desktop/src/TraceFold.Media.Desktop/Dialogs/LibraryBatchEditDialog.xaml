@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:dialogs="using:TraceFold.Media.Desktop.Dialogs"
     xmlns:library="using:TraceFold.Media.Application.Library"
-    MinWidth="1080"
+    MinWidth="0"
     AutomationProperties.AutomationId="LibraryBatchEditDialog"
     AutomationProperties.Name="正式文件库批量编辑"
     Closing="OnClosing"
@@ -13,10 +13,52 @@
     Title="批量编辑正式文件">
     <ContentDialog.Resources>
         <x:Double x:Key="ContentDialogMaxWidth">1320</x:Double>
-        <x:Double x:Key="ContentDialogMinWidth">1080</x:Double>
+        <x:Double x:Key="ContentDialogMinWidth">0</x:Double>
     </ContentDialog.Resources>
 
-    <Grid MaxHeight="760" RowDefinitions="Auto,*,Auto,Auto" RowSpacing="12">
+    <Grid x:Name="DialogRoot" RowDefinitions="Auto,*,Auto,Auto" RowSpacing="12">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="DialogLayoutStates">
+                <VisualState x:Name="CompactDialogLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="MetadataModePane.(Grid.Row)" Value="0" />
+                        <Setter Target="MetadataModePane.(Grid.ColumnSpan)" Value="2" />
+                        <Setter Target="MetadataEditorPane.(Grid.Row)" Value="1" />
+                        <Setter Target="MetadataEditorPane.(Grid.Column)" Value="0" />
+                        <Setter Target="MetadataEditorPane.(Grid.ColumnSpan)" Value="2" />
+                        <Setter Target="NamingPresetPane.(Grid.Row)" Value="0" />
+                        <Setter Target="NamingPresetPane.(Grid.ColumnSpan)" Value="3" />
+                        <Setter Target="NamingRulesPane.(Grid.Row)" Value="1" />
+                        <Setter Target="NamingRulesPane.(Grid.Column)" Value="0" />
+                        <Setter Target="NamingRulesPane.(Grid.ColumnSpan)" Value="3" />
+                        <Setter Target="NamingPreviewPane.(Grid.Row)" Value="2" />
+                        <Setter Target="NamingPreviewPane.(Grid.Column)" Value="0" />
+                        <Setter Target="NamingPreviewPane.(Grid.ColumnSpan)" Value="3" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WideDialogLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1280" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="MetadataModePane.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="MetadataEditorPane.(Grid.Row)" Value="0" />
+                        <Setter Target="MetadataEditorPane.(Grid.Column)" Value="1" />
+                        <Setter Target="MetadataEditorPane.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="NamingPresetPane.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="NamingRulesPane.(Grid.Row)" Value="0" />
+                        <Setter Target="NamingRulesPane.(Grid.Column)" Value="1" />
+                        <Setter Target="NamingRulesPane.(Grid.ColumnSpan)" Value="1" />
+                        <Setter Target="NamingPreviewPane.(Grid.Row)" Value="0" />
+                        <Setter Target="NamingPreviewPane.(Grid.Column)" Value="2" />
+                        <Setter Target="NamingPreviewPane.(Grid.ColumnSpan)" Value="1" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="3">
                 <TextBlock
@@ -36,9 +78,12 @@
             </Border>
         </Grid>
 
+        <ScrollViewer
+            x:Name="LibraryBatchEditScrollRoot"
+            Grid.Row="1"
+            VerticalScrollBarVisibility="Auto">
         <TabView
             x:Name="EditorTabs"
-            Grid.Row="1"
             CanDragTabs="False"
             IsAddTabButtonVisible="False"
             SelectionChanged="OnEditorTabSelectionChanged">
@@ -46,8 +91,8 @@
                 AutomationProperties.AutomationId="LibraryBatchMetadataTab"
                 AutomationProperties.Name="批量编辑资料选项卡"
                 Header="资料">
-                <Grid Padding="4,12" ColumnDefinitions="180,*" ColumnSpacing="16">
-                    <StackPanel Spacing="8">
+                <Grid x:Name="MetadataLayoutGrid" Padding="4,12" ColumnDefinitions="180,*" RowDefinitions="Auto,Auto" ColumnSpacing="16" RowSpacing="12">
+                    <StackPanel x:Name="MetadataModePane" Spacing="8">
                         <TextBlock FontWeight="SemiBold" Text="操作方式" />
                         <ListView
                             x:Name="MetadataModeList"
@@ -61,7 +106,7 @@
                         </ListView>
                     </StackPanel>
 
-                    <Grid Grid.Column="1">
+                    <Grid x:Name="MetadataEditorPane" Grid.Column="1">
                         <ScrollViewer
                             x:Name="MetadataAddPanel"
                             VerticalScrollBarVisibility="Auto">
@@ -236,8 +281,9 @@
                 AutomationProperties.AutomationId="LibraryBatchNamingTab"
                 AutomationProperties.Name="批量编辑显示名称选项卡"
                 Header="命名">
-                <Grid Padding="4,12" ColumnDefinitions="240,420,*" ColumnSpacing="14">
+                <Grid x:Name="NamingLayoutGrid" Padding="4,12" ColumnDefinitions="240,420,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
                     <Border
+                        x:Name="NamingPresetPane"
                         Padding="12"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         CornerRadius="8">
@@ -293,11 +339,12 @@
                     </Border>
 
                     <Border
+                        x:Name="NamingRulesPane"
                         Grid.Column="1"
                         Padding="12"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         CornerRadius="8">
-                        <Grid RowDefinitions="Auto,Auto,220,*" RowSpacing="10">
+                        <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                 <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="操作规则" />
                                 <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按顺序执行" />
@@ -317,6 +364,7 @@
                             </Grid>
                             <ListView
                                 x:Name="RuleList"
+                                MinHeight="220"
                                 Grid.Row="2"
                                 AutomationProperties.AutomationId="LibraryNamingRuleList"
                                 AutomationProperties.Name="有序命名规则列表"
@@ -397,6 +445,7 @@
                     </Border>
 
                     <Border
+                        x:Name="NamingPreviewPane"
                         Grid.Column="2"
                         Padding="12"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -436,6 +485,7 @@
                 </Grid>
             </TabViewItem>
         </TabView>
+        </ScrollViewer>
 
         <TextBlock
             x:Name="DialogStatus"
