@@ -15,6 +15,7 @@ using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Ingest;
 using TraceFold.Media.Domain.Processing;
 using TraceFold.Media.Infrastructure;
+using TraceFold.Media.Infrastructure.Persistence;
 
 namespace TraceFold.Media.Desktop.Diagnostics;
 
@@ -92,6 +93,10 @@ public sealed class PackageProbeEnvironment
             {
                 services.AddMediaApplication();
                 services.AddMediaInfrastructure(DataDirectory, MediaToolRootOverride);
+                var connectionTrace = new PackageProbeConnectionTrace();
+                var commandTrace = new PackageProbeCommandTrace();
+                services.ConfigureDbContext<MediaDesktopDbContext>(options =>
+                    options.AddInterceptors(connectionTrace, commandTrace));
                 services.AddSingleton<TimeProvider>(clock);
                 if (faultInjector is not null)
                 {
@@ -482,39 +487,9 @@ public sealed class PackageProbeEnvironment
             return;
         }
 
-        foreach ((string Name, string Suffix) file in new[]
+        foreach (string role in new[] { "main", "wal", "shm" })
         {
-            (Name: "main", Suffix: string.Empty),
-            (Name: "wal", Suffix: "-wal"),
-            (Name: "shm", Suffix: "-shm")
-        })
-        {
-            string path = database + file.Suffix;
-            if (!File.Exists(path))
-            {
-                PackageProbeTrace.Write("dbstate " + phase
-                    + "; file=" + file.Name + "; exists=false");
-                continue;
-            }
-
-            var info = new FileInfo(path);
-            string attributes;
-            try
-            {
-                attributes = File.GetAttributes(path).ToString();
-            }
-            catch (Exception error)
-            {
-                attributes = "unreadable:" + error.GetType().Name;
-            }
-
-            PackageProbeTrace.Write("dbstate " + phase
-                + "; file=" + file.Name
-                + "; exists=true"
-                + "; length=" + info.Length
-                + "; createdUtc=" + info.CreationTimeUtc.ToString("O")
-                + "; writtenUtc=" + info.LastWriteTimeUtc.ToString("O")
-                + "; attributes=" + attributes);
+            PackageProbeTrace.WriteFileState(database, phase, role);
         }
     }
 
