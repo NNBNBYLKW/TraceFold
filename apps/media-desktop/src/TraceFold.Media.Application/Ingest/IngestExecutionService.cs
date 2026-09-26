@@ -482,10 +482,11 @@ public sealed class IngestExecutionService(
         CancellationToken cancellationToken)
     {
         logger.LogError(
-            error,
-            "IngestExecutionFailed OperationId={OperationId} ErrorCode={ErrorCode}",
+            "IngestExecutionFailed OperationId={OperationId} ErrorCode={ErrorCode} ExceptionType={ExceptionType} HResult={HResult}",
             operation.Id,
-            errorCode);
+            errorCode,
+            error.GetType().FullName,
+            error.HResult);
         await store.FailAsync(
             operation.Id,
             errorCode,

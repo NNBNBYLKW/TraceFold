@@ -97,9 +97,9 @@ public class IngestService(
             {
                 throw;
             }
-            catch (OperationCanceledException error)
+            catch (OperationCanceledException)
             {
-                logger.LogInformation(error, "IngestStopped");
+                logger.LogInformation("IngestStopped");
                 return Result(
                     IngestOutcome.ShuttingDown,
                     "ingest.shutting_down");
@@ -107,10 +107,11 @@ public class IngestService(
             catch (Exception error)
             {
                 logger.LogError(
-                    error,
-                    "IngestFailed InboxItemId={InboxItemId} ErrorCode={ErrorCode}",
+                    "IngestFailed InboxItemId={InboxItemId} ErrorCode={ErrorCode} ExceptionType={ExceptionType} HResult={HResult}",
                     inboxItemId,
-                    "ingest.commit_failed");
+                    "ingest.commit_failed",
+                    error.GetType().FullName,
+                    error.HResult);
                 return Result(
                     IngestOutcome.Failed,
                     "ingest.commit_failed");

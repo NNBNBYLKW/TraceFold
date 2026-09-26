@@ -113,7 +113,7 @@ public static class PackageProbeTrace
 
     /// <summary>
     /// Describes a live SQLite connection: requested mode, pooling, native read-only
-    /// state and the state of its database files. The native check is a read-only query.
+    /// state and the state of its database files. The native check and PRAGMA are read-only queries.
     /// </summary>
     public static void WriteConnectionState(string label, SqliteConnection connection)
     {
@@ -133,12 +133,28 @@ public static class PackageProbeTrace
                     + error.GetType().Name);
             }
 
+            string queryOnly = "not_observed";
+            if (label == "command_failed")
+            {
+                try
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "PRAGMA query_only";
+                    queryOnly = command.ExecuteScalar()?.ToString() ?? "null";
+                }
+                catch (Exception error)
+                {
+                    queryOnly = "unavailable:" + error.GetType().Name;
+                }
+            }
+
             Write("connection " + label
                 + "; db=" + options.DataSource
                 + "; requested=" + options.Mode
                 + "; pooling=" + options.Pooling
                 + "; state=" + connection.State
-                + "; nativeReadOnly=" + nativeReadOnly);
+                + "; nativeReadOnly=" + nativeReadOnly
+                + "; queryOnly=" + queryOnly);
             foreach (string role in new[] { "main", "wal", "shm" })
             {
                 WriteFileState(options.DataSource, label, role);
