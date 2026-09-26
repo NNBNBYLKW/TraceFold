@@ -12,10 +12,12 @@ internal sealed class PackageProbeTraceCapture : TraceListener
 {
     private static readonly AsyncLocal<PackageProbeTraceCapture?> Current = new();
     private static readonly object RegistrationSync = new();
+    private readonly IDisposable captureScope;
     private readonly List<string> facts = [];
 
     public PackageProbeTraceCapture()
     {
+        captureScope = PackageProbeTrace.EnableCapture();
         lock (RegistrationSync)
         {
             Current.Value = this;
@@ -66,6 +68,8 @@ internal sealed class PackageProbeTraceCapture : TraceListener
             {
                 Current.Value = null;
             }
+
+            captureScope.Dispose();
         }
 
         base.Dispose(disposing);

@@ -178,6 +178,11 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
         }
         catch (ProbeFailureException error)
         {
+            if (host is not null)
+            {
+                PackageProbeEnvironment.WriteDatabaseFileState(host, "first_error");
+            }
+
             await WriteFailureAsync(environment, registeredReplace, contentKeepBoth,
                 unmanagedReplace, reopened, processedMedia, toolPath, error.ErrorCode);
             return 1;
@@ -185,6 +190,11 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
         catch (Exception error)
         {
             PackageProbeTrace.WriteException("stage4", error);
+            if (host is not null)
+            {
+                PackageProbeEnvironment.WriteDatabaseFileState(host, "first_error");
+            }
+
             await WriteFailureAsync(environment, registeredReplace, contentKeepBoth,
                 unmanagedReplace, reopened, processedMedia, toolPath, "probe.unexpected_failure");
             return 1;

@@ -31,7 +31,7 @@ internal sealed class PackageProbeLogProvider : ILoggerProvider
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            if (logLevel < LogLevel.Error)
+            if (logLevel < LogLevel.Error || !PackageProbeTrace.CaptureEnabled)
             {
                 return;
             }

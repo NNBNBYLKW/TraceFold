@@ -121,10 +121,12 @@ public sealed class PackageProbeEnvironment
 
         await host.Services.GetRequiredService<IStartupCoordinator>()
             .InitializeAsync(cancellationToken);
+        WriteDatabaseFileState(host, "startup");
     }
 
     public static async Task StopHostAsync(IHost host)
     {
+        WriteDatabaseFileState(host, "shutdown_before");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try
         {
@@ -133,6 +135,8 @@ public sealed class PackageProbeEnvironment
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
         }
+
+        WriteDatabaseFileState(host, "shutdown_after");
     }
 
     public async Task<Guid> SeedAssetAsync(
@@ -450,6 +454,68 @@ public sealed class PackageProbeEnvironment
                 Stage4PackageProbeOptions.CrashManifestFilename,
                 .. RuntimeDirectories
             ]);
+    }
+
+    /// <summary>
+    /// Records the probe's own database files at a lifecycle point. It only reads file
+    /// metadata and never opens a connection, so it cannot move the WAL state it
+    /// observes.
+    /// </summary>
+    internal static void WriteDatabaseFileState(IHost host, string phase)
+    {
+        if (!PackageProbeTrace.CaptureEnabled)
+        {
+            return;
+        }
+
+        string database;
+        try
+        {
+            database = host.Services.GetRequiredService<IAppDataPathProvider>()
+                .GetPaths()
+                .DatabasePath;
+        }
+        catch (Exception error)
+        {
+            PackageProbeTrace.Write("dbstate " + phase
+                + "; unavailable=" + error.GetType().Name);
+            return;
+        }
+
+        foreach ((string Name, string Suffix) file in new[]
+        {
+            (Name: "main", Suffix: string.Empty),
+            (Name: "wal", Suffix: "-wal"),
+            (Name: "shm", Suffix: "-shm")
+        })
+        {
+            string path = database + file.Suffix;
+            if (!File.Exists(path))
+            {
+                PackageProbeTrace.Write("dbstate " + phase
+                    + "; file=" + file.Name + "; exists=false");
+                continue;
+            }
+
+            var info = new FileInfo(path);
+            string attributes;
+            try
+            {
+                attributes = File.GetAttributes(path).ToString();
+            }
+            catch (Exception error)
+            {
+                attributes = "unreadable:" + error.GetType().Name;
+            }
+
+            PackageProbeTrace.Write("dbstate " + phase
+                + "; file=" + file.Name
+                + "; exists=true"
+                + "; length=" + info.Length
+                + "; createdUtc=" + info.CreationTimeUtc.ToString("O")
+                + "; writtenUtc=" + info.LastWriteTimeUtc.ToString("O")
+                + "; attributes=" + attributes);
+        }
     }
 
     internal static void Require(bool condition, string errorCode)

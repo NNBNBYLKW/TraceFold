@@ -184,6 +184,11 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
         }
         catch (ProbeFailureException error)
         {
+            if (host is not null)
+            {
+                PackageProbeEnvironment.WriteDatabaseFileState(host, "first_error");
+            }
+
             await WriteFailureAsync(environment, atomicMetadata, genericProcessingQueued,
                 processingCompleted, completedIngestCount, conflictCount,
                 conflictSourceRetained, internalStorageClean, error.ErrorCode);
@@ -192,6 +197,11 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
         catch (Exception error)
         {
             PackageProbeTrace.WriteException("stage5a", error);
+            if (host is not null)
+            {
+                PackageProbeEnvironment.WriteDatabaseFileState(host, "first_error");
+            }
+
             await WriteFailureAsync(environment, atomicMetadata, genericProcessingQueued,
                 processingCompleted, completedIngestCount, conflictCount,
                 conflictSourceRetained, internalStorageClean, "probe.unexpected_failure");
