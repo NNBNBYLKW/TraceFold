@@ -47,7 +47,7 @@
             <Grid
                 Grid.Row="1"
                 Margin="24,8,20,10"
-                ColumnDefinitions="*,150,112,Auto"
+                ColumnDefinitions="*,150,112,Auto,Auto"
                 ColumnSpacing="8">
                 <AutoSuggestBox
                     AutomationProperties.AutomationId="LibrarySearchBox"
@@ -268,6 +268,15 @@
                         </Flyout>
                     </Button.Flyout>
                 </Button>
+                <Button
+                    x:Name="LibraryInspectorOpenButton"
+                    Grid.Column="4"
+                    AutomationProperties.AutomationId="LibraryInspectorOpenButton"
+                    AutomationProperties.Name="打开正式文件资料面板"
+                    Click="OnInspectorOpenClick"
+                    Content="查看资料"
+                    IsEnabled="{x:Bind ViewModel.Selection.HasSelection, Mode=OneWay}"
+                    Visibility="Collapsed" />
             </Grid>
 
             <Grid
@@ -300,15 +309,6 @@
                     AutomationProperties.Name="清除全部正式文件库筛选条件"
                     Click="OnClearFiltersClick"
                     Content="全部清除" />
-                <Button
-                    x:Name="LibraryInspectorOpenButton"
-                    Grid.Column="2"
-                    AutomationProperties.AutomationId="LibraryInspectorOpenButton"
-                    AutomationProperties.Name="打开正式文件资料面板"
-                    Click="OnInspectorOpenClick"
-                    Content="查看资料"
-                    IsEnabled="{x:Bind ViewModel.Selection.HasSelection, Mode=OneWay}"
-                    Visibility="Collapsed" />
             </Grid>
 
             <Border
@@ -432,6 +432,9 @@
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1,0,0,0">
+            <Border.KeyboardAccelerators>
+                <KeyboardAccelerator Key="Escape" Invoked="OnClearSelectionAccelerator" />
+            </Border.KeyboardAccelerators>
             <ScrollViewer>
                 <Grid RowDefinitions="Auto,*">
                     <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="8">
@@ -524,6 +527,7 @@
                     </StackPanel>
 
                     <StackPanel
+                        Grid.Row="1"
                         AutomationProperties.AutomationId="LibrarySelectionSummary"
                         AutomationProperties.Name="正式文件多选摘要"
                         Spacing="16"

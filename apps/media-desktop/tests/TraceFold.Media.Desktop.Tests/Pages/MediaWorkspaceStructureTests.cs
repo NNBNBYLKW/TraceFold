@@ -103,11 +103,27 @@ public sealed class MediaWorkspaceStructureTests
         Assert.DoesNotContain(heading.Ancestors(), element =>
             ((string?)element.Attribute("Visibility"))?.Contains(
                 "SelectionVisibility", StringComparison.Ordinal) == true);
+        XElement openButton = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibraryInspectorOpenButton");
+        Assert.DoesNotContain(openButton.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "ActiveFiltersVisibility", StringComparison.Ordinal) == true);
+        Assert.Equal("*,150,112,Auto,Auto", (string?)openButton.Parent?.Attribute("ColumnDefinitions"));
+        Assert.Equal("4", (string?)openButton.Attribute("Grid.Column"));
+        XElement summary = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibrarySelectionSummary");
+        Assert.Equal("1", (string?)summary.Attribute("Grid.Row"));
+        XElement inspector = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibraryInspectorPane");
+        Assert.Contains(inspector.Descendants(), element =>
+            element.Name.LocalName == "KeyboardAccelerator"
+            && (string?)element.Attribute("Key") == "Escape");
 
         Assert.Contains("Key=\"Escape\"", xaml, StringComparison.Ordinal);
         string code = File.ReadAllText(DesktopSource("Pages", "LibraryPage.xaml.cs"));
         Assert.Contains("WorkspaceHost.CloseDrawer()", code, StringComparison.Ordinal);
         Assert.Contains("FocusSelectedLibraryItem", code, StringComparison.Ordinal);
+        Assert.Contains("IsFocusWithinLibraryList", code, StringComparison.Ordinal);
         Assert.Contains("AutomationProperties.SetName(args.ItemContainer, card.AccessibleName)",
             code, StringComparison.Ordinal);
         Assert.DoesNotContain("GridViewItem", code, StringComparison.Ordinal);

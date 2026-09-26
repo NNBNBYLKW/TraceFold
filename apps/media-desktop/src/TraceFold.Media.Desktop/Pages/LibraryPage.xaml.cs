@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using TraceFold.Media.Application.Library;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
@@ -14,6 +15,7 @@ public sealed partial class LibraryPage : Page
     private bool _synchronizingPickers;
     private bool _synchronizingGridSelection;
     private bool _synchronizingSortControls;
+    private bool _restoreListFocusAfterRefresh;
 
     public LibraryPage(
         LibraryViewModel viewModel,
@@ -82,6 +84,11 @@ public sealed partial class LibraryPage : Page
         {
             await ViewModel.SelectAsync(null, CancellationToken.None);
         }
+
+        if (!ViewModel.Selection.HasSelection)
+        {
+            WorkspaceHost.CloseDrawer();
+        }
     }
 
     private void OnGridItemsReplacing(object? sender, EventArgs args)
@@ -89,6 +96,7 @@ public sealed partial class LibraryPage : Page
         _ = sender;
         _ = args;
         _synchronizingGridSelection = true;
+        _restoreListFocusAfterRefresh = IsFocusWithinLibraryList();
     }
 
     private void OnGridItemsReplaced(object? sender, EventArgs args)
@@ -110,6 +118,18 @@ public sealed partial class LibraryPage : Page
         finally
         {
             _synchronizingGridSelection = false;
+        }
+
+        if (_restoreListFocusAfterRefresh)
+        {
+            _restoreListFocusAfterRefresh = false;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (IsLoaded)
+                {
+                    FocusSelectedLibraryItem();
+                }
+            });
         }
     }
 
@@ -239,6 +259,27 @@ public sealed partial class LibraryPage : Page
             // A virtualized row may be realized only after the next layout pass.
             LibraryGrid.Focus(FocusState.Programmatic);
         }
+    }
+
+    private bool IsFocusWithinLibraryList()
+    {
+        if (XamlRoot is null)
+        {
+            return false;
+        }
+
+        DependencyObject? focused = FocusManager.GetFocusedElement(XamlRoot) as DependencyObject;
+        while (focused is not null)
+        {
+            if (ReferenceEquals(focused, LibraryGrid))
+            {
+                return true;
+            }
+
+            focused = VisualTreeHelper.GetParent(focused);
+        }
+
+        return false;
     }
 
     private void OnClearSelectionClick(object sender, RoutedEventArgs args)
