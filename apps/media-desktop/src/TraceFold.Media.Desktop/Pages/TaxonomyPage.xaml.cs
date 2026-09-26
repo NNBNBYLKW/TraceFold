@@ -33,6 +33,7 @@ public sealed partial class TaxonomyPage : Page
     {
         _ = sender;
         _ = args;
+        UpdateInspectorButtonVisibility();
         _pageLifetime?.Dispose();
         _pageLifetime = new CancellationTokenSource();
         await RunGuardedAsync(
@@ -112,6 +113,10 @@ public sealed partial class TaxonomyPage : Page
 
         ViewModel.ReplaceSelection(
             TermList.SelectedItems.Cast<TaxonomyManagementTermDto>());
+        if (!ViewModel.Selection.HasSelection)
+        {
+            WorkspaceHost.CloseDrawer();
+        }
     }
 
     private void OnTermsReplacing(object? sender, EventArgs args)

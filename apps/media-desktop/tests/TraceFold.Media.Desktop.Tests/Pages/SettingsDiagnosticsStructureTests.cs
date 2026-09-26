@@ -24,9 +24,22 @@ public sealed class SettingsDiagnosticsStructureTests
         Assert.Contains("AdaptiveTrigger", xaml, StringComparison.Ordinal);
         Assert.Contains("MinWindowWidth=\"1280\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("MinWidth=\"420\"", xaml, StringComparison.Ordinal);
+        XElement rootGrid = Assert.Single(document.Root!.Elements(), element =>
+            element.Name.LocalName == "Grid");
+        Assert.Contains(rootGrid.Elements(), element =>
+            element.Name.LocalName == "VisualStateManager.VisualStateGroups");
+        XElement compact = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "VisualState"
+            && (string?)element.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName == "Name") == "CompactFolderRows");
+        Assert.Contains(compact.Descendants(), element =>
+            element.Name.LocalName == "AdaptiveTrigger"
+            && (string?)element.Attribute("MinWindowWidth") == "0");
+        XElement form = ElementByAutomationId(document, "SettingsFolderForm");
+        Assert.Equal("Stretch", (string?)form.Attribute("HorizontalAlignment"));
 
         AssertChineseAccessibleName(ElementByAutomationId(document, "SettingsStatusMessage"));
-        AssertChineseAccessibleName(ElementByAutomationId(document, "SettingsFolderForm"));
+        AssertChineseAccessibleName(form);
 
         Assert.Single(document.Descendants(), element => element.Name.LocalName == "TabView");
         Assert.Equal(2, document.Descendants()

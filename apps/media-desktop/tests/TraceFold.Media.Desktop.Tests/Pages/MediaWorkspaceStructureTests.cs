@@ -100,6 +100,11 @@ public sealed class MediaWorkspaceStructureTests
         Assert.Contains("FocusSelectedTaxonomyItem", code, StringComparison.Ordinal);
         Assert.Contains("ListViewItem", code, StringComparison.Ordinal);
         Assert.DoesNotContain("GridViewItem", code, StringComparison.Ordinal);
+        int loadedStart = code.IndexOf("private async void OnLoaded", StringComparison.Ordinal);
+        int unloadedStart = code.IndexOf("private void OnUnloaded", StringComparison.Ordinal);
+        Assert.True(loadedStart >= 0 && unloadedStart > loadedStart);
+        Assert.Contains("UpdateInspectorButtonVisibility()",
+            code[loadedStart..unloadedStart], StringComparison.Ordinal);
     }
 
     [Fact]
