@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using TraceFold.Media.Desktop.Controls;
 using Microsoft.UI.Xaml.Input;
 using TraceFold.Media.Application.Metadata;
 using TraceFold.Media.Domain.Metadata;
@@ -156,8 +157,103 @@ public sealed partial class TaxonomyPage : Page
         KeyboardAcceleratorInvokedEventArgs args)
     {
         _ = sender;
-        TermList.SelectedItems.Clear();
+        if (WorkspaceHost.IsDrawerOpen)
+        {
+            WorkspaceHost.CloseDrawer();
+        }
+        else
+        {
+            TermList.SelectedItems.Clear();
+        }
+
         args.Handled = true;
+    }
+
+    private void OnInspectorOpenClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        WorkspaceHost.OpenDrawer();
+    }
+
+    private void OnInspectorCloseClick(object sender, RoutedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        WorkspaceHost.CloseDrawer();
+    }
+
+    private void OnInspectorDrawerOpened(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (IsLoaded && WorkspaceHost.IsDrawerOpen)
+            {
+                WorkspaceHost.UpdateLayout();
+                TaxonomyInspectorHeading.Focus(FocusState.Programmatic);
+            }
+        });
+    }
+
+    private void OnInspectorDrawerClosed(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        if (IsLoaded)
+        {
+            FocusSelectedTaxonomyItem();
+        }
+    }
+
+    private void OnWorkspaceLayoutModeChanged(object? sender, EventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        UpdateInspectorButtonVisibility();
+    }
+
+    /// <summary>
+    /// Layout-mode changes only show or hide the compact drawer affordances; they never
+    /// reload, refilter, run diagnostics or write anything.
+    /// </summary>
+    private void UpdateInspectorButtonVisibility()
+    {
+        Visibility visibility = WorkspaceHost.LayoutMode == WorkspaceLayoutMode.Compact
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        TaxonomyInspectorOpenButton.Visibility = visibility;
+        TaxonomyInspectorCloseButton.Visibility = visibility;
+    }
+
+    private void FocusSelectedTaxonomyItem()
+    {
+        TaxonomyManagementTermDto? term = ViewModel.Selection.SingleSelectedTerm;
+        if (term is null && ViewModel.Selection.HasSelection)
+        {
+            Guid firstId = ViewModel.Selection.SelectedIds[0];
+            term = TermList.Items.OfType<TaxonomyManagementTermDto>()
+                .FirstOrDefault(candidate => candidate.Id == firstId);
+        }
+
+        if (term is null)
+        {
+            TermList.Focus(FocusState.Programmatic);
+            return;
+        }
+
+        TermList.ScrollIntoView(term);
+        TermList.UpdateLayout();
+        if (TermList.ContainerFromItem(term) is ListViewItem container)
+        {
+            container.Focus(FocusState.Programmatic);
+        }
+        else
+        {
+            // A virtualized row may be realized only after the next layout pass.
+            TermList.Focus(FocusState.Programmatic);
+        }
     }
 
     private async void OnRefreshClicked(object sender, RoutedEventArgs args)

@@ -13,6 +13,8 @@ public sealed class TaxonomySelectionViewModel : ObservableObject
 
     public int SelectedCount => _selected.Count;
 
+    public bool HasSelection => _selected.Count > 0;
+
     public bool IsSingleSelection => _selected.Count == 1;
 
     public bool IsMultipleSelection => _selected.Count >= 2;
@@ -95,6 +97,7 @@ public sealed class TaxonomySelectionViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(SelectedIds));
         OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(IsSingleSelection));
         OnPropertyChanged(nameof(IsMultipleSelection));
         OnPropertyChanged(nameof(SingleSelectedTerm));

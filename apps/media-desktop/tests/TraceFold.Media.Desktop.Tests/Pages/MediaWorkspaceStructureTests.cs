@@ -60,6 +60,49 @@ public sealed class MediaWorkspaceStructureTests
     }
 
     [Fact]
+    public void Taxonomy_uses_one_responsive_inspector_and_compact_buttons()
+    {
+        string xaml = File.ReadAllText(DesktopSource("Pages", "TaxonomyPage.xaml"));
+        XDocument document = XDocument.Parse(xaml);
+        XElement host = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost");
+        Assert.Equal("WorkspaceHost", (string?)host.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName == "Name"));
+        Assert.DoesNotContain("ColumnDefinitions=\"176,12,*,12,320\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("ColumnDefinitions=\"176,12,*\"", xaml, StringComparison.Ordinal);
+
+        foreach (string id in new[]
+        {
+            "TaxonomyInspectorOpenButton", "TaxonomyInspectorCloseButton", "TaxonomyInspectorHeading"
+        })
+        {
+            AssertElementHasAccessibleName(xaml, id);
+        }
+
+        XElement open = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "TaxonomyInspectorOpenButton");
+        Assert.DoesNotContain(open.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "InspectorVisibility", StringComparison.Ordinal) == true);
+        Assert.DoesNotContain(open.Ancestors(), element =>
+            ((string?)element.Attribute("Body"))?.Contains(
+                "SingleInspectorVisibility", StringComparison.Ordinal) == true);
+
+        XElement heading = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "TaxonomyInspectorHeading");
+        Assert.DoesNotContain(heading.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "InspectorVisibility", StringComparison.Ordinal) == true);
+
+        Assert.Contains("Key=\"Escape\"", xaml, StringComparison.Ordinal);
+        string code = File.ReadAllText(DesktopSource("Pages", "TaxonomyPage.xaml.cs"));
+        Assert.Contains("WorkspaceHost.CloseDrawer()", code, StringComparison.Ordinal);
+        Assert.Contains("FocusSelectedTaxonomyItem", code, StringComparison.Ordinal);
+        Assert.Contains("ListViewItem", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("GridViewItem", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Library_uses_one_responsive_inspector_and_fixed_height_list_rows()
     {
         string xaml = File.ReadAllText(DesktopSource("Pages", "LibraryPage.xaml"));

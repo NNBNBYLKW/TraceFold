@@ -20,7 +20,65 @@
                 IsClosable="False"
                 VerticalContentAlignment="Stretch">
                 <ScrollViewer>
-                    <StackPanel MaxWidth="900" Padding="32" HorizontalAlignment="Left" Spacing="24">
+                    <StackPanel
+                        x:Name="SettingsFolderForm"
+                        AutomationProperties.AutomationId="SettingsFolderForm"
+                        AutomationProperties.Name="文件夹设置表单"
+                        MaxWidth="900"
+                        Padding="{StaticResource TraceFoldPagePadding}"
+                        HorizontalAlignment="Left"
+                        Spacing="24">
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="SettingsFolderFormLayout">
+                                <VisualState x:Name="CompactFolderRows">
+                                    <VisualState.Setters>
+                                        <Setter Target="InboxFolderPath.(Grid.Row)" Value="1" />
+                                        <Setter Target="InboxFolderPath.(Grid.Column)" Value="0" />
+                                        <Setter Target="InboxFolderPath.(Grid.ColumnSpan)" Value="3" />
+                                        <Setter Target="PickInboxFolderButton.(Grid.Row)" Value="2" />
+                                        <Setter Target="PickInboxFolderButton.(Grid.Column)" Value="0" />
+                                        <Setter Target="PickInboxFolderButton.(Grid.ColumnSpan)" Value="3" />
+                                        <Setter Target="LibraryFolderPath.(Grid.Row)" Value="1" />
+                                        <Setter Target="LibraryFolderPath.(Grid.Column)" Value="0" />
+                                        <Setter Target="LibraryFolderPath.(Grid.ColumnSpan)" Value="3" />
+                                        <Setter Target="PickLibraryFolderButton.(Grid.Row)" Value="2" />
+                                        <Setter Target="PickLibraryFolderButton.(Grid.Column)" Value="0" />
+                                        <Setter Target="PickLibraryFolderButton.(Grid.ColumnSpan)" Value="3" />
+                                        <Setter Target="WorkFolderPath.(Grid.Row)" Value="1" />
+                                        <Setter Target="WorkFolderPath.(Grid.Column)" Value="0" />
+                                        <Setter Target="WorkFolderPath.(Grid.ColumnSpan)" Value="3" />
+                                        <Setter Target="PickWorkFolderButton.(Grid.Row)" Value="2" />
+                                        <Setter Target="PickWorkFolderButton.(Grid.Column)" Value="0" />
+                                        <Setter Target="PickWorkFolderButton.(Grid.ColumnSpan)" Value="3" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="WideFolderRows">
+                                    <VisualState.StateTriggers>
+                                        <AdaptiveTrigger MinWindowWidth="1280" />
+                                    </VisualState.StateTriggers>
+                                    <VisualState.Setters>
+                                        <Setter Target="InboxFolderPath.(Grid.Row)" Value="0" />
+                                        <Setter Target="InboxFolderPath.(Grid.Column)" Value="1" />
+                                        <Setter Target="InboxFolderPath.(Grid.ColumnSpan)" Value="1" />
+                                        <Setter Target="PickInboxFolderButton.(Grid.Row)" Value="0" />
+                                        <Setter Target="PickInboxFolderButton.(Grid.Column)" Value="2" />
+                                        <Setter Target="PickInboxFolderButton.(Grid.ColumnSpan)" Value="1" />
+                                        <Setter Target="LibraryFolderPath.(Grid.Row)" Value="0" />
+                                        <Setter Target="LibraryFolderPath.(Grid.Column)" Value="1" />
+                                        <Setter Target="LibraryFolderPath.(Grid.ColumnSpan)" Value="1" />
+                                        <Setter Target="PickLibraryFolderButton.(Grid.Row)" Value="0" />
+                                        <Setter Target="PickLibraryFolderButton.(Grid.Column)" Value="2" />
+                                        <Setter Target="PickLibraryFolderButton.(Grid.ColumnSpan)" Value="1" />
+                                        <Setter Target="WorkFolderPath.(Grid.Row)" Value="0" />
+                                        <Setter Target="WorkFolderPath.(Grid.Column)" Value="1" />
+                                        <Setter Target="WorkFolderPath.(Grid.ColumnSpan)" Value="1" />
+                                        <Setter Target="PickWorkFolderButton.(Grid.Row)" Value="0" />
+                                        <Setter Target="PickWorkFolderButton.(Grid.Column)" Value="2" />
+                                        <Setter Target="PickWorkFolderButton.(Grid.ColumnSpan)" Value="1" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
                         <StackPanel Spacing="6">
                             <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="文件夹设置" />
                             <TextBlock
@@ -29,51 +87,57 @@
                                 TextWrapping="Wrap" />
                         </StackPanel>
 
-                        <Grid ColumnDefinitions="140,*,Auto" ColumnSpacing="12">
+                        <Grid ColumnDefinitions="140,*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12">
                             <TextBlock VerticalAlignment="Center" Text="待入库目录" />
                             <TextBox
                                 x:Name="InboxFolderPath"
                                 Grid.Column="1"
-                                MinWidth="420"
+                                MinWidth="0"
+                                HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="InboxFolderPath"
                                 IsReadOnly="True"
                                 PlaceholderText="请选择待入库目录"
                                 Text="{x:Bind ViewModel.InboxDirectory, Mode=OneWay}" />
                             <Button
+                                x:Name="PickInboxFolderButton"
                                 Grid.Column="2"
                                 AutomationProperties.AutomationId="PickInboxFolder"
                                 Command="{x:Bind ViewModel.ChooseInboxCommand}"
                                 Content="选择…" />
                         </Grid>
 
-                        <Grid ColumnDefinitions="140,*,Auto" ColumnSpacing="12">
+                        <Grid ColumnDefinitions="140,*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12">
                             <TextBlock VerticalAlignment="Center" Text="正式文件库" />
                             <TextBox
                                 x:Name="LibraryFolderPath"
                                 Grid.Column="1"
-                                MinWidth="420"
+                                MinWidth="0"
+                                HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="LibraryFolderPath"
                                 IsReadOnly="True"
                                 PlaceholderText="请选择正式文件库目录"
                                 Text="{x:Bind ViewModel.LibraryDirectory, Mode=OneWay}" />
                             <Button
+                                x:Name="PickLibraryFolderButton"
                                 Grid.Column="2"
                                 AutomationProperties.AutomationId="PickLibraryFolder"
                                 Command="{x:Bind ViewModel.ChooseLibraryCommand}"
                                 Content="选择…" />
                         </Grid>
 
-                        <Grid ColumnDefinitions="140,*,Auto" ColumnSpacing="12">
+                        <Grid ColumnDefinitions="140,*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12">
                             <TextBlock VerticalAlignment="Center" Text="工作目录" />
                             <TextBox
                                 x:Name="WorkFolderPath"
                                 Grid.Column="1"
-                                MinWidth="420"
+                                MinWidth="0"
+                                HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="WorkFolderPath"
                                 IsReadOnly="True"
                                 PlaceholderText="请选择前置处理工作目录"
                                 Text="{x:Bind ViewModel.WorkDirectory, Mode=OneWay}" />
                             <Button
+                                x:Name="PickWorkFolderButton"
                                 Grid.Column="2"
                                 AutomationProperties.AutomationId="PickWorkFolder"
                                 Command="{x:Bind ViewModel.ChooseWorkCommand}"

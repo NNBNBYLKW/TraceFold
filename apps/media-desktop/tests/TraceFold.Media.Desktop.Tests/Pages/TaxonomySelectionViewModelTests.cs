@@ -8,6 +8,26 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 public sealed class TaxonomySelectionViewModelTests
 {
     [Fact]
+    public void Taxonomy_selection_reports_has_selection()
+    {
+        TaxonomyManagementTermDto term = Term("作者甲");
+        var selection = new TaxonomySelectionViewModel();
+        List<string?> changed = [];
+        selection.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.False(selection.HasSelection);
+
+        selection.ReplaceFromList([term], [term]);
+
+        Assert.True(selection.HasSelection);
+        Assert.Contains(nameof(TaxonomySelectionViewModel.HasSelection), changed);
+
+        selection.Clear();
+
+        Assert.False(selection.HasSelection);
+    }
+
+    [Fact]
     public void Reconcile_preserves_ids_in_new_query_order()
     {
         TaxonomyManagementTermDto first = Term("B");
