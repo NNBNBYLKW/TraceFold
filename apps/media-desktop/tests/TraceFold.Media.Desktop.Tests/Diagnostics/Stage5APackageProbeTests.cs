@@ -141,6 +141,7 @@ public sealed class Stage5APackageProbeTests
     [Fact]
     public async Task Stage5A_scenario_completes_metadata_processing_and_partial_ingest()
     {
+        using var trace = new PackageProbeTraceCapture();
         using OwnedProbeRoot root = OwnedProbeRoot.CreateWithFixtures(RootPrefix);
         PackageProbeRequest request = PackageProbeRequests.Stage5ABatch(root);
 
@@ -150,6 +151,7 @@ public sealed class Stage5APackageProbeTests
 
         Assert.True(exitCode == 0,
             "Probe failed with " + result.RootElement.GetProperty("ErrorCode").GetString() + "."
+            + Environment.NewLine + trace.Summary
             + Environment.NewLine + result.RootElement.GetRawText());
         Assert.True(result.RootElement.GetProperty("Succeeded").GetBoolean(),
             result.RootElement.GetRawText());

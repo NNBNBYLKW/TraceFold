@@ -55,7 +55,7 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
                 ";",
                 new[] { photo, photoCopy, ordinaryVideo, pairedVideo }
                     .Select((card, ordinal) => ordinal + ":" + card.MediaKind + ":" + card.State));
-            PackageProbeEnvironment.RequireStep("batch_scan", scanDetail,
+            PackageProbeEnvironment.RequireStep("probe.batch_scan_invalid", scanDetail,
                 ("count", cards.Count == 4),
                 ("photo_kind", photo.MediaKind == MediaKind.Image),
                 ("photo_copy_kind", photoCopy.MediaKind == MediaKind.Image),
@@ -123,7 +123,7 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
                     ",",
                     ingest.Items.Select(item =>
                         item.Ordinal + ":" + item.Outcome + ":" + item.ErrorCode));
-            PackageProbeEnvironment.RequireStep("batch_ingest", ingestDetail,
+            PackageProbeEnvironment.RequireStep("probe.batch_ingest_outcomes_invalid", ingestDetail,
                 ("not_stopped", !ingest.StoppedByUser),
                 ("count", ingest.Items.Count == 4),
                 ("ordinal0", ingest.Items.Count > 0
@@ -143,7 +143,7 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
                 Path.Combine(environment.InboxDirectory, VideoFixture));
             bool audioSourceRemoved = !File.Exists(
                 Path.Combine(environment.InboxDirectory, AudioFixture));
-            PackageProbeEnvironment.RequireStep("batch_source_cleanup",
+            PackageProbeEnvironment.RequireStep("probe.batch_source_cleanup_invalid",
                 "conflict_source=" + conflictSourceRetained
                     + ";video_removed=" + videoSourceRemoved
                     + ";audio_removed=" + audioSourceRemoved,
@@ -155,7 +155,7 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
                 .SearchAsync(LibraryQuery.Default, cancellationToken);
             int libraryImageCount = assets.Count(asset => asset.MediaKind == MediaKind.Image);
             int libraryVideoCount = assets.Count(asset => asset.MediaKind == MediaKind.Video);
-            PackageProbeEnvironment.RequireStep("batch_library",
+            PackageProbeEnvironment.RequireStep("probe.batch_library_invalid",
                 "count=" + assets.Count
                     + ";images=" + libraryImageCount
                     + ";videos=" + libraryVideoCount,
@@ -189,8 +189,9 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
                 conflictSourceRetained, internalStorageClean, error.ErrorCode);
             return 1;
         }
-        catch
+        catch (Exception error)
         {
+            PackageProbeTrace.WriteException("stage5a", error);
             await WriteFailureAsync(environment, atomicMetadata, genericProcessingQueued,
                 processingCompleted, completedIngestCount, conflictCount,
                 conflictSourceRetained, internalStorageClean, "probe.unexpected_failure");

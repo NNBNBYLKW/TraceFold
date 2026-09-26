@@ -283,6 +283,7 @@ public sealed class Stage4PackageProbeOptionsTests
     [Fact]
     public async Task RunAsync_completes_all_five_real_conflict_probe_cases()
     {
+        using var trace = new PackageProbeTraceCapture();
         using ProbeRoot root = ProbeRoot.Create();
         Stage4PackageProbeOptions options = Parse(
             root.Path,
@@ -302,7 +303,8 @@ public sealed class Stage4PackageProbeOptionsTests
                 resultPath,
                 TestContext.Current.CancellationToken));
         string? errorCode = result.RootElement.GetProperty("ErrorCode").GetString();
-        Assert.True(exitCode == 0, $"Probe failed with {errorCode}.");
+        Assert.True(exitCode == 0,
+            $"Probe failed with {errorCode}." + Environment.NewLine + trace.Summary);
         Assert.True(result.RootElement.GetProperty("Succeeded").GetBoolean());
         foreach (string property in new[]
         {

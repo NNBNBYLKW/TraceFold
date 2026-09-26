@@ -95,6 +95,7 @@ public sealed class Stage5CBDiagnosticsPackageProbeTests
     [Fact]
     public async Task Stage5CB_probe_proves_read_only_diagnostics_and_redaction()
     {
+        using var trace = new PackageProbeTraceCapture();
         using OwnedProbeRoot root = OwnedProbeRoot.CreateStage5CB();
 
         int exitCode = await PackageProbeRunner.RunAsync(
@@ -106,7 +107,9 @@ public sealed class Stage5CBDiagnosticsPackageProbeTests
             TestContext.Current.CancellationToken);
 
         Assert.True(exitCode == 0,
-            "Probe failed with " + result.ErrorCode + "." + Environment.NewLine + json);
+            "Probe failed with " + result.ErrorCode + "."
+            + Environment.NewLine + trace.Summary
+            + Environment.NewLine + json);
         Assert.True(result.Succeeded, result.ErrorCode);
         Assert.True(result.AllCategoriesObserved);
         Assert.False(result.PackagedEnvironmentHealthy);

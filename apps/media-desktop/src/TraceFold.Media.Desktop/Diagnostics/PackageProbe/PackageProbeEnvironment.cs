@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Ingest;
@@ -86,6 +87,7 @@ public sealed class PackageProbeEnvironment
 
     public IHost BuildHost(ProbeTimeProvider clock, IIngestFaultInjector? faultInjector = null) =>
         Host.CreateDefaultBuilder([])
+            .ConfigureLogging(logging => logging.AddProvider(new PackageProbeLogProvider()))
             .ConfigureServices(services =>
             {
                 services.AddMediaApplication();
@@ -144,15 +146,16 @@ public sealed class PackageProbeEnvironment
             host, fixtureFilename, targetFilename, clock, cancellationToken);
         IngestResult result = await host.Services.GetRequiredService<IIngestService>()
             .IngestAsync(card.Id, cancellationToken);
-        // Record the actual ingest outcome, its coded reason and the card state so a
-        // failing probe reports why it failed instead of a single opaque code.
-        Require(result.Outcome == IngestOutcome.Completed && result.AssetId.HasValue,
-            "probe.seed_asset_failed."
-                + result.Outcome
-                + "."
-                + result.Message
-                + "."
-                + card.State);
+        if (result.Outcome != IngestOutcome.Completed || !result.AssetId.HasValue)
+        {
+            // The persisted result keeps the stable code; the state that explains it
+            // goes to the probe trace, which only tests consume.
+            PackageProbeTrace.Write("probe.seed_asset_failed; outcome=" + result.Outcome
+                + "; message=" + result.Message
+                + "; card=" + card.State);
+            throw new ProbeFailureException("probe.seed_asset_failed");
+        }
+
         return result.AssetId.GetValueOrDefault();
     }
 
@@ -458,22 +461,25 @@ public sealed class PackageProbeEnvironment
     }
 
     /// <summary>
-    /// Reports the step, the actual ingest state and every predicate that did not
-    /// hold, so a failing probe identifies what failed instead of one opaque code.
+    /// Keeps the historical stable probe error code in the persisted result and reports
+    /// the observed state, with every predicate that did not hold, on the probe trace.
     /// </summary>
     internal static void RequireStep(
-        string step,
+        string errorCode,
         string detail,
         params (string Name, bool Holds)[] conditions)
     {
         string[] failed = [.. conditions
             .Where(condition => !condition.Holds)
             .Select(condition => condition.Name)];
-        Require(failed.Length == 0,
-            "probe." + step + "_failed." + detail
-                + (failed.Length == 0
-                    ? string.Empty
-                    : "." + string.Join("+", failed)));
+        if (failed.Length == 0)
+        {
+            return;
+        }
+
+        PackageProbeTrace.Write(errorCode + "; failed=" + string.Join("+", failed)
+            + "; " + detail);
+        throw new ProbeFailureException(errorCode);
     }
 
     internal static string Describe(IngestResult result) =>

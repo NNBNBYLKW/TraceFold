@@ -104,9 +104,10 @@ public class IngestService(
                     IngestOutcome.ShuttingDown,
                     "ingest.shutting_down");
             }
-            catch (Exception)
+            catch (Exception error)
             {
                 logger.LogError(
+                    error,
                     "IngestFailed InboxItemId={InboxItemId} ErrorCode={ErrorCode}",
                     inboxItemId,
                     "ingest.commit_failed");
