@@ -2,7 +2,10 @@
     x:Class="TraceFold.Media.Desktop.Shell.ShellPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid x:Name="ShellRoot" RowDefinitions="Auto,*">
+    <Grid
+        x:Name="ShellRoot"
+        AutomationProperties.AutomationId="TraceFoldShell"
+        RowDefinitions="Auto,*">
         <InfoBar
             x:Name="StartupInfoBar"
             Margin="12,12,12,0"
@@ -17,7 +20,8 @@
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
             IsTitleBarAutoPaddingEnabled="False"
-            OpenPaneLength="220"
+            OpenPaneLength="{StaticResource TraceFoldNavigationOpenPaneWidth}"
+            CompactPaneLength="{StaticResource TraceFoldNavigationCompactPaneWidth}"
             PaneDisplayMode="Left"
             SelectionChanged="OnSelectionChanged">
             <NavigationView.MenuItems>

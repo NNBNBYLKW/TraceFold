@@ -208,10 +208,9 @@ public sealed class MediaWorkspaceStructureTests
         XAttribute? openPaneLength = navigation.Attribute("OpenPaneLength");
 
         Assert.NotNull(openPaneLength);
-        double width = double.Parse(
-            openPaneLength.Value,
-            CultureInfo.InvariantCulture);
-        Assert.InRange(width, 180, 240);
+        Assert.Equal(
+            "{StaticResource TraceFoldNavigationOpenPaneWidth}",
+            openPaneLength.Value);
     }
 
     [Fact]
