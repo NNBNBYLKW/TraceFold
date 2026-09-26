@@ -47,6 +47,7 @@ public sealed class WindowsTaxonomyMaintenanceDialogService(
             MaxHeight = 280,
             IsItemClickEnabled = false
         };
+        AutomationProperties.SetAutomationId(terms, "TaxonomyDeleteTermList");
         AutomationProperties.SetName(terms, "将删除的未使用词条列表");
         foreach (TaxonomyTermSnapshot term in preparation.Terms)
         {
@@ -77,6 +78,8 @@ public sealed class WindowsTaxonomyMaintenanceDialogService(
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close
         };
+        AutomationProperties.SetAutomationId(dialog, "TaxonomyDeleteConfirmDialog");
+        AutomationProperties.SetName(dialog, "确认删除未使用词条");
         using CancellationTokenRegistration registration =
             cancellationToken.Register(() => dialog.DispatcherQueue.TryEnqueue(
                 dialog.Hide));

@@ -12,7 +12,7 @@
         DrawerClosed="OnInspectorDrawerClosed"
         LayoutModeChanged="OnWorkspaceLayoutModeChanged">
         <controls:ResponsiveInspectorHost.PrimaryContent>
-        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*">
+        <Grid AutomationProperties.AutomationId="LibraryPageRoot" AutomationProperties.Name="正式文件库工作区" RowDefinitions="Auto,Auto,Auto,Auto,Auto,*">
             <StackPanel Margin="24,18,20,8">
                 <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="正式文件库" />
                 <TextBlock
@@ -272,6 +272,7 @@
                     x:Name="LibraryInspectorOpenButton"
                     Grid.Column="4"
                     AutomationProperties.AutomationId="LibraryInspectorOpenButton"
+                    AutomationProperties.HelpText="先选择正式文件，才能查看资料"
                     AutomationProperties.Name="打开正式文件资料面板"
                     Click="OnInspectorOpenClick"
                     Content="查看资料"
@@ -325,6 +326,8 @@
                     <TextBlock
                         Grid.Column="1"
                         VerticalAlignment="Center"
+                        AutomationProperties.AutomationId="LibrarySelectedCount"
+                        AutomationProperties.Name="已选择的正式文件数量"
                         FontWeight="SemiBold"
                         Text="{x:Bind ViewModel.Selection.SelectedCount, Mode=OneWay}" />
                     <Button
@@ -429,6 +432,7 @@
         <Border
             Padding="20"
             AutomationProperties.AutomationId="LibraryInspectorPane"
+            AutomationProperties.Name="正式文件资料检查器"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1,0,0,0">

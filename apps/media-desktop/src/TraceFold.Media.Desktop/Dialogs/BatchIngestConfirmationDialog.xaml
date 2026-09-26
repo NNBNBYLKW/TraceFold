@@ -10,6 +10,8 @@
     <Grid x:Name="DialogRoot" RowDefinitions="*,Auto" RowSpacing="18">
         <ScrollViewer
             x:Name="BatchIngestScrollRoot"
+            AutomationProperties.AutomationId="BatchIngestScrollRoot"
+            AutomationProperties.Name="批量入库确认滚动区域"
             VerticalScrollBarVisibility="Auto">
         <StackPanel Spacing="8">
             <TextBlock
@@ -33,6 +35,7 @@
                 x:Name="ConfirmButton"
                 Grid.Column="2"
                 AutomationProperties.AutomationId="BatchIngestConfirmButton"
+                AutomationProperties.HelpText="没有可直接入库的项目，无法确认"
                 AutomationProperties.Name="确认开始批量入库"
                 Click="OnConfirmClicked"
                 Content="确认入库"

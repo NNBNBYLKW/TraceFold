@@ -5,6 +5,7 @@
     <Grid
         x:Name="ShellRoot"
         AutomationProperties.AutomationId="TraceFoldMainWindow"
+        AutomationProperties.Name="TraceFold 主窗口"
         MinWidth="{StaticResource TraceFoldMinViewportWidth}"
         MinHeight="{StaticResource TraceFoldMinViewportHeight}" />
 </Window>

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Xml.Linq;
 using Xunit;
 
@@ -13,6 +14,219 @@ public sealed class UiAutomationContractTests
 {
     private const string ProductRoot =
         "apps/media-desktop/src/TraceFold.Media.Desktop";
+    private const string ManifestPath =
+        "apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json";
+
+    private static readonly string[] ManifestFiles =
+    [
+        "MainWindow.xaml", "Shell/ShellPage.xaml",
+        "Pages/InboxPage.xaml", "Pages/LibraryPage.xaml",
+        "Pages/TaxonomyPage.xaml", "Pages/SettingsPage.xaml",
+        "Dialogs/BatchMetadataDialog.xaml",
+        "Dialogs/BatchIngestConfirmationDialog.xaml",
+        "Dialogs/ConflictComparisonDialog.xaml",
+        "Dialogs/LibraryBatchEditDialog.xaml",
+        "Dialogs/TaxonomyMergeDialog.xaml",
+    ];
+
+    private static readonly string[] RequiredAfterMigration =
+    [
+        "TraceFoldMainWindow", "TraceFoldShell", "NavInbox", "NavLibrary",
+        "NavTaxonomy", "NavSettings", "InboxPageRoot", "LibraryPageRoot",
+        "TaxonomyPageRoot", "SettingsPageRoot", "InboxSelectedCount",
+        "LibrarySelectedCount", "TaxonomySelectedCount",
+        "InboxInspectorOpenButton", "InboxInspectorCloseButton", "InspectorPane",
+        "LibraryInspectorOpenButton", "LibraryInspectorCloseButton",
+        "LibraryInspectorPane", "TaxonomyInspectorOpenButton",
+        "TaxonomyInspectorCloseButton", "TaxonomyInspectorPane",
+        "InboxListHeader", "LibraryListHeader", "BatchMetadataScrollRoot",
+        "BatchIngestScrollRoot", "ConflictScrollRoot",
+        "LibraryBatchEditScrollRoot", "TaxonomyMergeScrollRoot",
+        "ConflictSkipButton", "ConflictKeepBothButton", "ConflictReplaceButton",
+        "InboxBatchMetadataButton", "InboxBatchIngestButton",
+        "LibraryBatchApplyButton", "LibraryBatchUndoButton",
+        "LibraryNamingPreviewList", "TaxonomyMergeApplyButton",
+        "TaxonomyDeleteButton", "SettingsTabs", "SystemDiagnosticsTab",
+        "DiagnosticsOverallStatus", "DiagnosticsLastChecked",
+        "InboxOperationStatus", "InboxRecoveryStatus", "LibraryStatusMessage",
+        "LastScanStatus", "ProcessingToolStatus", "SettingsStatusMessage",
+        "TaxonomyMergeStatus", "LibraryBatchDialogStatus",
+    ];
+
+    [Fact]
+    public void Shared_manifest_covers_every_static_id_with_exact_native_semantics()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement entries = manifest.RootElement.GetProperty("entries");
+        Assert.Equal(JsonValueKind.Array, entries.ValueKind);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (JsonElement entry in entries.EnumerateArray())
+        {
+            string file = entry.GetProperty("file").GetString()!;
+            string id = entry.GetProperty("automationId").GetString()!;
+            string name = entry.GetProperty("name").GetString()!;
+            string type = entry.GetProperty("controlType").GetString()!;
+            string scope = entry.GetProperty("scope").GetString()!;
+            string policy = entry.GetProperty("dynamicSelectorPolicy").GetString()!;
+            Assert.Contains(file, ManifestFiles);
+            Assert.True(seen.Add(id), "Duplicate manifest AutomationId: " + id);
+            Assert.Matches("[\u4e00-\u9fff]", name);
+            Assert.False(string.IsNullOrWhiteSpace(scope));
+            Assert.Equal("static_id", policy);
+            JsonElement patterns = entry.GetProperty("requiredPatterns");
+            Assert.Equal(JsonValueKind.Array, patterns.ValueKind);
+            foreach (JsonElement pattern in patterns.EnumerateArray())
+            {
+                Assert.Contains(pattern.GetString(), new[]
+                {
+                    "Invoke", "Toggle", "Value", "Selection", "SelectionItem",
+                    "ExpandCollapse", "Scroll", "Window",
+                });
+            }
+            if (type == "Button")
+            {
+                Assert.Contains(patterns.EnumerateArray(), pattern =>
+                    pattern.GetString() == "Invoke");
+            }
+            if (id is "InspectorPane" or "LibraryInspectorPane" or "TaxonomyInspectorPane")
+            {
+                Assert.StartsWith("page_host:", scope);
+            }
+
+            XDocument page = LoadProductXaml(file);
+            int occurrences = page.Root!.DescendantsAndSelf().Count(element =>
+                element.Attribute("AutomationProperties.AutomationId")?.Value == id)
+                + page.Root!.DescendantsAndSelf().Count(element =>
+                    element.Attribute("InputAutomationId")?.Value == id
+                    || element.Attribute("SelectedTermsAutomationId")?.Value == id);
+            Assert.Equal(1, occurrences);
+            (XElement element, string actualName) = ResolveControl(file, id);
+            Assert.Equal(type, element.Name.LocalName);
+            Assert.Equal(name, actualName);
+        }
+
+        foreach (string file in ManifestFiles)
+        {
+            XDocument xaml = LoadProductXaml(file);
+            string[] ids = [.. xaml.Root!.DescendantsAndSelf()
+                .Select(element => element.Attribute("AutomationProperties.AutomationId")?.Value)
+                .Concat(xaml.Root!.DescendantsAndSelf().SelectMany(element => new[]
+                {
+                    element.Attribute("InputAutomationId")?.Value,
+                    element.Attribute("SelectedTermsAutomationId")?.Value,
+                }))
+                .Where(id => !string.IsNullOrWhiteSpace(id) && !id!.StartsWith('{'))
+                .Select(id => id!)];
+            Assert.All(ids, id => Assert.Contains(id, seen));
+        }
+
+        Assert.All(RequiredAfterMigration, id => Assert.Contains(id, seen));
+    }
+
+    [Fact]
+    public void Dynamic_row_policy_uses_fixed_accessible_names_without_guid_selectors()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement rows = manifest.RootElement.GetProperty("dynamicRows");
+        Assert.Equal(2, rows.GetArrayLength());
+        foreach (JsonElement row in rows.EnumerateArray())
+        {
+            string file = row.GetProperty("file").GetString()!;
+            string fixedName = row.GetProperty("fixedAccessibleName").GetString()!;
+            Assert.Contains(file, new[] { "Pages/InboxPage.xaml", "Pages/LibraryPage.xaml" });
+            Assert.False(string.IsNullOrWhiteSpace(fixedName));
+            Assert.DoesNotContain("guid", fixedName, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("accessible_name", row.GetProperty("selector").GetString());
+            Assert.True(row.GetProperty("forbidGuidSelectors").GetBoolean());
+            Assert.Contains(row.GetProperty("fixedFilename").GetString()!, fixedName);
+            Assert.Equal("{x:Bind AccessibleName, Mode=OneWay}",
+                LoadProductXaml(file).Descendants().Single(element =>
+                    element.Attribute("AutomationProperties.AutomationId")?.Value
+                        == "{x:Bind AutomationId}")
+                    .Attribute("AutomationProperties.Name")?.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("Pages/InboxPage.xaml", "InspectorPane")]
+    [InlineData("Pages/LibraryPage.xaml", "LibraryInspectorPane")]
+    [InlineData("Pages/TaxonomyPage.xaml", "TaxonomyInspectorPane")]
+    public void Shared_inspector_uses_the_page_owned_id(string file, string inspectorId)
+    {
+        XDocument page = LoadProductXaml(file);
+        XElement host = Assert.Single(page.Descendants(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost");
+        Assert.Null(host.Attribute("AutomationProperties.AutomationId"));
+        XElement inspector = Assert.Single(host.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == inspectorId);
+        Assert.Contains(inspector.Ancestors(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost.InspectorContent");
+    }
+
+    [Fact]
+    public void Programmatic_delete_confirmation_is_in_the_shared_contract()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement controls = manifest.RootElement.GetProperty("runtimeControls");
+        string source = File.ReadAllText(FindFile(ProductRoot
+            + "/Dialogs/WindowsTaxonomyMaintenanceDialogService.cs"));
+        Assert.Equal(2, controls.GetArrayLength());
+        foreach (JsonElement control in controls.EnumerateArray())
+        {
+            string id = control.GetProperty("automationId").GetString()!;
+            string name = control.GetProperty("name").GetString()!;
+            Assert.Contains(id, new[]
+            {
+                "TaxonomyDeleteConfirmDialog", "TaxonomyDeleteTermList",
+            });
+            Assert.Matches("[\u4e00-\u9fff]", name);
+            Assert.Contains($"AutomationProperties.SetAutomationId({(id == "TaxonomyDeleteConfirmDialog" ? "dialog" : "terms")}, \"{id}\")", source);
+            Assert.Contains($"AutomationProperties.SetName({(id == "TaxonomyDeleteConfirmDialog" ? "dialog" : "terms")}, \"{name}\")", source);
+            Assert.Equal("dialog:taxonomy_delete", control.GetProperty("scope").GetString());
+            Assert.Equal("static_id", control.GetProperty("dynamicSelectorPolicy").GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData("InboxPage.xaml", "InboxOperationStatus", "待入库操作状态")]
+    [InlineData("LibraryPage.xaml", "LibraryStatusMessage", "正式文件库状态消息")]
+    [InlineData("SettingsPage.xaml", "SettingsStatusMessage", "设置状态消息")]
+    [InlineData("InboxPage.xaml", "InboxAuthorInput", "输入待入库资料的作者")]
+    [InlineData("InboxPage.xaml", "InboxAuthorInputTerms", "已添加的待入库资料作者")]
+    [InlineData("InboxPage.xaml", "InboxSeriesInput", "输入待入库资料的系列")]
+    [InlineData("InboxPage.xaml", "InboxSeriesInputTerms", "已添加的待入库资料系列")]
+    [InlineData("InboxPage.xaml", "InboxTagInput", "输入待入库资料的内容标签")]
+    [InlineData("InboxPage.xaml", "InboxTagInputTerms", "已添加的待入库资料内容标签")]
+    [InlineData("LibraryPage.xaml", "LibraryAuthorInput", "输入正式文件库资料的作者")]
+    [InlineData("LibraryPage.xaml", "LibraryAuthorInputTerms", "已添加的正式文件库资料作者")]
+    [InlineData("LibraryPage.xaml", "LibrarySeriesInput", "输入正式文件库资料的系列")]
+    [InlineData("LibraryPage.xaml", "LibrarySeriesInputTerms", "已添加的正式文件库资料系列")]
+    [InlineData("LibraryPage.xaml", "LibraryTagInput", "输入正式文件库资料的内容标签")]
+    [InlineData("LibraryPage.xaml", "LibraryTagInputTerms", "已添加的正式文件库资料内容标签")]
+    public void Task_zero_name_stays_exact(string file, string id, string name) =>
+        Assert.Equal(name, ResolveControl(file, id).Name);
+
+    [Theory]
+    [InlineData("Pages/InboxPage.xaml")]
+    [InlineData("Pages/LibraryPage.xaml")]
+    [InlineData("Pages/TaxonomyPage.xaml")]
+    [InlineData("Dialogs/BatchIngestConfirmationDialog.xaml")]
+    [InlineData("Dialogs/BatchMetadataDialog.xaml")]
+    [InlineData("Dialogs/ConflictComparisonDialog.xaml")]
+    [InlineData("Dialogs/LibraryBatchEditDialog.xaml")]
+    [InlineData("Dialogs/TaxonomyMergeDialog.xaml")]
+    public void Disabled_buttons_explain_the_required_action(string file)
+    {
+        XElement[] buttons = [.. LoadProductXaml(file).Descendants()
+            .Where(element => element.Name.LocalName == "Button"
+                && element.Attribute("IsEnabled") is not null
+                && element.Attribute("AutomationProperties.AutomationId") is { Value: var id }
+                && !id.StartsWith('{'))];
+        Assert.NotEmpty(buttons);
+        Assert.All(buttons, button => Assert.Matches("[\u4e00-\u9fff]",
+            button.Attribute("AutomationProperties.HelpText")?.Value ?? string.Empty));
+    }
 
     public static TheoryData<string, string, string> RequiredControls => new()
     {
@@ -160,7 +374,7 @@ public sealed class UiAutomationContractTests
     private static (XElement Element, string Name) ResolveControl(string file, string id)
     {
         XDocument page = LoadProductXaml(file);
-        XElement? direct = page.Descendants().FirstOrDefault(element =>
+        XElement? direct = page.Root!.DescendantsAndSelf().FirstOrDefault(element =>
             element.Attribute("AutomationProperties.AutomationId")?.Value == id);
         if (direct is not null)
         {
@@ -221,5 +435,19 @@ public sealed class UiAutomationContractTests
         }
 
         throw new FileNotFoundException("Product XAML is missing: " + file);
+    }
+
+    private static string FindFile(string relativePath)
+    {
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            string candidate = Path.Combine(current.FullName,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(candidate)) return candidate;
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException("UIA contract is missing: " + relativePath);
     }
 }

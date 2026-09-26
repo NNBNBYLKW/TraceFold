@@ -6,6 +6,7 @@
     xmlns:dialogs="using:TraceFold.Media.Desktop.Dialogs"
     MinWidth="0"
     AutomationProperties.AutomationId="ConflictComparisonDialog"
+    AutomationProperties.Name="文件冲突比较与选择"
     DefaultButton="None"
     Title="发现相同或重复文件">
     <ContentDialog.Resources>
@@ -42,6 +43,8 @@
         </VisualStateManager.VisualStateGroups>
         <ScrollViewer
             x:Name="ConflictScrollRoot"
+            AutomationProperties.AutomationId="ConflictScrollRoot"
+            AutomationProperties.Name="冲突文件比较滚动区域"
             Grid.Row="0"
             VerticalScrollBarVisibility="Auto">
         <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="18" RowSpacing="18">
@@ -64,6 +67,7 @@
                     <controls:MediaPreviewControl
                         MinHeight="260"
                         AutomationProperties.AutomationId="ConflictIncomingPreview"
+                        AutomationProperties.Name="待入库文件预览"
                         Descriptor="{x:Bind ViewModel.Incoming.Preview, Mode=OneWay}" />
                     <TextBlock
                         FontSize="17"
@@ -104,6 +108,7 @@
                     x:Name="MatchList"
                     Grid.Row="1"
                     AutomationProperties.AutomationId="ConflictMatchList"
+                    AutomationProperties.Name="重复文件匹配列表"
                     ItemsSource="{x:Bind ViewModel.Matches}"
                     SelectedItem="{x:Bind ViewModel.SelectedMatch, Mode=TwoWay}"
                     SelectionMode="Single">
@@ -169,16 +174,20 @@
             <Button
                 Grid.Column="1"
                 AutomationProperties.AutomationId="ConflictSkipButton"
+                AutomationProperties.Name="跳过冲突文件"
                 Click="OnSkipClicked"
                 Content="跳过" />
             <Button
                 Grid.Column="2"
                 AutomationProperties.AutomationId="ConflictKeepBothButton"
+                AutomationProperties.Name="保留两个文件"
                 Click="OnKeepBothClicked"
                 Content="两者都保留" />
             <Button
                 Grid.Column="3"
                 AutomationProperties.AutomationId="ConflictReplaceButton"
+                AutomationProperties.HelpText="先选择可以替换的已有文件"
+                AutomationProperties.Name="替换选中的已有文件"
                 Click="OnReplaceClicked"
                 Content="替换所选文件"
                 IsEnabled="{x:Bind ViewModel.CanReplace, Mode=OneWay}"

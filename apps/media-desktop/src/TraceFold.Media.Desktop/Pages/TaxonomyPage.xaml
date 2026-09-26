@@ -5,7 +5,7 @@
     xmlns:controls="using:TraceFold.Media.Desktop.Controls"
     xmlns:metadata="using:TraceFold.Media.Application.Metadata"
     xmlns:pages="using:TraceFold.Media.Desktop.Pages">
-    <Grid Padding="20" RowDefinitions="Auto,Auto,*" RowSpacing="12">
+    <Grid AutomationProperties.AutomationId="TaxonomyPageRoot" AutomationProperties.Name="词表管理工作区" Padding="20" RowDefinitions="Auto,Auto,*" RowSpacing="12">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="3">
                 <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="词表管理" />
@@ -35,6 +35,7 @@
             <InfoBar.ActionButton>
                 <Button
                     AutomationProperties.AutomationId="TaxonomyUndoButton"
+                    AutomationProperties.HelpText="没有可撤销的词表维护操作"
                     AutomationProperties.Name="撤销最近一次词表维护"
                     Click="OnUndoClicked"
                     Content="撤销"
@@ -104,6 +105,7 @@
                         x:Name="TaxonomyInspectorOpenButton"
                         Grid.Column="2"
                         AutomationProperties.AutomationId="TaxonomyInspectorOpenButton"
+                        AutomationProperties.HelpText="先选择词条，才能查看详情"
                         AutomationProperties.Name="打开词条详情面板"
                         Click="OnInspectorOpenClick"
                         Content="查看详情"
@@ -151,6 +153,7 @@
                         Margin="0,24,0,0"
                         VerticalAlignment="Top"
                         AutomationProperties.AutomationId="TaxonomyCreateButton"
+                        AutomationProperties.HelpText="先选择词条类别并输入有效名称"
                         AutomationProperties.Name="新建当前类型词条"
                         Click="OnCreateClicked"
                         Content="新建"
@@ -285,6 +288,7 @@
                             </Grid>
                             <Button
                                 AutomationProperties.AutomationId="TaxonomyRenameButton"
+                                AutomationProperties.HelpText="先选择可重命名的词条"
                                 AutomationProperties.Name="重命名所选词条"
                                 Click="OnRenameClicked"
                                 Content="重命名"
@@ -298,7 +302,7 @@
                             <StackPanel Spacing="3">
                                 <TextBlock FontSize="20" FontWeight="SemiBold" Text="多项选择" />
                                 <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <TextBlock Text="{x:Bind ViewModel.SelectedCount, Mode=OneWay}" />
+                                    <TextBlock AutomationProperties.AutomationId="TaxonomySelectedCount" AutomationProperties.Name="已选择的词条数量" Text="{x:Bind ViewModel.SelectedCount, Mode=OneWay}" />
                                     <TextBlock Text="个词条" />
                                 </StackPanel>
                             </StackPanel>
@@ -338,6 +342,7 @@
                         <StackPanel Spacing="8">
                             <Button
                                 AutomationProperties.AutomationId="TaxonomyMergeButton"
+                                AutomationProperties.HelpText="先选择可合并的词条"
                                 AutomationProperties.Name="合并所选词条"
                                 Click="OnMergeClicked"
                                 Content="合并…"
@@ -345,6 +350,7 @@
                                 IsEnabled="{x:Bind ViewModel.CanMerge, Mode=OneWay}" />
                             <Button
                                 AutomationProperties.AutomationId="TaxonomyDeleteButton"
+                                AutomationProperties.HelpText="只能删除未被引用的词条"
                                 AutomationProperties.Name="删除所选未使用词条"
                                 Click="OnDeleteClicked"
                                 Content="删除"
@@ -363,6 +369,7 @@
                                     TextWrapping="Wrap" />
                                 <Button
                                     AutomationProperties.AutomationId="TaxonomyRenameConflictMergeButton"
+                                    AutomationProperties.HelpText="只有可合并的重命名冲突才能继续"
                                     AutomationProperties.Name="将重命名冲突改为合并"
                                     Click="OnMergeClicked"
                                     Content="改为合并"

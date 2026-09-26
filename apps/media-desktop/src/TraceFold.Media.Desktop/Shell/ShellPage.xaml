@@ -5,11 +5,13 @@
     <Grid
         x:Name="ShellRoot"
         AutomationProperties.AutomationId="TraceFoldShell"
+        AutomationProperties.Name="主导航工作区"
         RowDefinitions="Auto,*">
         <InfoBar
             x:Name="StartupInfoBar"
             Margin="12,12,12,0"
             AutomationProperties.AutomationId="StartupInfoBar"
+            AutomationProperties.Name="启动状态提示"
             IsClosable="False"
             IsOpen="{x:Bind ViewModel.IsStartupInfoBarOpen, Mode=OneWay}"
             Message="{x:Bind ViewModel.StartupMessage, Mode=OneWay}" />
@@ -27,21 +29,25 @@
             <NavigationView.MenuItems>
                 <NavigationViewItem
                     AutomationProperties.AutomationId="NavInbox"
+                    AutomationProperties.Name="待入库导航"
                     Content="待入库"
                     Icon="Folder"
                     Tag="inbox" />
                 <NavigationViewItem
                     AutomationProperties.AutomationId="NavLibrary"
+                    AutomationProperties.Name="正式文件库导航"
                     Content="正式文件库"
                     Icon="Library"
                     Tag="library" />
                 <NavigationViewItem
                     AutomationProperties.AutomationId="NavTaxonomy"
+                    AutomationProperties.Name="词表管理导航"
                     Content="词表管理"
                     Icon="Bullets"
                     Tag="taxonomy" />
                 <NavigationViewItem
                     AutomationProperties.AutomationId="NavSettings"
+                    AutomationProperties.Name="设置导航"
                     Content="设置"
                     Icon="Setting"
                     Tag="settings" />

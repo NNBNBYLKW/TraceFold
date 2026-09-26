@@ -80,6 +80,8 @@
 
         <ScrollViewer
             x:Name="LibraryBatchEditScrollRoot"
+            AutomationProperties.AutomationId="LibraryBatchEditScrollRoot"
+            AutomationProperties.Name="正式文件库批量编辑滚动区域"
             Grid.Row="1"
             VerticalScrollBarVisibility="Auto">
         <TabView
@@ -505,6 +507,7 @@
             <Button
                 Grid.Column="2"
                 AutomationProperties.AutomationId="LibraryBatchApplyButton"
+                AutomationProperties.HelpText="请先完成有效的批量修改并检查预览"
                 AutomationProperties.Name="应用正式文件库批量修改"
                 Click="OnApplyClicked"
                 Content="应用修改"

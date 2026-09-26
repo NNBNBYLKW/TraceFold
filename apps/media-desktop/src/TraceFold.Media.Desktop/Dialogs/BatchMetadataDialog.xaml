@@ -18,6 +18,8 @@
     <Grid x:Name="DialogRoot" RowDefinitions="*,Auto,Auto" RowSpacing="12">
         <ScrollViewer
             x:Name="BatchMetadataScrollRoot"
+            AutomationProperties.AutomationId="BatchMetadataScrollRoot"
+            AutomationProperties.Name="批量资料编辑滚动区域"
             VerticalScrollBarVisibility="Auto">
         <TabView
             x:Name="ModeTabs"
@@ -229,6 +231,7 @@
             <Button
                 Grid.Column="2"
                 AutomationProperties.AutomationId="BatchMetadataSubmitButton"
+                AutomationProperties.HelpText="请先填写有效的批量资料修改"
                 AutomationProperties.Name="提交批量资料修改"
                 Click="OnSubmitClicked"
                 Content="应用修改"

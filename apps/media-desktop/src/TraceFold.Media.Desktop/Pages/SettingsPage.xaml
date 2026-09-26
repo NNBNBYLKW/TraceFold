@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:pages="using:TraceFold.Media.Desktop.Pages"
     xmlns:settings="using:TraceFold.Media.Application.Settings">
-    <Grid>
+    <Grid AutomationProperties.AutomationId="SettingsPageRoot" AutomationProperties.Name="设置工作区">
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup x:Name="SettingsFolderFormLayout">
                 <VisualState x:Name="CompactFolderRows">
@@ -69,6 +69,7 @@
             <TabViewItem
                 x:Name="FolderSettingsTab"
                 AutomationProperties.AutomationId="FolderSettingsTab"
+                AutomationProperties.Name="文件夹设置选项卡"
                 Header="文件夹与扫描"
                 HorizontalContentAlignment="Stretch"
                 IsClosable="False"
@@ -98,6 +99,7 @@
                                 MinWidth="0"
                                 HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="InboxFolderPath"
+                                AutomationProperties.Name="待入库文件夹路径"
                                 IsReadOnly="True"
                                 PlaceholderText="请选择待入库目录"
                                 Text="{x:Bind ViewModel.InboxDirectory, Mode=OneWay}" />
@@ -105,6 +107,7 @@
                                 x:Name="PickInboxFolderButton"
                                 Grid.Column="2"
                                 AutomationProperties.AutomationId="PickInboxFolder"
+                                AutomationProperties.Name="选择待入库文件夹"
                                 Command="{x:Bind ViewModel.ChooseInboxCommand}"
                                 Content="选择…" />
                         </Grid>
@@ -117,6 +120,7 @@
                                 MinWidth="0"
                                 HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="LibraryFolderPath"
+                                AutomationProperties.Name="正式文件库路径"
                                 IsReadOnly="True"
                                 PlaceholderText="请选择正式文件库目录"
                                 Text="{x:Bind ViewModel.LibraryDirectory, Mode=OneWay}" />
@@ -124,6 +128,7 @@
                                 x:Name="PickLibraryFolderButton"
                                 Grid.Column="2"
                                 AutomationProperties.AutomationId="PickLibraryFolder"
+                                AutomationProperties.Name="选择正式文件库文件夹"
                                 Command="{x:Bind ViewModel.ChooseLibraryCommand}"
                                 Content="选择…" />
                         </Grid>
@@ -136,6 +141,7 @@
                                 MinWidth="0"
                                 HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="WorkFolderPath"
+                                AutomationProperties.Name="工作文件夹路径"
                                 IsReadOnly="True"
                                 PlaceholderText="请选择前置处理工作目录"
                                 Text="{x:Bind ViewModel.WorkDirectory, Mode=OneWay}" />
@@ -143,6 +149,7 @@
                                 x:Name="PickWorkFolderButton"
                                 Grid.Column="2"
                                 AutomationProperties.AutomationId="PickWorkFolder"
+                                AutomationProperties.Name="选择工作文件夹"
                                 Command="{x:Bind ViewModel.ChooseWorkCommand}"
                                 Content="选择…" />
                         </Grid>
@@ -158,6 +165,7 @@
                                     <TextBlock FontWeight="SemiBold" Text="待入库监测" />
                                     <TextBlock
                                         AutomationProperties.AutomationId="LastScanStatus"
+                                        AutomationProperties.Name="上次扫描状态"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Text="{x:Bind ViewModel.LastScanAtText, Mode=OneWay}" />
                                     <TextBlock
@@ -169,6 +177,7 @@
                                     x:Name="AutoScanToggle"
                                     Grid.Column="1"
                                     AutomationProperties.AutomationId="AutoScanToggle"
+                                    AutomationProperties.Name="自动扫描开关"
                                     Header="自动扫描"
                                     IsOn="{x:Bind ViewModel.AutoScanEnabled, Mode=OneWay}"
                                     OffContent="已关闭"
@@ -187,6 +196,7 @@
                                 <TextBlock FontWeight="SemiBold" Text="前置处理工具" />
                                 <TextBlock
                                     AutomationProperties.AutomationId="ProcessingToolStatus"
+                                    AutomationProperties.Name="处理工具状态"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Text="{x:Bind ViewModel.ProcessingToolStatus, Mode=OneWay}" />
                             </StackPanel>
@@ -194,6 +204,7 @@
 
                         <ItemsControl
                             AutomationProperties.AutomationId="SettingsValidationErrors"
+                            AutomationProperties.Name="设置验证错误"
                             ItemsSource="{x:Bind ViewModel.Errors, Mode=OneWay}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="settings:SettingsError">
@@ -208,6 +219,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="12">
                             <Button
                                 AutomationProperties.AutomationId="SaveFolderSettings"
+                                AutomationProperties.Name="保存文件夹设置"
                                 Command="{x:Bind ViewModel.SaveCommand}"
                                 Content="保存设置"
                                 Style="{ThemeResource AccentButtonStyle}" />
@@ -228,6 +240,7 @@
             <TabViewItem
                 x:Name="SystemDiagnosticsTab"
                 AutomationProperties.AutomationId="SystemDiagnosticsTab"
+                AutomationProperties.Name="系统诊断选项卡"
                 Header="系统诊断"
                 HorizontalContentAlignment="Stretch"
                 IsClosable="False"
@@ -244,10 +257,12 @@
                                         Glyph="{x:Bind DiagnosticsViewModel.OverallIconGlyph, Mode=OneWay}" />
                                     <TextBlock
                                         AutomationProperties.AutomationId="DiagnosticsOverallStatus"
+                                        AutomationProperties.Name="系统诊断总体状态"
                                         FontWeight="SemiBold"
                                         Text="{x:Bind DiagnosticsViewModel.OverallStatusText, Mode=OneWay}" />
                                     <TextBlock
                                         AutomationProperties.AutomationId="DiagnosticsLastChecked"
+                                        AutomationProperties.Name="系统诊断上次检查时间"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Text="{x:Bind DiagnosticsViewModel.LastCheckedText, Mode=OneWay}" />
                                 </StackPanel>

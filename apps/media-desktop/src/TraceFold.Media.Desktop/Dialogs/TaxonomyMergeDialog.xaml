@@ -50,6 +50,8 @@
         </VisualStateManager.VisualStateGroups>
         <ScrollViewer
             x:Name="TaxonomyMergeScrollRoot"
+            AutomationProperties.AutomationId="TaxonomyMergeScrollRoot"
+            AutomationProperties.Name="词条合并预览滚动区域"
             VerticalScrollBarVisibility="Auto">
         <Grid ColumnDefinitions="250,310,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="14">
             <Border
@@ -254,6 +256,7 @@
             <Button
                 Grid.Column="2"
                 AutomationProperties.AutomationId="TaxonomyMergeApplyButton"
+                AutomationProperties.HelpText="请先选择有效的目标词条并检查合并预览"
                 AutomationProperties.Name="确认应用词条合并"
                 Click="OnApplyClicked"
                 Content="确认合并"
