@@ -126,7 +126,9 @@ public sealed class PackageProbeRefactorTests
             Path.Combine(root.Path, Stage4PackageProbeOptions.ResultFilename),
             TestContext.Current.CancellationToken));
 
-        Assert.Equal(0, exitCode);
+        Assert.True(exitCode == 0,
+            "Probe failed with " + result.RootElement.GetProperty("ErrorCode").GetString() + "."
+            + Environment.NewLine + result.RootElement.GetRawText());
         foreach (string property in new[]
         {
             "Succeeded", "RegisteredReplacePassed", "ContentKeepBothPassed",

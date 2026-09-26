@@ -144,8 +144,15 @@ public sealed class PackageProbeEnvironment
             host, fixtureFilename, targetFilename, clock, cancellationToken);
         IngestResult result = await host.Services.GetRequiredService<IIngestService>()
             .IngestAsync(card.Id, cancellationToken);
+        // Record the actual ingest outcome, its coded reason and the card state so a
+        // failing probe reports why it failed instead of a single opaque code.
         Require(result.Outcome == IngestOutcome.Completed && result.AssetId.HasValue,
-            "probe.seed_asset_failed");
+            "probe.seed_asset_failed."
+                + result.Outcome
+                + "."
+                + result.Message
+                + "."
+                + card.State);
         return result.AssetId.GetValueOrDefault();
     }
 
@@ -449,6 +456,28 @@ public sealed class PackageProbeEnvironment
             throw new ProbeFailureException(errorCode);
         }
     }
+
+    /// <summary>
+    /// Reports the step, the actual ingest state and every predicate that did not
+    /// hold, so a failing probe identifies what failed instead of one opaque code.
+    /// </summary>
+    internal static void RequireStep(
+        string step,
+        string detail,
+        params (string Name, bool Holds)[] conditions)
+    {
+        string[] failed = [.. conditions
+            .Where(condition => !condition.Holds)
+            .Select(condition => condition.Name)];
+        Require(failed.Length == 0,
+            "probe." + step + "_failed." + detail
+                + (failed.Length == 0
+                    ? string.Empty
+                    : "." + string.Join("+", failed)));
+    }
+
+    internal static string Describe(IngestResult result) =>
+        result.Outcome + "/" + result.Message;
 
     private void EnsureResultDoesNotExist(string filename)
     {

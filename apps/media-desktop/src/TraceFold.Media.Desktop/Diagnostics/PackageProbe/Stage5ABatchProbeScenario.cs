@@ -51,14 +51,18 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
             InboxCardDto photoCopy = Find(cards, PhotoCopyFilename);
             InboxCardDto ordinaryVideo = Find(cards, OrdinaryVideoFilename);
             InboxCardDto pairedVideo = Find(cards, VideoFixture);
-            PackageProbeEnvironment.Require(cards.Count == 4
-                && photo.MediaKind == MediaKind.Image
-                && photoCopy.MediaKind == MediaKind.Image
-                && ordinaryVideo.MediaKind == MediaKind.Video
-                && ordinaryVideo.State == InboxItemState.ReadyToTag
-                && pairedVideo.MediaKind == MediaKind.Video
-                && pairedVideo.State == InboxItemState.RequiresProcessing,
-                "probe.batch_scan_invalid");
+            string scanDetail = "count=" + cards.Count + ";" + string.Join(
+                ";",
+                new[] { photo, photoCopy, ordinaryVideo, pairedVideo }
+                    .Select((card, ordinal) => ordinal + ":" + card.MediaKind + ":" + card.State));
+            PackageProbeEnvironment.RequireStep("batch_scan", scanDetail,
+                ("count", cards.Count == 4),
+                ("photo_kind", photo.MediaKind == MediaKind.Image),
+                ("photo_copy_kind", photoCopy.MediaKind == MediaKind.Image),
+                ("ordinary_video_kind", ordinaryVideo.MediaKind == MediaKind.Video),
+                ("ordinary_video_state", ordinaryVideo.State == InboxItemState.ReadyToTag),
+                ("paired_video_kind", pairedVideo.MediaKind == MediaKind.Video),
+                ("paired_video_state", pairedVideo.State == InboxItemState.RequiresProcessing));
 
             InboxCardDto[] ordered = [photo, photoCopy, ordinaryVideo, pairedVideo];
             IReadOnlyList<InboxSelectionEntry> initialSelection = Selection(ordered);
@@ -111,36 +115,59 @@ public sealed class Stage5ABatchProbeScenario : IPackageProbeScenario
                 .ExecuteAsync(selection, null, CancellationToken.None, cancellationToken);
             completedIngestCount = ingest.CompletedCount;
             conflictCount = ingest.ConflictCount;
-            PackageProbeEnvironment.Require(!ingest.StoppedByUser
-                && ingest.Items.Count == 4
-                && ingest.Items[0].Outcome == BatchIngestItemOutcome.Completed
-                && ingest.Items[1].Outcome == BatchIngestItemOutcome.ConflictBlocked
-                && ingest.Items[2].Outcome == BatchIngestItemOutcome.Completed
-                && ingest.Items[3].Outcome == BatchIngestItemOutcome.Completed
-                && completedIngestCount == 3
-                && conflictCount == 1,
-                "probe.batch_ingest_outcomes_invalid");
+            string ingestDetail = "stopped=" + ingest.StoppedByUser
+                + ";count=" + ingest.Items.Count
+                + ";completed=" + completedIngestCount
+                + ";conflicts=" + conflictCount
+                + ";" + string.Join(
+                    ",",
+                    ingest.Items.Select(item =>
+                        item.Ordinal + ":" + item.Outcome + ":" + item.ErrorCode));
+            PackageProbeEnvironment.RequireStep("batch_ingest", ingestDetail,
+                ("not_stopped", !ingest.StoppedByUser),
+                ("count", ingest.Items.Count == 4),
+                ("ordinal0", ingest.Items.Count > 0
+                    && ingest.Items[0].Outcome == BatchIngestItemOutcome.Completed),
+                ("ordinal1", ingest.Items.Count > 1
+                    && ingest.Items[1].Outcome == BatchIngestItemOutcome.ConflictBlocked),
+                ("ordinal2", ingest.Items.Count > 2
+                    && ingest.Items[2].Outcome == BatchIngestItemOutcome.Completed),
+                ("ordinal3", ingest.Items.Count > 3
+                    && ingest.Items[3].Outcome == BatchIngestItemOutcome.Completed),
+                ("completed_count", completedIngestCount == 3),
+                ("conflict_count", conflictCount == 1));
 
             conflictSourceRetained = File.Exists(
                 Path.Combine(environment.InboxDirectory, PhotoCopyFilename));
-            PackageProbeEnvironment.Require(
-                conflictSourceRetained
-                && !File.Exists(Path.Combine(environment.InboxDirectory, VideoFixture))
-                && !File.Exists(Path.Combine(environment.InboxDirectory, AudioFixture)),
-                "probe.batch_source_cleanup_invalid");
+            bool videoSourceRemoved = !File.Exists(
+                Path.Combine(environment.InboxDirectory, VideoFixture));
+            bool audioSourceRemoved = !File.Exists(
+                Path.Combine(environment.InboxDirectory, AudioFixture));
+            PackageProbeEnvironment.RequireStep("batch_source_cleanup",
+                "conflict_source=" + conflictSourceRetained
+                    + ";video_removed=" + videoSourceRemoved
+                    + ";audio_removed=" + audioSourceRemoved,
+                ("conflict_source_retained", conflictSourceRetained),
+                ("video_source_removed", videoSourceRemoved),
+                ("audio_source_removed", audioSourceRemoved));
             IReadOnlyList<LibraryAssetDto> assets = await host.Services
                 .GetRequiredService<ILibraryQueryService>()
                 .SearchAsync(LibraryQuery.Default, cancellationToken);
-            PackageProbeEnvironment.Require(assets.Count == 3
-                && assets.Count(asset => asset.MediaKind == MediaKind.Image) == 1
-                && assets.Count(asset => asset.MediaKind == MediaKind.Video) == 2
-                && assets.Any(asset => asset.ActualFilename.Equals(PhotoFixture,
-                    StringComparison.OrdinalIgnoreCase))
-                && assets.Any(asset => asset.ActualFilename.Equals(OrdinaryVideoFilename,
-                    StringComparison.OrdinalIgnoreCase))
-                && assets.Any(asset => asset.ActualFilename.Equals(VideoFixture,
-                    StringComparison.OrdinalIgnoreCase)),
-                "probe.batch_library_invalid");
+            int libraryImageCount = assets.Count(asset => asset.MediaKind == MediaKind.Image);
+            int libraryVideoCount = assets.Count(asset => asset.MediaKind == MediaKind.Video);
+            PackageProbeEnvironment.RequireStep("batch_library",
+                "count=" + assets.Count
+                    + ";images=" + libraryImageCount
+                    + ";videos=" + libraryVideoCount,
+                ("count", assets.Count == 3),
+                ("images", libraryImageCount == 1),
+                ("videos", libraryVideoCount == 2),
+                ("has_photo", assets.Any(asset => asset.ActualFilename.Equals(
+                    PhotoFixture, StringComparison.OrdinalIgnoreCase))),
+                ("has_ordinary_video", assets.Any(asset => asset.ActualFilename.Equals(
+                    OrdinaryVideoFilename, StringComparison.OrdinalIgnoreCase))),
+                ("has_paired_video", assets.Any(asset => asset.ActualFilename.Equals(
+                    VideoFixture, StringComparison.OrdinalIgnoreCase))));
             internalStorageClean = environment.InternalWorkIsClean();
             PackageProbeEnvironment.Require(
                 internalStorageClean, "probe.batch_internal_storage_retained");

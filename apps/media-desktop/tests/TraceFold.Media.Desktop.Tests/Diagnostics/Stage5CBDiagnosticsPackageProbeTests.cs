@@ -105,7 +105,8 @@ public sealed class Stage5CBDiagnosticsPackageProbeTests
             Path.Combine(root.Path, PackageProbeOptions.Stage5CBResultFilename),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(0, exitCode);
+        Assert.True(exitCode == 0,
+            "Probe failed with " + result.ErrorCode + "." + Environment.NewLine + json);
         Assert.True(result.Succeeded, result.ErrorCode);
         Assert.True(result.AllCategoriesObserved);
         Assert.False(result.PackagedEnvironmentHealthy);

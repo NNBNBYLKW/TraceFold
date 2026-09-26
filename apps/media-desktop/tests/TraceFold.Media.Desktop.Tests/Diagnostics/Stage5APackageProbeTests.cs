@@ -148,8 +148,11 @@ public sealed class Stage5APackageProbeTests
             request, "C:\\Program Files\\ffmpeg\\bin", TestContext.Current.CancellationToken);
         using JsonDocument result = await ReadResultAsync(root.Path);
 
-        Assert.Equal(0, exitCode);
-        Assert.True(result.RootElement.GetProperty("Succeeded").GetBoolean());
+        Assert.True(exitCode == 0,
+            "Probe failed with " + result.RootElement.GetProperty("ErrorCode").GetString() + "."
+            + Environment.NewLine + result.RootElement.GetRawText());
+        Assert.True(result.RootElement.GetProperty("Succeeded").GetBoolean(),
+            result.RootElement.GetRawText());
         Assert.True(result.RootElement.GetProperty("AtomicMetadata").GetBoolean());
         Assert.True(result.RootElement.GetProperty("GenericProcessingQueued").GetBoolean());
         Assert.True(result.RootElement.GetProperty("ProcessingCompleted").GetBoolean());
