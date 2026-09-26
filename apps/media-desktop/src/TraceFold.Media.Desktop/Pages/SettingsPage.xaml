@@ -150,6 +150,8 @@
                                 IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
                             <TextBlock
                                 VerticalAlignment="Center"
+                                AutomationProperties.AutomationId="SettingsStatusMessage"
+                                AutomationProperties.Name="设置状态消息"
                                 Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}" />
                         </StackPanel>
                     </StackPanel>

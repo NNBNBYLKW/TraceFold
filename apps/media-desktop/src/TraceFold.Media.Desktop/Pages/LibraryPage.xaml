@@ -435,16 +435,30 @@
                         <TextBlock FontWeight="SemiBold" Text="作者" />
                         <controls:TaxonomyPickerControl
                             x:Name="AuthorPicker"
+                            InputAutomationId="LibraryAuthorInput"
+                            InputAutomationName="输入正式文件库资料的作者"
+                            SelectedTermsAutomationId="LibraryAuthorInputTerms"
+                            SelectedTermsAutomationName="已添加的正式文件库资料作者"
                             SelectionChanged="OnAuthorSelectionChanged" />
                         <TextBlock FontWeight="SemiBold" Text="系列" />
                         <controls:TaxonomyPickerControl
                             x:Name="SeriesPicker"
+                            InputAutomationId="LibrarySeriesInput"
+                            InputAutomationName="输入正式文件库资料的系列"
+                            SelectedTermsAutomationId="LibrarySeriesInputTerms"
+                            SelectedTermsAutomationName="已添加的正式文件库资料系列"
                             SelectionChanged="OnSeriesSelectionChanged" />
                         <TextBlock FontWeight="SemiBold" Text="内容标签" />
                         <controls:TaxonomyPickerControl
                             x:Name="TagPicker"
+                            InputAutomationId="LibraryTagInput"
+                            InputAutomationName="输入正式文件库资料的内容标签"
+                            SelectedTermsAutomationId="LibraryTagInputTerms"
+                            SelectedTermsAutomationName="已添加的正式文件库资料内容标签"
                             SelectionChanged="OnTagSelectionChanged" />
                         <TextBlock
+                            AutomationProperties.AutomationId="LibraryStatusMessage"
+                            AutomationProperties.Name="正式文件库状态消息"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
                             TextWrapping="Wrap" />

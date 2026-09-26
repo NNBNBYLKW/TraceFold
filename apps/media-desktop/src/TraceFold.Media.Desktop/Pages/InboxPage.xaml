@@ -22,6 +22,8 @@
                 <TextBlock
                     Grid.Column="1"
                     VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="InboxOperationStatus"
+                    AutomationProperties.Name="待入库操作状态"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     Text="{x:Bind ViewModel.ScanStatusMessage, Mode=OneWay}"
                     TextTrimming="CharacterEllipsis" />
@@ -248,16 +250,26 @@
                     <controls:TaxonomyPickerControl
                         x:Name="AuthorPicker"
                         AutomationProperties.AutomationId="AuthorPicker"
+                        InputAutomationId="InboxAuthorInput"
+                        InputAutomationName="输入待入库资料的作者"
+                        SelectedTermsAutomationId="InboxAuthorInputTerms"
+                        SelectedTermsAutomationName="已添加的待入库资料作者"
                         SelectionChanged="OnAuthorSelectionChanged" />
                     <TextBlock FontWeight="SemiBold" Text="系列" />
                     <controls:TaxonomyPickerControl
                         x:Name="SeriesPicker"
-                        AutomationProperties.AutomationId="SeriesPicker"
+                        InputAutomationId="InboxSeriesInput"
+                        InputAutomationName="输入待入库资料的系列"
+                        SelectedTermsAutomationId="InboxSeriesInputTerms"
+                        SelectedTermsAutomationName="已添加的待入库资料系列"
                         SelectionChanged="OnSeriesSelectionChanged" />
                     <TextBlock FontWeight="SemiBold" Text="内容标签" />
                     <controls:TaxonomyPickerControl
                         x:Name="TagPicker"
-                        AutomationProperties.AutomationId="TagPicker"
+                        InputAutomationId="InboxTagInput"
+                        InputAutomationName="输入待入库资料的内容标签"
+                        SelectedTermsAutomationId="InboxTagInputTerms"
+                        SelectedTermsAutomationName="已添加的待入库资料内容标签"
                         SelectionChanged="OnTagSelectionChanged" />
                     <TextBlock
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"

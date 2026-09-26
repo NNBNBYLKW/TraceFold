@@ -12,6 +12,44 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 public sealed class LibraryViewModelTests
 {
     [Fact]
+    public void Row_accessible_name_includes_actual_file_name_and_media_kind()
+    {
+        var card = new LibraryCardViewModel(new LibraryAssetDto(
+            Guid.Parse("44444444-4444-4444-4444-444444444444"),
+            "photo.jpg",
+            "photo.jpg",
+            MediaKind.Image,
+            DateTimeOffset.Parse("2026-08-22T10:00:00Z")));
+
+        Assert.Equal("正式文件 photo.jpg，实际文件 photo.jpg，图片", card.AccessibleName);
+        Assert.Equal("图片", card.MediaKindText);
+    }
+
+    [Fact]
+    public void Row_raises_property_changed_when_display_name_or_media_kind_changes()
+    {
+        var card = new LibraryCardViewModel(new LibraryAssetDto(
+            Guid.Parse("44444444-4444-4444-4444-444444444444"),
+            "photo.jpg",
+            "photo.jpg",
+            MediaKind.Image,
+            DateTimeOffset.Parse("2026-08-22T10:00:00Z")));
+        List<string?> changed = [];
+        card.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        card.Update(card.Card with
+        {
+            DisplayName = "杭州夜景",
+            MediaKind = MediaKind.Video,
+        });
+
+        Assert.Contains(nameof(LibraryCardViewModel.DisplayName), changed);
+        Assert.Contains(nameof(LibraryCardViewModel.MediaKindText), changed);
+        Assert.Contains(nameof(LibraryCardViewModel.AccessibleName), changed);
+        Assert.Equal("正式文件 杭州夜景，实际文件 photo.jpg，视频", card.AccessibleName);
+    }
+
+    [Fact]
     public async Task Search_reloads_cards_and_selection_loads_formal_metadata()
     {
         var library = new RecordingLibraryQueryService();

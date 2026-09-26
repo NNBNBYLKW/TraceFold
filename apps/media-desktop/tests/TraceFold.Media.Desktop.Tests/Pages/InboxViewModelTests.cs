@@ -17,6 +17,47 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 public sealed class InboxViewModelTests
 {
     [Fact]
+    public void Row_accessible_name_is_deterministic_and_uses_the_fixed_file_name()
+    {
+        var card = new InboxCardViewModel(new InboxCardDto(
+            Guid.Parse("33333333-3333-3333-3333-333333333333"),
+            "paired.mp4",
+            "paired.mp4",
+            MediaKind.Video,
+            InboxItemState.RequiresProcessing,
+            "等待前置处理",
+            false));
+
+        Assert.Equal("待入库文件 paired.mp4，状态 等待前置处理", card.AccessibleName);
+    }
+
+    [Fact]
+    public void Row_raises_property_changed_when_display_name_or_status_changes()
+    {
+        var card = new InboxCardViewModel(new InboxCardDto(
+            Guid.Parse("33333333-3333-3333-3333-333333333333"),
+            "paired.mp4",
+            "paired.mp4",
+            MediaKind.Video,
+            InboxItemState.RequiresProcessing,
+            "等待前置处理",
+            false));
+        List<string?> changed = [];
+        card.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        card.Update(card.Card with
+        {
+            DisplayName = "重命名.mp4",
+            StatusText = "可入库",
+        });
+
+        Assert.Contains(nameof(InboxCardViewModel.DisplayName), changed);
+        Assert.Contains(nameof(InboxCardViewModel.StatusText), changed);
+        Assert.Contains(nameof(InboxCardViewModel.AccessibleName), changed);
+        Assert.Equal("待入库文件 重命名.mp4，状态 可入库", card.AccessibleName);
+    }
+
+    [Fact]
     public async Task Search_reload_and_selection_flushes_previous_metadata()
     {
         var query = new RecordingInboxQuery();

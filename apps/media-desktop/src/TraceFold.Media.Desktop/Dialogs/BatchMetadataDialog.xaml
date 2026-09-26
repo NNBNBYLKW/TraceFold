@@ -30,6 +30,7 @@
                         <TextBlock Text="作者" FontWeight="SemiBold" />
                         <AutoSuggestBox
                             x:Name="AddAuthorInput"
+                            AutomationProperties.AutomationId="BatchMetadataAddAuthorInput"
                             AutomationProperties.Name="输入要添加的作者"
                             ItemsSource="{x:Bind ViewModel.AddAuthorPicker.Suggestions, Mode=OneWay}"
                             PlaceholderText="输入名称后按 Enter"
@@ -49,6 +50,7 @@
                         </ItemsControl>
                         <TextBlock Text="内容标签" FontWeight="SemiBold" />
                         <AutoSuggestBox
+                            AutomationProperties.AutomationId="BatchMetadataAddTagInput"
                             AutomationProperties.Name="输入要添加的标签"
                             ItemsSource="{x:Bind ViewModel.AddTagPicker.Suggestions, Mode=OneWay}"
                             PlaceholderText="输入名称后按 Enter"
