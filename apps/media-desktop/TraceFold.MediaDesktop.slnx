@@ -11,5 +11,9 @@
     <Project Path="tests/TraceFold.Media.Desktop.Tests/TraceFold.Media.Desktop.Tests.csproj" />
     <Project Path="tests/TraceFold.Media.Domain.Tests/TraceFold.Media.Domain.Tests.csproj" />
     <Project Path="tests/TraceFold.Media.Infrastructure.Tests/TraceFold.Media.Infrastructure.Tests.csproj" />
+    <Project Path="tests/TraceFold.Media.UiAcceptance.Support.Tests/TraceFold.Media.UiAcceptance.Support.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/TraceFold.Media.UiAcceptance.Support/TraceFold.Media.UiAcceptance.Support.csproj" />
   </Folder>
 </Solution>

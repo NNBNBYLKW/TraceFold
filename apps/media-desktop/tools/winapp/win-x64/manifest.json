@@ -1,0 +1,13 @@
+{
+  "name": "Microsoft winapp CLI",
+  "version": "0.5.0",
+  "architecture": "x64",
+  "archiveName": "winappcli-x64.zip",
+  "archiveSize": 37881954,
+  "sha256": "88735CE6C2582AC5FAC6200194BF62467FDD72B44B2D230F3A4ED059FA79EE7D",
+  "sourceUrl": "https://github.com/microsoft/winappCli/releases/download/v0.5.0/winappcli-x64.zip",
+  "releaseCommit": "fd7cb6f235fa54dd2c6e26386e65e967a2c8797a",
+  "projectSupportedOs": ["Windows 11 x64"],
+  "targetArchitectures": ["x64"],
+  "capabilities": ["inspect", "search", "invoke", "set-value", "get-value", "get-property", "focus", "wait-for", "scroll-into-view", "screenshot", "send-keys"]
+}
