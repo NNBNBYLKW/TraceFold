@@ -30,6 +30,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:repositoryRoot = Split-Path -Parent $PSScriptRoot
 $script:uiRoot = Join-Path $script:repositoryRoot 'scripts/ui-acceptance'
+Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Contracts.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Processes.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Runner.psm1') -Force -DisableNameChecking
 
 $ExitInvalidArguments = 2
@@ -37,14 +39,19 @@ $ExitBlocked = 1
 
 function Write-Stage5CCIndexEntry {
     param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.ArrayList] $Index, [Parameter(Mandatory)][hashtable] $Entry)
+    foreach ($field in @('reportPath','outputDirectory')) {
+        $value = [string] $Entry[$field]
+        if ([IO.Path]::IsPathRooted($value) -or $value -match '(^|[\\/])\.\.([\\/]|$)') {
+            throw ('Summary path must be relative: ' + $field)
+        }
+    }
     [void] $Index.Add([ordered] @{
         id               = [string] $Entry.id
         status           = [string] $Entry.status
         reportStatus     = [string] $Entry.reportStatus
         executionStatus  = [string] $Entry.executionStatus
-        reason           = [string] $Entry.reason
+        reason           = Protect-UiAcceptanceText -Value ([string] $Entry.reason)
         reportPath       = [string] $Entry.reportPath
-        ownedRoot        = [string] $Entry.ownedRoot
         outputDirectory  = [string] $Entry.outputDirectory
         durationMs       = [int] $Entry.durationMs
         complete         = [bool] $Entry.complete
@@ -101,9 +108,15 @@ $driverManifestPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools
 $driverManifest = Get-Content -LiteralPath $driverManifestPath -Raw | ConvertFrom-Json
 $archivePath = $WinAppCliArchivePath
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    $OutputDirectory = Join-Path $script:repositoryRoot '.superpowers/stage5cc-uia-gate'
+    $defaultParent = Join-Path $script:repositoryRoot '.superpowers/stage5cc-uia-gate'
+    [void][IO.Directory]::CreateDirectory($defaultParent)
+    $OutputDirectory = Join-Path $defaultParent ('run-' + [guid]::NewGuid().ToString('N'))
 }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
+if ([IO.Directory]::Exists($output) -or [IO.File]::Exists($output)) {
+    [Console]::Error.WriteLine('The output directory already exists; choose a fresh destination.')
+    exit $ExitInvalidArguments
+}
 
 $requested = @()
 try { $requested = @(Resolve-UiAcceptanceScenarioRequest -Requested $Scenario) }
@@ -133,7 +146,7 @@ if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
     foreach ($name in $requested) {
         Write-Stage5CCIndexEntry -Index $index -Entry @{
             id = $name; status = 'Blocked'; reportStatus = 'Blocked'; executionStatus = 'Blocked'
-            reason = $blockedReason; reportPath = ''; ownedRoot = ''; outputDirectory = ''
+            reason = $blockedReason; reportPath = ''; outputDirectory = ''
             durationMs = 0; complete = $false
         }
     }
@@ -154,28 +167,18 @@ if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
 # --- per scenario ----------------------------------------------------------------------
 
 [void][IO.Directory]::CreateDirectory($output)
-$tooling = Join-Path $output 'tooling'
-[void][IO.Directory]::CreateDirectory($tooling)
-$driverRoot = Join-Path $tooling 'winapp'
-if (-not [IO.Directory]::Exists($driverRoot)) {
-    [IO.Directory]::CreateDirectory($driverRoot)
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $driverRoot -Force
-}
 $supportProject = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/TraceFold.Media.UiAcceptance.Support.csproj'
-$supportRoot = Join-Path $tooling 'support'
-$packageCache = Join-Path $script:repositoryRoot '.packages'
+$supportRoot = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/bin/stage5cc-bootstrap'
+$packageCache = Join-Path $script:repositoryRoot 'apps/media-desktop/.packages'
 & dotnet publish $supportProject -c Release -o $supportRoot -p:RestorePackagesPath=$packageCache | Out-Null
 if ($LASTEXITCODE -ne 0) {
     [Console]::Error.WriteLine('The support CLI could not be published.')
     exit $ExitBlocked
 }
 $supportExecutable = Join-Path $supportRoot 'TraceFold.Media.UiAcceptance.Support.exe'
-$driverExecutable = Join-Path $driverRoot 'winapp.exe'
-foreach ($tool in @($supportExecutable, $driverExecutable)) {
-    if (-not [IO.File]::Exists($tool)) {
-        [Console]::Error.WriteLine('A required tool is missing: ' + [IO.Path]::GetFileName($tool))
-        exit $ExitBlocked
-    }
+if (-not [IO.File]::Exists($supportExecutable)) {
+    [Console]::Error.WriteLine('The support CLI is missing after publish.')
+    exit $ExitBlocked
 }
 
 $productHash = (Get-FileHash -LiteralPath $productExecutable -Algorithm SHA256).Hash
@@ -203,7 +206,7 @@ foreach ($name in $requested) {
         Write-Stage5CCIndexEntry -Index $index -Entry @{
             id = $name; status = (Get-Stage5CCEntryEffectiveStatus -ReportStatus $reportStatus -ExecutionStatus $executionStatus)
             reportStatus = $reportStatus; executionStatus = $executionStatus; reason = $reason
-            reportPath = ''; ownedRoot = ''; outputDirectory = $runOutput
+            reportPath = ''; outputDirectory = $name
             durationMs = [int] $clock.ElapsedMilliseconds; complete = $false
         }
         continue
@@ -215,7 +218,9 @@ foreach ($name in $requested) {
         $runSupport = Join-Path $runRoot 'support'
         $runDriver = Join-Path $runRoot 'winapp'
         Copy-Item -LiteralPath $supportRoot -Destination $runSupport -Recurse -Force
-        Copy-Item -LiteralPath $driverRoot -Destination $runDriver -Recurse -Force
+        [void][IO.Directory]::CreateDirectory($runDriver)
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
+        if (-not [IO.File]::Exists((Join-Path $runDriver 'winapp.exe'))) { throw 'pinned_driver_executable_missing' }
 
         $entryArguments = @{
             ScenarioId        = (ConvertTo-UiAcceptanceSlug -Value $name)
@@ -263,13 +268,27 @@ foreach ($name in $requested) {
     catch {
         $executionStatus = 'Blocked'
         $reason = Protect-UiAcceptanceText -Value $_.Exception.Message -RunToken $runToken -OwnedRoot $runRoot
+        if (-not [string]::IsNullOrWhiteSpace($runRoot) -and [IO.Directory]::Exists($runRoot)) {
+            try {
+                $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $runRoot
+                if ($ledger.Count -gt 0) {
+                    $null = Stop-OwnedProcessTree -Ledger $ledger -ApprovedDirectories @($product)
+                }
+                $null = & $supportExecutable root delete --root $runRoot --token $runToken
+                if ($LASTEXITCODE -ne 0) { throw 'owned_root_delete_refused' }
+            }
+            catch {
+                $executionStatus = 'Failed'
+                $reason += '; setup_cleanup_failed'
+            }
+        }
     }
 
     $clock.Stop()
     $status = Get-Stage5CCEntryEffectiveStatus -ReportStatus $reportStatus -ExecutionStatus $executionStatus
     Write-Stage5CCIndexEntry -Index $index -Entry @{
         id = $name; status = $status; reportStatus = $reportStatus; executionStatus = $executionStatus
-        reason = $reason; reportPath = $reportPath; ownedRoot = $runRoot; outputDirectory = $runOutput
+        reason = $reason; reportPath = $(if ([IO.File]::Exists($reportPath)) { $name + '/report.json' } else { '' }); outputDirectory = $name
         durationMs = [int] $clock.ElapsedMilliseconds
         complete = ($status -ceq 'Passed' -and -not [string]::IsNullOrWhiteSpace($reportPath))
     }

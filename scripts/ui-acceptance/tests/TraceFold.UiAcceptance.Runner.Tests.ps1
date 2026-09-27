@@ -460,6 +460,27 @@ function Get-TestCases {
                     Remove-UiTestTree -Path $base
                 }
             }
+        },
+        @{
+            Name = 'entry blocked output contains no absolute owned paths'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
+                try {
+                    $hostExe = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+                    $entry = Join-Path $script:root 'scripts/run-stage5cc-ui-acceptance.ps1'
+                    $out = Join-Path $base 'out'
+                    $null = & $hostExe -NoProfile -File $entry -ProductDirectory $base -WinAppCliArchivePath (Join-Path $base 'missing.zip') -OutputDirectory $out -Scenario StartupLayout
+                    Assert-Equal 1 $LASTEXITCODE
+                    $json = Get-Content -LiteralPath (Join-Path $out 'summary.json') -Raw
+                    $summary = $json | ConvertFrom-Json
+                    Assert-Equal 'Blocked' $summary.status
+                    Assert-NotContains $json $base
+                    Assert-NotContains $json 'ownedRoot'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
         }
     )
 }

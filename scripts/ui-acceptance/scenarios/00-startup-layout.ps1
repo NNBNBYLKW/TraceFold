@@ -269,9 +269,8 @@ try {
         }
 
         $name = 'viewport-' + $widthDip + 'x' + $heightDip
-        $treeRelative = $name + '-uia.json'
-        [IO.File]::WriteAllText((Join-Path $OutputDirectory $treeRelative),
-            (ConvertTo-Json -InputObject $tree -Depth 30), [Text.UTF8Encoding]::new($false))
+        $treeRelative = Write-UiRedactedTreeEvidence -OutputDirectory $OutputDirectory `
+            -EvidenceId $name -Tree $tree -RunToken $RunToken -OwnedRoot $OwnedRoot
 
         $screenshotSource = Join-Path $screenshotDirectory ($name + '.png')
         $captured = Invoke-WinAppObservation -Arguments @('ui','screenshot',$windowId,'--output',$screenshotSource) `

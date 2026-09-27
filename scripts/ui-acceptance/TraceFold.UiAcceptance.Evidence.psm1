@@ -181,9 +181,47 @@ function Write-UiAcceptanceReport {
     return [pscustomobject]@{ Status=$overall; ReportPath=$target }
 }
 
+function Write-UiRedactedTreeEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)][string] $EvidenceId,
+        [Parameter(Mandatory)] $Tree,
+        [string] $RunToken,
+        [string] $OwnedRoot
+    )
+    Assert-UiAcceptanceFields -InputObject $Tree -Required @('tree')
+    if (-not [IO.Directory]::Exists($OutputDirectory)) { throw 'Run output directory does not exist.' }
+    $nodes = @()
+    foreach ($node in @($Tree.tree)) {
+        Assert-UiAcceptanceFields -InputObject $node -Required @('automationId','controlType','name','patterns','enabled','offscreen','bounds')
+        Assert-UiAcceptanceFields -InputObject $node.bounds -Required @('x','y','width','height')
+        if ($node.enabled -isnot [bool] -or $node.offscreen -isnot [bool]) { throw 'Invalid UIA tree state.' }
+        $nodes += [ordered]@{
+            automationId = Protect-UiAcceptanceText -Value ([string]$node.automationId) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            controlType = Protect-UiAcceptanceText -Value ([string]$node.controlType) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            name = Protect-UiAcceptanceText -Value ([string]$node.name) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            patterns = @($node.patterns | ForEach-Object { Protect-UiAcceptanceText -Value ([string]$_) -RunToken $RunToken -OwnedRoot $OwnedRoot })
+            enabled = [bool]$node.enabled
+            offscreen = [bool]$node.offscreen
+            bounds = [ordered]@{
+                x = [int]$node.bounds.x; y = [int]$node.bounds.y
+                width = [int]$node.bounds.width; height = [int]$node.bounds.height
+            }
+        }
+    }
+    $fileName = (ConvertTo-UiAcceptanceSlug -Value $EvidenceId) + '-uia.json'
+    $target = Join-Path $OutputDirectory $fileName
+    if ([IO.File]::Exists($target)) { throw 'UIA evidence already exists.' }
+    $json = ConvertTo-Json -InputObject ([ordered]@{ tree=$nodes }) -Depth 20
+    [IO.File]::WriteAllText($target, $json, [Text.UTF8Encoding]::new($false))
+    return $fileName
+}
+
 Export-ModuleMember -Function @(
     'Write-UiFailureEvidence',
     'Write-UiAcceptanceReport',
+    'Write-UiRedactedTreeEvidence',
     'Assert-UiPngBytes',
     'Assert-UiOwnedEvidenceFile',
     'Assert-UiEvidenceDirectory'
