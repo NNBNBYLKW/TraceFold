@@ -87,7 +87,7 @@
                             <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="文件夹设置" />
                             <TextBlock
                                 Opacity="0.72"
-                                Text="选择待入库、正式文件库和前置处理工作目录。三个目录不能相同或互相包含。"
+                                Text="可输入或粘贴目录路径，也可使用右侧的“选择…”按钮。三个目录不能相同或互相包含。"
                                 TextWrapping="Wrap" />
                         </StackPanel>
 
@@ -100,9 +100,8 @@
                                 HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="InboxFolderPath"
                                 AutomationProperties.Name="待入库文件夹路径"
-                                IsReadOnly="True"
-                                PlaceholderText="请选择待入库目录"
-                                Text="{x:Bind ViewModel.InboxDirectory, Mode=OneWay}" />
+                                PlaceholderText="可输入或粘贴待入库目录路径，或使用选择按钮"
+                                Text="{x:Bind ViewModel.InboxDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <Button
                                 x:Name="PickInboxFolderButton"
                                 Grid.Column="2"
@@ -121,9 +120,8 @@
                                 HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="LibraryFolderPath"
                                 AutomationProperties.Name="正式文件库路径"
-                                IsReadOnly="True"
-                                PlaceholderText="请选择正式文件库目录"
-                                Text="{x:Bind ViewModel.LibraryDirectory, Mode=OneWay}" />
+                                PlaceholderText="可输入或粘贴正式文件库路径，或使用选择按钮"
+                                Text="{x:Bind ViewModel.LibraryDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <Button
                                 x:Name="PickLibraryFolderButton"
                                 Grid.Column="2"
@@ -142,9 +140,8 @@
                                 HorizontalAlignment="Stretch"
                                 AutomationProperties.AutomationId="WorkFolderPath"
                                 AutomationProperties.Name="工作文件夹路径"
-                                IsReadOnly="True"
-                                PlaceholderText="请选择前置处理工作目录"
-                                Text="{x:Bind ViewModel.WorkDirectory, Mode=OneWay}" />
+                                PlaceholderText="可输入或粘贴工作目录路径，或使用选择按钮"
+                                Text="{x:Bind ViewModel.WorkDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <Button
                                 x:Name="PickWorkFolderButton"
                                 Grid.Column="2"

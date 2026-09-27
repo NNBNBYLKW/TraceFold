@@ -519,6 +519,73 @@ public sealed class UiAutomationContractTests
     }
 
     /// <summary>
+    /// A normal user must be able to type or paste the three work directories, and the typed text
+    /// has to reach the view model before Save runs. The stable id, the Chinese name, the
+    /// change-propagation mode and the existing folder picker all stay exactly as they are, because
+    /// the acceptance gate addresses these controls by id and name and the picker remains the
+    /// second entry method.
+    /// </summary>
+    [Theory]
+    [InlineData("InboxFolderPath", "待入库文件夹路径", "InboxDirectory", "ChooseInboxCommand",
+        "PickInboxFolder", "选择待入库文件夹")]
+    [InlineData("LibraryFolderPath", "正式文件库路径", "LibraryDirectory", "ChooseLibraryCommand",
+        "PickLibraryFolder", "选择正式文件库文件夹")]
+    [InlineData("WorkFolderPath", "工作文件夹路径", "WorkDirectory", "ChooseWorkCommand",
+        "PickWorkFolder", "选择工作文件夹")]
+    public void Directory_paths_accept_typing_and_keep_their_folder_pickers(
+        string inputId,
+        string inputName,
+        string property,
+        string command,
+        string pickerId,
+        string pickerName)
+    {
+        XDocument page = LoadProductXaml("Pages/SettingsPage.xaml");
+
+        XElement input = Assert.Single(page.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == inputId);
+        Assert.Equal("TextBox", input.Name.LocalName);
+        Assert.Equal(inputName, input.Attribute("AutomationProperties.Name")?.Value);
+        Assert.NotEqual("True", input.Attribute("IsReadOnly")?.Value);
+        Assert.Equal(
+            "{x:Bind ViewModel." + property + ", Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}",
+            input.Attribute("Text")?.Value);
+        Assert.Contains("输入", input.Attribute("PlaceholderText")?.Value ?? string.Empty,
+            StringComparison.Ordinal);
+
+        XElement picker = Assert.Single(page.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == pickerId);
+        Assert.Equal("Button", picker.Name.LocalName);
+        Assert.Equal(pickerName, picker.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Equal("{x:Bind ViewModel." + command + "}", picker.Attribute("Command")?.Value);
+    }
+
+    /// <summary>
+    /// The settings form explains both entry methods, and persistence keeps going through the view
+    /// model's Save command: no code-behind shortcut may write the settings itself.
+    /// </summary>
+    [Fact]
+    public void Directory_settings_explain_both_entry_methods_and_save_through_the_view_model()
+    {
+        XDocument page = LoadProductXaml("Pages/SettingsPage.xaml");
+        string[] hints = [.. page.Descendants()
+            .Where(element => element.Name.LocalName == "TextBlock")
+            .Select(element => element.Attribute("Text")?.Value ?? string.Empty)];
+        Assert.Contains(hints, hint =>
+            hint.Contains("输入", StringComparison.Ordinal)
+            && hint.Contains("选择", StringComparison.Ordinal));
+
+        XElement save = Assert.Single(page.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == "SaveFolderSettings");
+        Assert.Equal("{x:Bind ViewModel.SaveCommand}", save.Attribute("Command")?.Value);
+
+        string codeBehind = File.ReadAllText(
+            FindFile(ProductRoot + "/Pages/SettingsPage.xaml.cs"));
+        Assert.DoesNotContain("DirectorySettingsService", codeBehind, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveAsync", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Resolves the effective control behind an automation id and the accessible name that
     /// belongs to it. A taxonomy picker input id lives on the use site and its accessible
     /// name belongs to that site, while the native control stays the picker's inner one.
