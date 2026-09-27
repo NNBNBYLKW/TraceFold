@@ -84,13 +84,13 @@ function Get-TestCases {
                 $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-ev-' + [guid]::NewGuid().ToString('N'))
                 [void][IO.Directory]::CreateDirectory($base)
                 try {
-                    $tree = [pscustomobject]@{tree=@([pscustomobject]@{
+                    $nodes = @([pscustomobject]@{
                         automationId='Button1';controlType='Button';name='C:\Users\someone\private.txt'
-                        patterns=@('Invoke');enabled=$true;offscreen=$false
+                        enabled=$true;offscreen=$false
                         bounds=[pscustomobject]@{x=1;y=2;width=3;height=4}
                         pid=123; raw='secret-token'
-                    })}
-                    $name = Write-UiRedactedTreeEvidence -OutputDirectory $base -EvidenceId 'startup' -Tree $tree -RunToken 'secret-token'
+                    })
+                    $name = Write-UiRedactedTreeEvidence -OutputDirectory $base -EvidenceId 'startup' -Nodes $nodes -RunToken 'secret-token'
                     $text = Get-Content -LiteralPath (Join-Path $base $name) -Raw
                     Assert-NotContains $text 'C:\Users\someone'
                     Assert-NotContains $text 'secret-token'

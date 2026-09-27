@@ -12,10 +12,12 @@ function New-StartupLayoutContract {
     )
 
     $entries = @(
-        [ordered]@{ file='MainWindow.xaml'; automationId='TraceFoldMainWindow'; name='TraceFold main window'; controlType='Window'; requiredPatterns=@(); scope='window'; dynamicSelectorPolicy='static_id' }
-        [ordered]@{ file='Shell/ShellPage.xaml'; automationId='NavInbox'; name='Inbox navigation'; controlType='NavigationViewItem'; requiredPatterns=@('SelectionItem'); scope='shell'; dynamicSelectorPolicy='static_id' }
-        [ordered]@{ file='Pages/InboxPage.xaml'; automationId='InboxInspectorOpenButton'; name='Open inbox file panel'; controlType='Button'; requiredPatterns=@('Invoke'); scope='pages_inboxpage'; dynamicSelectorPolicy='static_id' }
-        [ordered]@{ file='Pages/InboxPage.xaml'; automationId='InspectorPane'; name='Inbox file inspector'; controlType='Border'; requiredPatterns=@(); scope='page_host:inbox'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='MainWindow.xaml'; automationId='TraceFoldMainWindow'; name='TraceFold main window'; controlType='Grid'; nativeControlType='Group'; requiredPatterns=@(); scope='window'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Shell/ShellPage.xaml'; automationId='NavInbox'; name='Inbox navigation'; controlType='NavigationViewItem'; nativeControlType='ListItem'; requiredPatterns=@('SelectionItem'); scope='shell'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Pages/InboxPage.xaml'; automationId='InboxInspectorOpenButton'; name='Open inbox file panel'; controlType='Button'; nativeControlType='Button'; requiredPatterns=@('Invoke'); scope='pages_inboxpage'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Pages/InboxPage.xaml'; automationId='InspectorPane'; name='Inbox file inspector'; controlType='Border'; nativeControlType='Border'; requiredPatterns=@(); scope='page_host:inbox'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Shell/ShellPage.xaml'; automationId='TraceFoldShell'; name='TraceFold shell'; controlType='Grid'; nativeControlType='Group'; requiredPatterns=@(); scope='shell'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Pages/InboxPage.xaml'; automationId='InboxPageRoot'; name='Inbox page root'; controlType='Grid'; nativeControlType='Group'; requiredPatterns=@(); scope='pages_inboxpage'; dynamicSelectorPolicy='static_id' }
     )
 
     $contract = [ordered]@{
@@ -66,23 +68,66 @@ function New-StartupLayoutNode {
         [Parameter(Mandatory)][string] $Id,
         [Parameter(Mandatory)][string] $ControlType,
         [Parameter(Mandatory)][string] $Name,
-        [string[]] $Patterns = @(),
         [bool] $Enabled = $true,
         [bool] $Offscreen = $false,
         [int] $X = 0,
         [int] $Y = 0,
         [int] $Width = 0,
-        [int] $Height = 0
+        [int] $Height = 0,
+        [object[]] $Children = @()
     )
 
-    return [ordered]@{
-        automationId = $Id
-        controlType  = $ControlType
+    # The flat projection the scenario's assertions work on. The fake driver emits the pinned
+    # driver's nested windows[].elements[].children shape; this helper is only used to build the
+    # nested payload below, so the tests exercise the same adapter the real response goes through.
+    $node = [ordered]@{
+        type         = $ControlType
         name         = $Name
-        patterns     = $Patterns
-        enabled      = $Enabled
-        offscreen    = $Offscreen
-        bounds       = [ordered]@{ x = $X; y = $Y; width = $Width; height = $Height }
+        automationId = $Id
+        className    = 'Fake.' + $ControlType
+        isEnabled    = $Enabled
+        isOffscreen  = $Offscreen
+        x            = $X
+        y            = $Y
+        width        = $Width
+        height       = $Height
+        selector     = 'sel-' + $Id
+        isInvokable  = $false
+    }
+    if (@($Children).Count -gt 0) { $node['children'] = @($Children) }
+    return ,$node
+}
+
+<#
+.SYNOPSIS
+    Wraps driver nodes in the pinned driver's real inspect response envelope.
+
+.DESCRIPTION
+    The pinned driver answers 'ui inspect --json' with
+    { depth, interactive, hideDisabled, hideOffscreen, windows[ { hwnd, title, elementCount, elements } ] }.
+    The fake must produce that shape, otherwise the scenario's adapter would never be exercised.
+#>
+function New-StartupLayoutWindowPayload {
+    param(
+        [Parameter(Mandatory)][object[]] $Elements,
+        # Not Mandatory: a Mandatory parameter prompts even when it has a default, which would
+        # hang a non-interactive self-test run.
+        [string] $WindowTitle = 'Fake product window'
+    )
+
+    return ,[ordered]@{
+        depth          = 8
+        interactive    = $false
+        hideDisabled   = $false
+        hideOffscreen  = $false
+        windows        = @(
+            [ordered]@{
+                hwnd         = 4242
+                title        = $WindowTitle
+                elementCount = @($Elements).Count
+                elements     = @($Elements)
+            }
+        )
     }
 }
 
@@ -93,32 +138,47 @@ function New-StartupLayoutTree {
         [bool] $InspectorOpenButtonEnabled = $false,
         [int] $InspectorX = 900,
         [switch] $IncludeInboxRow,
-        [switch] $OmitInspectorNode
+        [switch] $OmitInspectorNode,
+        [switch] $DuplicateNavigationId
     )
 
-    $nodes = @(
-        New-StartupLayoutNode -Id 'TraceFoldMainWindow' -ControlType 'Window' -Name 'TraceFold main window' -Width 1024 -Height 720
-        New-StartupLayoutNode -Id 'NavInbox' -ControlType 'NavigationViewItem' -Name 'Inbox navigation' -Patterns @('SelectionItem') -Width $NavigationWidth -Height 40
-        New-StartupLayoutNode -Id 'InboxInspectorOpenButton' -ControlType 'Button' -Name 'Open inbox file panel' -Patterns @('Invoke') -Enabled $InspectorOpenButtonEnabled -X 700 -Y 60 -Width 32 -Height 32
-    )
+    $inspector = @()
+    if (-not $OmitInspectorNode) {
+        $inspector = @(
+            if ($InlineInspector) {
+                New-StartupLayoutNode -Id 'InspectorPane' -ControlType 'Border' -Name 'Inbox file inspector' -X $InspectorX -Y 0 -Width 320 -Height 720
+            }
+            else {
+                New-StartupLayoutNode -Id 'InspectorPane' -ControlType 'Border' -Name 'Inbox file inspector' -Offscreen $true -Width 0 -Height 0
+            }
+        )
+    }
 
-    # A brand-new owned root has no media rows; the row only appears after the scenario has
-    # seeded the inbox through the product UI. Its runtime id is deliberately a generated value
-    # so any attempt to address the row by id becomes a visible failure.
+    $row = @()
     if ($IncludeInboxRow) {
-        $nodes += New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'Grid' -Name 'Inbox row paired.mp4' -X 100 -Y 100 -Width 200 -Height 60
+        # Its runtime id is a generated value, so any attempt to address the row by id fails.
+        $row = @(New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'Grid' -Name 'Inbox row paired.mp4' -X 100 -Y 100 -Width 200 -Height 60)
     }
 
-    if ($OmitInspectorNode) { return $nodes }
+    # The window scope wraps the shell scope, which wraps the page scopes: the fake response has
+    # real nesting so the scenario's recursive adapter is genuinely exercised.
+    $pageChildren = @(
+        New-StartupLayoutNode -Id 'InboxInspectorOpenButton' -ControlType 'Button' -Name 'Open inbox file panel' -Enabled $InspectorOpenButtonEnabled -X 700 -Y 60 -Width 32 -Height 32
+    ) + $row + $inspector
 
-    if ($InlineInspector) {
-        $nodes += New-StartupLayoutNode -Id 'InspectorPane' -ControlType 'Border' -Name 'Inbox file inspector' -X $InspectorX -Y 0 -Width 320 -Height 720
-    }
-    else {
-        $nodes += New-StartupLayoutNode -Id 'InspectorPane' -ControlType 'Border' -Name 'Inbox file inspector' -Offscreen $true -Width 0 -Height 0
+    $shellChildren = @(
+        New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
+        New-StartupLayoutNode -Id 'InboxPageRoot' -ControlType 'Group' -Name 'Inbox page root' -Width $NavigationWidth -Height 40 -Children $pageChildren
+    )
+    if ($DuplicateNavigationId) {
+        $shellChildren += New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
     }
 
-    return $nodes
+    $root = New-StartupLayoutNode -Id 'TraceFoldMainWindow' -ControlType 'Group' -Name 'TraceFold main window' -Width 1024 -Height 720 -Children @(
+        New-StartupLayoutNode -Id 'TraceFoldShell' -ControlType 'Group' -Name 'TraceFold shell' -Width 1024 -Height 720 -Children $shellChildren
+    )
+
+    return ,(New-StartupLayoutWindowPayload -Elements @($root))
 }
 
 <#
@@ -147,13 +207,13 @@ function New-StartupLayoutTreeSequence {
     $drawerClosed = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
 
     $payloads = @(
-        ([ordered]@{ tree = $startupCompact } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $startupWide1280 } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $startupWide1600 } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $rowPresent } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $rowSelected } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $drawerOpen } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $drawerClosed } | ConvertTo-Json -Depth 12 -Compress)
+        ($startupCompact | ConvertTo-Json -Depth 12 -Compress)
+        ($startupWide1280 | ConvertTo-Json -Depth 12 -Compress)
+        ($startupWide1600 | ConvertTo-Json -Depth 12 -Compress)
+        ($rowPresent | ConvertTo-Json -Depth 12 -Compress)
+        ($rowSelected | ConvertTo-Json -Depth 12 -Compress)
+        ($drawerOpen | ConvertTo-Json -Depth 12 -Compress)
+        ($drawerClosed | ConvertTo-Json -Depth 12 -Compress)
     )
 
     [IO.File]::WriteAllText($Path, ($payloads | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))

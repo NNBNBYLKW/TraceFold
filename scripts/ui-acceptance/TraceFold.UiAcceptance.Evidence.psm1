@@ -181,27 +181,36 @@ function Write-UiAcceptanceReport {
     return [pscustomobject]@{ Status=$overall; ReportPath=$target }
 }
 
+<#
+.SYNOPSIS
+    Writes one redacted UIA tree evidence file from already-normalized nodes.
+
+.DESCRIPTION
+    The pinned driver's response has nested children and native field names, so the scenario
+    normalizes it first; this writer only whitelists the reviewed fields and redacts text. It
+    deliberately drops every other field the driver may add, and it carries no UIA pattern claim
+    because the driver does not report patterns: availability is established by the read-only
+    native probe and recorded separately.
+#>
 function Write-UiRedactedTreeEvidence {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $OutputDirectory,
         [Parameter(Mandatory)][string] $EvidenceId,
-        [Parameter(Mandatory)] $Tree,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Nodes,
         [string] $RunToken,
         [string] $OwnedRoot
     )
-    Assert-UiAcceptanceFields -InputObject $Tree -Required @('tree')
     if (-not [IO.Directory]::Exists($OutputDirectory)) { throw 'Run output directory does not exist.' }
-    $nodes = @()
-    foreach ($node in @($Tree.tree)) {
-        Assert-UiAcceptanceFields -InputObject $node -Required @('automationId','controlType','name','patterns','enabled','offscreen','bounds')
+    $redacted = @()
+    foreach ($node in @($Nodes)) {
+        Assert-UiAcceptanceFields -InputObject $node -Required @('automationId','controlType','name','enabled','offscreen','bounds')
         Assert-UiAcceptanceFields -InputObject $node.bounds -Required @('x','y','width','height')
         if ($node.enabled -isnot [bool] -or $node.offscreen -isnot [bool]) { throw 'Invalid UIA tree state.' }
-        $nodes += [ordered]@{
+        $redacted += [ordered]@{
             automationId = Protect-UiAcceptanceText -Value ([string]$node.automationId) -RunToken $RunToken -OwnedRoot $OwnedRoot
             controlType = Protect-UiAcceptanceText -Value ([string]$node.controlType) -RunToken $RunToken -OwnedRoot $OwnedRoot
             name = Protect-UiAcceptanceText -Value ([string]$node.name) -RunToken $RunToken -OwnedRoot $OwnedRoot
-            patterns = @($node.patterns | ForEach-Object { Protect-UiAcceptanceText -Value ([string]$_) -RunToken $RunToken -OwnedRoot $OwnedRoot })
             enabled = [bool]$node.enabled
             offscreen = [bool]$node.offscreen
             bounds = [ordered]@{
@@ -213,7 +222,7 @@ function Write-UiRedactedTreeEvidence {
     $fileName = (ConvertTo-UiAcceptanceSlug -Value $EvidenceId) + '-uia.json'
     $target = Join-Path $OutputDirectory $fileName
     if ([IO.File]::Exists($target)) { throw 'UIA evidence already exists.' }
-    $json = ConvertTo-Json -InputObject ([ordered]@{ tree=$nodes }) -Depth 20
+    $json = ConvertTo-Json -InputObject ([ordered]@{ tree=$redacted }) -Depth 20
     [IO.File]::WriteAllText($target, $json, [Text.UTF8Encoding]::new($false))
     return $fileName
 }

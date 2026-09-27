@@ -139,7 +139,38 @@ switch ($sub) {
         exit 0
     }
     'search' {
-        [Console]::Out.Write('{"matches":[{"automationId":"InboxInspectorOpenButton","controlType":"Button","name":"open inbox inspector"}]}')
+        if (-not [string]::IsNullOrEmpty($env:TRACEFOLD_FAKE_SEARCH_JSON)) {
+            [Console]::Out.Write($env:TRACEFOLD_FAKE_SEARCH_JSON)
+            exit 0
+        }
+        $selector = 'InboxInspectorOpenButton'
+        if ($Arguments.Count -ge 3) { $selector = [string] $Arguments[2] }
+        $match = [ordered]@{
+            type = 'Button'; name = $selector; automationId = $selector; className = 'Button'
+            isEnabled = $true; isOffscreen = $false
+            x = 700; y = 60; width = 32; height = 32
+            selector = $selector; isInvokable = $true
+        }
+        [Console]::Out.Write(([pscustomobject]@{ matchCount = 1; hasMore = $false; matches = @($match) } | ConvertTo-Json -Depth 6 -Compress))
+        exit 0
+    }
+    'get-property' {
+        if (-not [string]::IsNullOrEmpty($env:TRACEFOLD_FAKE_PROPERTY_JSON)) {
+            [Console]::Out.Write($env:TRACEFOLD_FAKE_PROPERTY_JSON)
+            exit 0
+        }
+        $selector = 'NavInbox'
+        if ($Arguments.Count -ge 3) { $selector = [string] $Arguments[2] }
+        # The pinned driver answers null for a pattern-availability property it does not know how
+        # to read; the fake reproduces that so no test can mistake null for a pattern answer.
+        $properties = [ordered]@{
+            AutomationId = $selector; ControlType = 'ListItem'; IsEnabled = 'True'; IsOffscreen = 'False'
+        }
+        $propertyNameIndex = [Array]::IndexOf($Arguments, '--property')
+        if ($propertyNameIndex -ge 0 -and $propertyNameIndex + 1 -lt $Arguments.Count) {
+            $properties = [ordered]@{ ([string] $Arguments[$propertyNameIndex + 1]) = $null }
+        }
+        [Console]::Out.Write(([pscustomobject]@{ elementId = 'el-fake-0001'; properties = $properties } | ConvertTo-Json -Depth 6 -Compress))
         exit 0
     }
     'wait-for' {
@@ -164,10 +195,6 @@ switch ($sub) {
     }
     'get-value' {
         [Console]::Out.Write('{"value":"sample-value"}')
-        exit 0
-    }
-    'get-property' {
-        [Console]::Out.Write('{"property":"IsEnabled","value":true}')
         exit 0
     }
     'invoke' {

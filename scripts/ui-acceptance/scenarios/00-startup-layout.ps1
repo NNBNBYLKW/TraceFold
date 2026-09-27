@@ -88,10 +88,75 @@ function Read-StartupLayoutTree {
         -ProcessId $ProcessId -TimeoutSeconds $ObservationTimeoutSeconds `
         -WinAppPath $WinAppPath -RunToken $RunToken -OwnedRoot $OwnedRoot
     if ($observation.Status -cne 'Passed') { throw $FailureCode }
-    if ($null -eq $observation.Data -or $null -eq $observation.Data.PSObject.Properties['tree']) {
+    if ($null -eq $observation.Data -or $null -eq $observation.Data.PSObject.Properties['windows']) {
         throw 'startup_layout.driver_schema_incompatible'
     }
     return $observation.Data
+}
+
+<#
+.SYNOPSIS
+    Flattens one driver inspection response into the node list every assertion works on.
+
+.DESCRIPTION
+    The pinned driver answers 'ui inspect --json' with windows[].elements[] whose nodes carry
+    nested children, and whose fields are type / isEnabled / isOffscreen / x / y / width / height.
+    Only those fields are required; automationId, name, className and children are optional.
+    Nothing is invented: a node without a field contributes no field, and a response that is not
+    this shape fails with the stable schema code instead of being coerced.
+#>
+function ConvertFrom-StartupLayoutDriverTree {
+    param([Parameter(Mandatory)] $Data)
+
+    if ($null -eq $Data.PSObject.Properties['windows']) {
+        throw 'startup_layout.driver_schema_incompatible'
+    }
+
+    $nodes = @()
+    foreach ($window in @($Data.windows)) {
+        if ($null -eq $window.PSObject.Properties['elements']) {
+            throw 'startup_layout.driver_schema_incompatible'
+        }
+        foreach ($element in @($window.elements)) {
+            $nodes += (Expand-StartupLayoutDriverNode -Node $element)
+        }
+    }
+    return ,$nodes
+}
+
+function Expand-StartupLayoutDriverNode {
+    param([Parameter(Mandatory)] $Node)
+
+    # A response that is not the pinned driver's node shape is a schema failure, never a field
+    # assertion error: the caller must be able to act on one stable code.
+    foreach ($field in @('type','isEnabled','isOffscreen','x','y','width','height')) {
+        if ($null -eq $Node.PSObject.Properties[$field]) { throw 'startup_layout.driver_schema_incompatible' }
+    }
+    $id = ''
+    if ($null -ne $Node.PSObject.Properties['automationId']) { $id = [string] $Node.automationId }
+    $name = ''
+    if ($null -ne $Node.PSObject.Properties['name']) { $name = [string] $Node.name }
+
+    $flattened = @([pscustomobject] @{
+        automationId = $id
+        controlType  = [string] $Node.type
+        name         = $name
+        enabled      = [bool] $Node.isEnabled
+        offscreen    = [bool] $Node.isOffscreen
+        bounds       = [pscustomobject] @{
+            x      = [int] $Node.x
+            y      = [int] $Node.y
+            width  = [int] $Node.width
+            height = [int] $Node.height
+        }
+    })
+
+    if ($null -ne $Node.PSObject.Properties['children']) {
+        foreach ($child in @($Node.children)) {
+            $flattened += (Expand-StartupLayoutDriverNode -Node $child)
+        }
+    }
+    return ,$flattened
 }
 
 function Resize-StartupLayoutWindow {
@@ -146,13 +211,14 @@ function Assert-StartupLayoutEntry {
         $matches = @($Index[$id])
         if ($matches.Count -ne 1) { throw 'startup_layout.entry_ambiguous' }
         $node = $matches[0]
-        if ([string] $node.controlType -cne [string] $entry.controlType) { throw 'startup_layout.control_type' }
+        # The driver reports the native UIA control type, which is not the XAML element type, so
+        # the comparison uses the separately declared and measured native type.
+        if ($null -eq $entry.PSObject.Properties['nativeControlType']) { throw 'startup_layout.native_type_missing' }
+        if ([string] $node.controlType -cne [string] $entry.nativeControlType) { throw 'startup_layout.native_type' }
         if ([string] $node.name -cne [string] $entry.name) { throw 'startup_layout.accessible_name' }
         if ($node.enabled -isnot [bool] -or $node.offscreen -isnot [bool]) { throw 'startup_layout.state_missing' }
-        $patterns = @($node.patterns)
-        foreach ($pattern in @($entry.requiredPatterns)) {
-            if ($patterns -cnotcontains [string] $pattern) { throw 'startup_layout.pattern_missing' }
-        }
+        # No pattern is claimed from this response: the pinned driver does not report UIA
+        # patterns at all, so availability is established by the read-only native probe.
         # The inline inspector is legitimately collapsed at the narrow size; its visibility is
         # owned by the layout policy below, not by this reachability rule.
         if ([bool] $node.offscreen -and $OffscreenAllowed -cnotcontains $id) {
@@ -375,7 +441,7 @@ try {
         $scale = Assert-StartupLayoutClientSize -Fact $resized -WidthDip $widthDip -HeightDip $heightDip -Tolerance $tolerance
 
         $tree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
-        $nodes = @($tree.tree)
+        $nodes = ConvertFrom-StartupLayoutDriverTree -Data $tree
         $index = Get-StartupLayoutIndex -Nodes $nodes
         $indent = 'startup_layout.' + $widthDip
 
@@ -403,7 +469,7 @@ try {
 
         $name = 'viewport-' + $widthDip + 'x' + $heightDip
         $treeRelative = Write-UiRedactedTreeEvidence -OutputDirectory $OutputDirectory `
-            -EvidenceId $name -Tree $tree -RunToken $RunToken -OwnedRoot $OwnedRoot
+            -EvidenceId $name -Nodes $nodes -RunToken $RunToken -OwnedRoot $OwnedRoot
 
         $screenshotSource = Join-Path $screenshotDirectory ($name + '.png')
         $captured = Invoke-WinAppObservation -Arguments @('ui','screenshot',$windowId,'--output',$screenshotSource) `
@@ -479,7 +545,7 @@ try {
     }
 
     $seededTree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
-    Assert-StartupLayoutPhaseRow -Nodes @($seededTree.tree) -Rows $materializedRows
+    Assert-StartupLayoutPhaseRow -Nodes (ConvertFrom-StartupLayoutDriverTree -Data $seededTree) -Rows $materializedRows
 
     # --- compact drawer policy, only once a real row exists ---
     $compactSpecs = @($declared | Where-Object { -not [bool] $_.inlineInspector })
@@ -500,7 +566,7 @@ try {
             -ProcessId $productProcessId -FailureCode 'startup_layout.row_selection'
 
         $readyTree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
-        $readyIndex = Get-StartupLayoutIndex -Nodes @($readyTree.tree)
+        $readyIndex = Get-StartupLayoutIndex -Nodes (ConvertFrom-StartupLayoutDriverTree -Data $readyTree)
         $openButtonId = [string] $probe.inspectorOpenButtonAutomationId
         $openButton = Get-StartupLayoutBounds -Index $readyIndex -AutomationId $openButtonId -FailureCode 'startup_layout.inspector_open_button'
         if (-not [bool] $openButton.enabled) { throw 'startup_layout.inspector_open_button' }
@@ -510,7 +576,7 @@ try {
             -ProcessId $productProcessId -FailureCode 'startup_layout.inspector_open'
 
         $drawerTree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
-        $drawerIndex = Get-StartupLayoutIndex -Nodes @($drawerTree.tree)
+        $drawerIndex = Get-StartupLayoutIndex -Nodes (ConvertFrom-StartupLayoutDriverTree -Data $drawerTree)
         $drawer = Get-StartupLayoutBounds -Index $drawerIndex -AutomationId ([string] $probe.inlineInspectorAutomationId) -FailureCode 'startup_layout.drawer_missing'
         if ([bool] $drawer.offscreen -or [int] $drawer.bounds.width -le 0) { throw 'startup_layout.drawer_missing' }
         # A compact drawer is anchored to the right half of the client area.
@@ -523,7 +589,7 @@ try {
         if ($closed.Status -cne 'Passed') { throw 'startup_layout.drawer_close' }
 
         $closedTree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
-        $closedIndex = Get-StartupLayoutIndex -Nodes @($closedTree.tree)
+        $closedIndex = Get-StartupLayoutIndex -Nodes (ConvertFrom-StartupLayoutDriverTree -Data $closedTree)
         $afterEscape = Get-StartupLayoutBounds -Index $closedIndex -AutomationId ([string] $probe.inlineInspectorAutomationId) -FailureCode 'startup_layout.drawer_missing'
         if (-not [bool] $afterEscape.offscreen) { throw 'startup_layout.drawer_close' }
     }
