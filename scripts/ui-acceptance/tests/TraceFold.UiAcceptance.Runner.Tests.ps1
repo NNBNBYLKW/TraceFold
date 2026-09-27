@@ -28,10 +28,12 @@ function New-StartupLayoutContract {
             [ordered]@{ file='Pages/LibraryPage.xaml'; controlType='Grid'; selector='accessible_name'; fixedAccessibleName='Library row photo.jpg'; fixedFilename='photo.jpg'; forbidGuidSelectors=$true; phase='post-ingest' }
         )
         fixtureAssets  = @(
-            [ordered]@{ fixedFilename='paired.mp4'; repositoryPath='apps/media-api/tests/fixtures/media/paired.mp4'; sha256=$AssetSha256; sizeBytes=2405; seedDirectory='inbox' }
+            [ordered]@{ fixedFilename='paired.mp4'; repositoryPath='apps/media-api/tests/fixtures/media/paired.mp4'; sha256=$AssetSha256; sizeBytes=2405; seedDirectory='inbox' },
+            [ordered]@{ fixedFilename='paired.m4a'; repositoryPath='apps/media-api/tests/fixtures/media/paired.m4a'; sha256='187F3BE0AB2C07C6A967840BEBFA0EB1646227B52179387F74AB4D8BBC64AAC1'; sizeBytes=9988; seedDirectory='inbox' }
         )
         sessionPreparation = [ordered]@{
             materializedRowPhase           = 'inbox-seeded'
+            seedFilenames                  = @('paired.mp4','paired.m4a')
             settingsNavigationAutomationId = 'NavSettings'
             inboxNavigationAutomationId    = 'NavInbox'
             saveFolderSettingsAutomationId = 'SaveFolderSettings'
@@ -475,8 +477,11 @@ function Get-TestCases {
 
                     # Only the owned inbox received the verified fixture.
                     $copied = Join-Path $base 'owned/inbox/paired.mp4'
+                    $companion = Join-Path $base 'owned/inbox/paired.m4a'
                     Assert-True ([IO.File]::Exists($copied)) 'the verified fixture must be copied into the owned inbox'
                     Assert-Equal 2405 ([IO.File]::ReadAllBytes($copied).Length)
+                    Assert-True ([IO.File]::Exists($companion)) 'the companion must be copied into the owned inbox'
+                    Assert-Equal 9988 ([IO.File]::ReadAllBytes($companion).Length)
                     Assert-True (-not [IO.File]::Exists((Join-Path $base 'owned/library/paired.mp4')))
                     Assert-True (-not [IO.File]::Exists((Join-Path $base 'owned/work/paired.mp4')))
                     Assert-Equal 'B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3' (Get-FileHash -LiteralPath (Join-Path $script:root 'apps/media-api/tests/fixtures/media/paired.mp4') -Algorithm SHA256).Hash

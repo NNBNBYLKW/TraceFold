@@ -254,7 +254,10 @@ function Copy-StartupLayoutFixture {
         [Parameter(Mandatory)][hashtable] $Folders
     )
 
-    $source = Join-Path $repositoryRoot ([string] $Asset.repositoryPath)
+    $source = [IO.Path]::GetFullPath((Join-Path $repositoryRoot ([string] $Asset.repositoryPath)))
+    $repositoryBoundary = $repositoryRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $source.StartsWith($repositoryBoundary, [StringComparison]::OrdinalIgnoreCase)) { throw 'startup_layout.fixture_target' }
+    if ([IO.Path]::GetFileName([string]$Asset.fixedFilename) -cne [string]$Asset.fixedFilename) { throw 'startup_layout.fixture_target' }
     if (-not [IO.File]::Exists($source)) { throw 'startup_layout.fixture_missing' }
     $item = Get-Item -LiteralPath $source
     if ($item.Length -ne [long] $Asset.sizeBytes) { throw 'startup_layout.fixture_mismatch' }
@@ -264,7 +267,7 @@ function Copy-StartupLayoutFixture {
     $seedDirectory = [string] $Asset.seedDirectory
     if (-not $Folders.ContainsKey($seedDirectory)) { throw 'startup_layout.fixture_target' }
     $destination = Join-Path $Folders[$seedDirectory] ([string] $Asset.fixedFilename)
-    [IO.File]::Copy($source, $destination, $true)
+    [IO.File]::Copy($source, $destination, $false)
     return [pscustomobject] @{ Source = $source; Destination = $destination; Sha256 = $hash }
 }
 
@@ -318,7 +321,7 @@ try {
 
     $preparation = $contract.sessionPreparation
     Assert-UiAcceptanceFields -InputObject $preparation -Required @(
-        'materializedRowPhase','settingsNavigationAutomationId','inboxNavigationAutomationId',
+        'materializedRowPhase','seedFilenames','settingsNavigationAutomationId','inboxNavigationAutomationId',
         'saveFolderSettingsAutomationId','scanTriggerAutomationId','folderInputs')
     $materializedPhase = [string] $preparation.materializedRowPhase
     if ($phases -cnotcontains $materializedPhase) { throw 'startup_layout.dynamic_phase' }
@@ -332,10 +335,16 @@ try {
     }
 
     $assets = @($contract.fixtureAssets)
+    $seedNames = @($preparation.seedFilenames)
+    if ($seedNames.Count -eq 0 -or @($seedNames | Select-Object -Unique).Count -ne $seedNames.Count) { throw 'startup_layout.fixture_target' }
     foreach ($row in $materializedRows) {
-        $assetMatches = @($assets | Where-Object { [string] $_.fixedFilename -ceq [string] $row.fixedFilename })
+        if ($seedNames -cnotcontains [string]$row.fixedFilename) { throw 'startup_layout.fixture_missing' }
+    }
+    foreach ($seedName in $seedNames) {
+        $assetMatches = @($assets | Where-Object { [string] $_.fixedFilename -ceq [string] $seedName })
         if ($assetMatches.Count -ne 1) { throw 'startup_layout.fixture_missing' }
         Assert-UiAcceptanceFields -InputObject $assetMatches[0] -Required @('fixedFilename','repositoryPath','sha256','sizeBytes','seedDirectory')
+        if ([string]$assetMatches[0].seedDirectory -cne 'inbox') { throw 'startup_layout.fixture_target' }
     }
 
     [void][IO.Directory]::CreateDirectory($OutputDirectory)
@@ -424,7 +433,11 @@ try {
     # --- preparation: owned folders through the product UI, then the scan ---
     $folders = @{}
     foreach ($folderInput in $folderInputs) {
-        $directory = Join-Path $OwnedRoot ([string] $folderInput.relativeDirectory)
+        $relative = [string]$folderInput.relativeDirectory
+        if ($relative -cnotmatch '^[a-z0-9][a-z0-9-]*$') { throw 'startup_layout.fixture_target' }
+        $directory = [IO.Path]::GetFullPath((Join-Path $OwnedRoot $relative))
+        $rootBoundary = [IO.Path]::GetFullPath($OwnedRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if (-not $directory.StartsWith($rootBoundary, [StringComparison]::OrdinalIgnoreCase)) { throw 'startup_layout.fixture_target' }
         [void][IO.Directory]::CreateDirectory($directory)
         $folders[[string] $folderInput.key] = $directory
     }
@@ -446,8 +459,8 @@ try {
 
     # Only a fixture whose size and hash match the manifest is copied, and only into the owned
     # inbox: the library stays empty until a real ingest happens.
-    foreach ($row in $materializedRows) {
-        $asset = @($assets | Where-Object { [string] $_.fixedFilename -ceq [string] $row.fixedFilename })[0]
+    foreach ($seedName in $seedNames) {
+        $asset = @($assets | Where-Object { [string] $_.fixedFilename -ceq [string] $seedName })[0]
         $null = Copy-StartupLayoutFixture -Asset $asset -Folders $folders
     }
 

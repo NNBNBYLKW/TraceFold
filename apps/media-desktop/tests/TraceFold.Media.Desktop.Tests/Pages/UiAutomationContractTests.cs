@@ -498,6 +498,13 @@ public sealed class UiAutomationContractTests
             .Select(row => row.GetProperty("fixedFilename").GetString()!)];
         Assert.NotEmpty(materializedNames);
         Assert.All(materializedNames, name => Assert.Contains(name, seededNames));
+        string[] seedFilenames = [.. preparation.GetProperty("seedFilenames").EnumerateArray()
+            .Select(name => name.GetString()!)];
+        Assert.Equal(["paired.mp4", "paired.m4a"], seedFilenames);
+        Assert.All(seedFilenames, name => Assert.Contains(name, seededNames));
+        Assert.All(materializedNames, name => Assert.Contains(name, seedFilenames));
+        Assert.Equal("待入库文件 paired.mp4，状态 需要前置处理",
+            rows[0].GetProperty("fixedAccessibleName").GetString());
 
         string[] seedKeys = [.. folderInputs.EnumerateArray()
             .Select(input => input.GetProperty("key").GetString()!)];

@@ -221,14 +221,16 @@
     {"file":"Dialogs/TaxonomyMergeDialog.xaml","automationId":"TaxonomyMergeApplyButton","name":"确认应用词条合并","controlType":"Button","requiredPatterns":["Invoke"],"scope":"dialogs_taxonomymergedialog","dynamicSelectorPolicy":"static_id"}
   ],
   "dynamicRows": [
-    {"file":"Pages/InboxPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"待入库文件 paired.mp4，状态 等待前置处理","fixedFilename":"paired.mp4","forbidGuidSelectors":true,"phase":"inbox-seeded"},
+    {"file":"Pages/InboxPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"待入库文件 paired.mp4，状态 需要前置处理","fixedFilename":"paired.mp4","forbidGuidSelectors":true,"phase":"inbox-seeded"},
     {"file":"Pages/LibraryPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"正式文件 photo.jpg，实际文件 photo.jpg，图片","fixedFilename":"photo.jpg","forbidGuidSelectors":true,"phase":"post-ingest"}
   ],
   "fixtureAssets": [
-    {"fixedFilename":"paired.mp4","repositoryPath":"apps/media-api/tests/fixtures/media/paired.mp4","sha256":"B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3","sizeBytes":2405,"seedDirectory":"inbox"}
+    {"fixedFilename":"paired.mp4","repositoryPath":"apps/media-api/tests/fixtures/media/paired.mp4","sha256":"B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3","sizeBytes":2405,"seedDirectory":"inbox"},
+    {"fixedFilename":"paired.m4a","repositoryPath":"apps/media-api/tests/fixtures/media/paired.m4a","sha256":"187F3BE0AB2C07C6A967840BEBFA0EB1646227B52179387F74AB4D8BBC64AAC1","sizeBytes":9988,"seedDirectory":"inbox"}
   ],
   "sessionPreparation": {
     "materializedRowPhase": "inbox-seeded",
+    "seedFilenames": ["paired.mp4", "paired.m4a"],
     "settingsNavigationAutomationId": "NavSettings",
     "inboxNavigationAutomationId": "NavInbox",
     "saveFolderSettingsAutomationId": "SaveFolderSettings",
