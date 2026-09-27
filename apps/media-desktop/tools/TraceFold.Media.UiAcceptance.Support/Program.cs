@@ -267,7 +267,11 @@ public static class Program
             return Fail(output, ExitInvalidArguments, "Every argument must be a named option with a value.");
         }
 
-        string[] allowed = ["root", "token", "process-id", "automation-id", "pattern", "output"];
+        string[] allowed =
+        [
+            "root", "token", "process-id", "automation-id", "pattern", "output",
+            "descendant-class", "descendant-name",
+        ];
         if (pairs.Any(pair => !allowed.Contains(pair.Key, StringComparer.Ordinal)))
         {
             return Fail(output, ExitInvalidArguments, "The arguments are invalid.");
@@ -277,6 +281,8 @@ public static class Program
         string? token = Single(pairs, "token");
         string? processIdText = Single(pairs, "process-id");
         string? automationId = Single(pairs, "automation-id");
+        string? descendantClass = Single(pairs, "descendant-class");
+        string? descendantName = Single(pairs, "descendant-name");
         string[] patterns = [.. pairs
             .Where(pair => pair.Key == "pattern")
             .Select(pair => pair.Value)];
@@ -284,7 +290,8 @@ public static class Program
             || !int.TryParse(processIdText, NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out int processId)
             || patterns.Length != patterns.Distinct(StringComparer.Ordinal).Count()
-            || patterns.Any(pattern => !UiAutomationProbe.IsKnownPatternName(pattern)))
+            || patterns.Any(pattern => !UiAutomationProbe.IsKnownPatternName(pattern))
+            || descendantClass is not null && string.IsNullOrWhiteSpace(descendantClass))
         {
             return Fail(output, ExitInvalidArguments,
                 "lookup requires root, token, process-id and automation-id, plus known pattern names.");
@@ -323,7 +330,8 @@ public static class Program
             }
 
             UiElementFact? fact = UiAutomationProbe.Lookup(
-                process.MainWindowHandle, automationId, patterns, new WindowsUiAutomationNative());
+                process.MainWindowHandle, automationId, patterns, new WindowsUiAutomationNative(),
+                descendantClass, descendantName);
             if (fact is null)
             {
                 // The probe could not answer: the gate must treat this as blocked, never as an
@@ -340,7 +348,10 @@ public static class Program
             return Emit(output, emitValues, JsonSerializer.Serialize(new
             {
                 automationId,
-                matchCount = fact.MatchCount,
+                descendantClass,
+                descendantName,
+                outerMatchCount = fact.OuterMatchCount,
+                descendantMatchCount = fact.DescendantMatchCount,
                 name = fact.Name,
                 controlType = fact.ControlType,
                 className = fact.ClassName,

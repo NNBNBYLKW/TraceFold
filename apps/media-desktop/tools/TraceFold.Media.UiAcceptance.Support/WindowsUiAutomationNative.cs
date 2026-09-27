@@ -25,7 +25,9 @@ public sealed class WindowsUiAutomationNative : IUiAutomationNative
     public UiElementFact? FindByAutomationId(
         IntPtr window,
         string automationId,
-        IReadOnlyList<string> patternNames)
+        IReadOnlyList<string> patternNames,
+        string? descendantClassName,
+        string? descendantName)
     {
         if (window == IntPtr.Zero || string.IsNullOrWhiteSpace(automationId))
         {
@@ -42,16 +44,43 @@ public sealed class WindowsUiAutomationNative : IUiAutomationNative
 
             var condition = new PropertyCondition(
                 AutomationElement.AutomationIdProperty, automationId);
-            AutomationElementCollection matches = root.FindAll(TreeScope.Subtree, condition);
-            if (matches.Count != 1)
+            AutomationElementCollection outerMatches = root.FindAll(TreeScope.Subtree, condition);
+            if (outerMatches.Count != 1)
             {
                 // Zero matches is a real answer; more than one is ambiguity and is reported as
                 // such by the count, never resolved by picking one.
-                return new UiElementFact(matches.Count, null, null, null, null, null,
+                return new UiElementFact(outerMatches.Count, 0, null, null, null, null, null,
                     null, null, null, null, []);
             }
 
-            return Read(matches[0], patternNames);
+            AutomationElement target = outerMatches[0];
+            if (descendantClassName is null)
+            {
+                return Read(1, 1, target, patternNames);
+            }
+
+            AutomationElementCollection descendants = target.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ClassNameProperty, descendantClassName));
+            var candidates = new List<AutomationElement>();
+            foreach (AutomationElement candidate in descendants)
+            {
+                if (descendantName is null
+                    || string.Equals(ReadName(candidate), descendantName, StringComparison.Ordinal))
+                {
+                    candidates.Add(candidate);
+                }
+            }
+
+            if (candidates.Count != 1)
+            {
+                // A missing or ambiguous descendant is reported by its count; no fact and no
+                // pattern answer is produced from a guess.
+                return new UiElementFact(1, candidates.Count, null, null, null, null, null,
+                    null, null, null, null, []);
+            }
+
+            return Read(1, 1, candidates[0], patternNames);
         }
         catch (ElementNotAvailableException)
         {
@@ -71,7 +100,23 @@ public sealed class WindowsUiAutomationNative : IUiAutomationNative
         }
     }
 
-    private static UiElementFact Read(AutomationElement element, IReadOnlyList<string> patternNames)
+    private static string? ReadName(AutomationElement element)
+    {
+        try
+        {
+            return element.Current.Name;
+        }
+        catch (ElementNotAvailableException)
+        {
+            return null;
+        }
+    }
+
+    private static UiElementFact Read(
+        int outerMatchCount,
+        int descendantMatchCount,
+        AutomationElement element,
+        IReadOnlyList<string> patternNames)
     {
         AutomationElement.AutomationElementInformation current;
         try
@@ -80,7 +125,8 @@ public sealed class WindowsUiAutomationNative : IUiAutomationNative
         }
         catch (ElementNotAvailableException)
         {
-            return new UiElementFact(1, null, null, null, null, null, null, null, null, null, []);
+            return new UiElementFact(outerMatchCount, descendantMatchCount, null, null, null,
+                null, null, null, null, null, null, []);
         }
 
         int? x = null;
@@ -129,7 +175,8 @@ public sealed class WindowsUiAutomationNative : IUiAutomationNative
         }
 
         return new UiElementFact(
-            1,
+            outerMatchCount,
+            descendantMatchCount,
             current.Name,
             StripControlTypePrefix(current.ControlType),
             current.ClassName,

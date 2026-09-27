@@ -22,11 +22,13 @@ public enum UiLookupRejection
 public sealed record UiPatternFact(string Name, bool? Available);
 
 /// <summary>
-/// One exact-AutomationId lookup inside the launched window's subtree. Every product fact is
-/// nullable for the same reason as <see cref="UiPatternFact.Available"/>.
+/// One exact-AutomationId lookup, optionally scoped to a unique descendant of a given class (and
+/// optionally a given accessible name). Every product fact is nullable: a nil value always means
+/// the query did not establish it, never that the product lacks it.
 /// </summary>
 public sealed record UiElementFact(
-    int MatchCount,
+    int OuterMatchCount,
+    int DescendantMatchCount,
     string? Name,
     string? ControlType,
     string? ClassName,
@@ -40,26 +42,31 @@ public sealed record UiElementFact(
 
 /// <summary>
 /// The Windows UIA client operations the probe needs. Production uses the managed UIA client;
-/// tests supply a fake, so the ownership gate, the lookup and the null semantics are all
-/// verifiable without a real window.
+/// tests supply a fake, so the ownership gate, the lookup, the descendant scoping and the null
+/// semantics are all verifiable without a real window.
 /// </summary>
 public interface IUiAutomationNative
 {
     /// <summary>
     /// Returns the facts for an exact AutomationId match inside the window subtree, or
-    /// <c>null</c> when the window or the UIA client itself is unavailable.
+    /// <c>null</c> when the window or the UIA client itself is unavailable. When
+    /// <paramref name="descendantClassName"/> is set, the reported facts belong to the unique
+    /// descendant of that class rather than to the matched element itself.
     /// </summary>
     UiElementFact? FindByAutomationId(
         IntPtr window,
         string automationId,
-        IReadOnlyList<string> patternNames);
+        IReadOnlyList<string> patternNames,
+        string? descendantClassName,
+        string? descendantName);
 }
 
 /// <summary>
 /// Read-only native UIA verification for the acceptance gate. It only ever reads: it invokes
-/// nothing, sets no value, moves no focus and creates no provider. Its whole purpose is to
-/// answer the two questions the pinned driver cannot - the real native control type, and
-/// whether a required UIA pattern is genuinely available.
+/// nothing, sets no value, moves no focus and creates no provider. Its whole purpose is to answer
+/// the questions the pinned driver cannot - the real native control type, whether a required UIA
+/// pattern is genuinely available, and (for composite controls) whether that pattern lives on a
+/// unique descendant rather than on the stable outer element.
 /// </summary>
 public static class UiAutomationProbe
 {
@@ -118,15 +125,18 @@ public static class UiAutomationProbe
     }
 
     /// <summary>
-    /// Looks one element up by exact AutomationId. Returns <c>null</c> only when the probe could
-    /// not answer at all; an answered lookup always reports a match count, including zero, so
-    /// "absent" and "could not ask" never collapse into each other.
+    /// Looks one element up by exact AutomationId, optionally resolving its unique descendant of
+    /// a given class. Returns <c>null</c> only when the probe could not answer at all; an answered
+    /// lookup always reports both match counts, including zero, so "absent" and "could not ask"
+    /// never collapse into each other.
     /// </summary>
     public static UiElementFact? Lookup(
         IntPtr window,
         string automationId,
         IReadOnlyList<string> patternNames,
-        IUiAutomationNative native)
+        IUiAutomationNative native,
+        string? descendantClassName = null,
+        string? descendantName = null)
     {
         ArgumentNullException.ThrowIfNull(native);
         ArgumentNullException.ThrowIfNull(patternNames);
@@ -144,6 +154,13 @@ public static class UiAutomationProbe
             return null;
         }
 
-        return native.FindByAutomationId(window, automationId, patternNames);
+        if (descendantClassName is not null && string.IsNullOrWhiteSpace(descendantClassName))
+        {
+            // An empty class filter would silently match everything, so it is a contract error.
+            throw new ArgumentException("The descendant class filter is empty.", nameof(descendantClassName));
+        }
+
+        return native.FindByAutomationId(
+            window, automationId, patternNames, descendantClassName, descendantName);
     }
 }
