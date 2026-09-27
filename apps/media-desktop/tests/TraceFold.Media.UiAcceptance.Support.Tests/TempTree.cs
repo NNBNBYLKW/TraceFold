@@ -55,13 +55,47 @@ internal sealed class TempTree : IDisposable
         {
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                DeleteVerifiedTempChild(path);
             }
         }
 
         if (Directory.Exists(Sandbox))
         {
-            Directory.Delete(Sandbox, recursive: true);
+            DeleteVerifiedTempChild(Sandbox);
+        }
+    }
+
+    private void DeleteVerifiedTempChild(string path)
+    {
+        string canonical = OwnedRootManager.CanonicalDirectory(path);
+        if (!string.Equals(Path.GetDirectoryName(canonical), TempRoot,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IOException("Test cleanup target escaped the system temp directory.");
+        }
+
+        AssertNoReparsePoints(canonical);
+        Directory.Delete(canonical, recursive: true);
+    }
+
+    private static void AssertNoReparsePoints(string path)
+    {
+        if (File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new IOException("Test cleanup target contains a reparse point.");
+        }
+
+        foreach (string entry in Directory.GetFileSystemEntries(path))
+        {
+            if (File.GetAttributes(entry).HasFlag(FileAttributes.ReparsePoint))
+            {
+                throw new IOException("Test cleanup target contains a reparse point.");
+            }
+
+            if (Directory.Exists(entry))
+            {
+                AssertNoReparsePoints(entry);
+            }
         }
     }
 }

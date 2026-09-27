@@ -90,4 +90,96 @@ public sealed class WindowViewportControllerTests
             dpi: 96,
             frameWidthDip: 0,
             frameHeightDip: 0));
+
+    [Fact]
+    public void Resize_calls_the_native_window_api_and_checks_the_measured_client_area()
+    {
+        var native = new FakeWindowNative();
+
+        ViewportResizeResult result = Assert.IsType<ViewportResizeResult>(
+            WindowViewportController.Resize((IntPtr)42, 1024, 720, native));
+
+        Assert.Equal(1536, result.RequestedWidthPixels);
+        Assert.Equal(1080, result.RequestedHeightPixels);
+        Assert.Equal(1548, native.OuterWidth);
+        Assert.Equal(1128, native.OuterHeight);
+        Assert.True(native.SetWasCalled);
+        Assert.Equal(1536, result.ActualWidthPixels);
+        Assert.Equal(1080, result.ActualHeightPixels);
+    }
+
+    [Fact]
+    public void Resize_rejects_a_failed_or_inaccurate_client_resize()
+    {
+        var native = new FakeWindowNative { ActualWidthDelta = 3 };
+        Assert.Null(WindowViewportController.Resize((IntPtr)42, 1024, 720, native));
+
+        native.ActualWidthDelta = 0;
+        native.SetSucceeds = false;
+        Assert.Null(WindowViewportController.Resize((IntPtr)42, 1024, 720, native));
+    }
+
+    [Fact]
+    public void Owned_process_record_rejects_a_reused_pid_or_different_executable()
+    {
+        string executable = Path.Combine(Path.GetTempPath(), "product", "TraceFold.Media.exe");
+        string otherExecutable = Path.Combine(Path.GetTempPath(), "other", "TraceFold.Media.exe");
+        string[] ledger = [$"4242|638000000000000000|{executable}"];
+
+        Assert.True(WindowViewportController.IsRecordedProcess(
+            ledger, 4242, 638000000000000000, executable));
+        Assert.False(WindowViewportController.IsRecordedProcess(
+            ledger, 4242, 638000000000000001, executable));
+        Assert.False(WindowViewportController.IsRecordedProcess(
+            ledger, 4242, 638000000000000000, otherExecutable));
+        Assert.False(WindowViewportController.IsRecordedProcess(
+            ["4242|not-a-time|TraceFold.Media.exe"],
+            4242, 638000000000000000, executable));
+        Assert.False(WindowViewportController.IsRecordedProcess(
+            ["4242|638000000000000000|TraceFold.Media.exe"],
+            4242, 638000000000000000, executable));
+    }
+
+    private sealed class FakeWindowNative : IWindowViewportNative
+    {
+        private int requestedWidth;
+        private int requestedHeight;
+
+        public int ActualWidthDelta { get; set; }
+
+        public bool SetSucceeds { get; set; } = true;
+
+        public bool SetWasCalled { get; private set; }
+
+        public int OuterWidth { get; private set; }
+
+        public int OuterHeight { get; private set; }
+
+        public int GetDpi(IntPtr window) => 144;
+
+        public bool TryAdjustWindowRect(IntPtr window, int clientWidth,
+            int clientHeight, int dpi, out int outerWidth, out int outerHeight)
+        {
+            requestedWidth = clientWidth;
+            requestedHeight = clientHeight;
+            outerWidth = clientWidth + 12;
+            outerHeight = clientHeight + 48;
+            return true;
+        }
+
+        public bool SetWindowSize(IntPtr window, int outerWidth, int outerHeight)
+        {
+            SetWasCalled = true;
+            OuterWidth = outerWidth;
+            OuterHeight = outerHeight;
+            return SetSucceeds;
+        }
+
+        public bool TryGetClientSize(IntPtr window, out int width, out int height)
+        {
+            width = requestedWidth + ActualWidthDelta;
+            height = requestedHeight;
+            return true;
+        }
+    }
 }

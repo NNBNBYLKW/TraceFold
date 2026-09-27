@@ -131,6 +131,68 @@ public sealed class OwnedRootManagerTests
     }
 
     [Fact]
+    public void Delete_refuses_a_live_process_even_when_the_marker_matches()
+    {
+        using TempTree tree = TempTree.Create();
+        string root = tree.CreateRoot();
+        tree.FileSystem.WriteAllText(
+            Path.Combine(root, OwnedRootManager.LiveProcessFileName), "4242");
+        tree.FileSystem.LiveProcessIds.Add(4242);
+
+        Assert.Equal(RootRejection.UnownedLiveProcess,
+            OwnedRootManager.Validate(root, tree.Token, tree.FileSystem, tree.RunId));
+        Assert.Throws<IOException>(() =>
+            OwnedRootManager.Delete(root, tree.Token, tree.FileSystem, tree.RunId));
+        Assert.True(Directory.Exists(root));
+    }
+
+    [Fact]
+    public void Delete_preflights_the_whole_tree_and_never_enters_a_nested_reparse_point()
+    {
+        using TempTree tree = TempTree.Create();
+        string root = tree.CreateRoot();
+        string safeFile = Path.Combine(root, "keep.txt");
+        File.WriteAllText(safeFile, "keep");
+        string nested = Directory.CreateDirectory(Path.Combine(root, "data", "redirect")).FullName;
+        string nestedFile = Path.Combine(nested, "sentinel.txt");
+        File.WriteAllText(nestedFile, "sentinel");
+        tree.FileSystem.ReparsePoints.Add(nested);
+
+        Assert.Throws<IOException>(() =>
+            OwnedRootManager.Delete(root, tree.Token, tree.FileSystem, tree.RunId));
+        Assert.True(File.Exists(safeFile));
+        Assert.True(File.Exists(nestedFile));
+    }
+
+    [Fact]
+    public void Delete_keeps_the_marker_when_a_content_file_cannot_be_removed()
+    {
+        using TempTree tree = TempTree.Create();
+        string root = tree.CreateRoot();
+        string locked = Path.Combine(root, "locked.txt");
+        File.WriteAllText(locked, "keep");
+        tree.FileSystem.FailDeletePath = locked;
+
+        Assert.Throws<IOException>(() =>
+            OwnedRootManager.Delete(root, tree.Token, tree.FileSystem, tree.RunId));
+        Assert.True(File.Exists(Path.Combine(root, OwnedRootManager.MarkerFileName)));
+        Assert.Equal(RootRejection.None,
+            OwnedRootManager.Validate(root, tree.Token, tree.FileSystem, tree.RunId));
+    }
+
+    [Fact]
+    public void Rejects_a_reparse_marker_before_reading_it()
+    {
+        using TempTree tree = TempTree.Create();
+        string root = tree.CreateRoot();
+        tree.FileSystem.ReparsePoints.Add(
+            Path.Combine(root, OwnedRootManager.MarkerFileName));
+
+        Assert.Equal(RootRejection.ReparsePoint,
+            OwnedRootManager.Validate(root, tree.Token, tree.FileSystem, tree.RunId));
+    }
+
+    [Fact]
     public void Delete_removes_only_the_validated_root()
     {
         using TempTree tree = TempTree.Create();

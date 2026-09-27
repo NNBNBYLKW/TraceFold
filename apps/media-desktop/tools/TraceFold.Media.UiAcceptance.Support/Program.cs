@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace TraceFold.Media.UiAcceptance.Support;
@@ -23,8 +22,6 @@ public static class Program
     public const int ExitWindowUnavailable = 5;
 
     public const int ExitUnexpectedError = 10;
-
-    public const string OwnedProcessesEnvironmentVariable = "TRACEFOLD_UIA_OWNED_PIDS";
 
     public static int Main(string[] args) => Run([.. args], Console.Out);
 
@@ -92,7 +89,8 @@ public static class Program
         IRootFileSystem fileSystem,
         TextWriter output)
     {
-        if (!TryRead(values, "parent", out string parent)
+        if (!OnlyOptions(values, "parent", "run-id", "token", "output")
+            || !TryRead(values, "parent", out string parent)
             || !TryRead(values, "run-id", out string runIdText)
             || !TryRead(values, "token", out string token)
             || !Guid.TryParseExact(runIdText, "D", out Guid runId))
@@ -101,7 +99,7 @@ public static class Program
         }
 
         string root = OwnedRootManager.Create(parent, runId, token, fileSystem);
-        return Emit(output, values, Json(root, $"\"root\":\"{root}\""));
+        return Emit(output, values, JsonSerializer.Serialize(new { root }));
     }
 
     private static int ValidateRoot(
@@ -109,18 +107,21 @@ public static class Program
         IRootFileSystem fileSystem,
         TextWriter output)
     {
-        if (!TryRead(values, "root", out string root) || !TryRead(values, "token", out string token))
+        if (!OnlyOptions(values, "root", "token", "output")
+            || !TryRead(values, "root", out string root)
+            || !TryRead(values, "token", out string token))
         {
             return Fail(output, ExitInvalidArguments, "validate requires root and token.");
         }
 
-        RootRejection rejection = OwnedRootManager.Validate(root, token, fileSystem);
+        RootRejection rejection = OwnedRootManager.Validate(root, token, fileSystem,
+            allowLiveProcessForRead: true);
         if (rejection != RootRejection.None)
         {
             return Fail(output, ExitUnsafeRoot, "The root failed ownership validation: " + rejection + ".");
         }
 
-        return Emit(output, values, Json(root, "\"owned\":true"));
+        return Emit(output, values, JsonSerializer.Serialize(new { owned = true }));
     }
 
     private static int DeleteRoot(
@@ -128,13 +129,15 @@ public static class Program
         IRootFileSystem fileSystem,
         TextWriter output)
     {
-        if (!TryRead(values, "root", out string root) || !TryRead(values, "token", out string token))
+        if (!OnlyOptions(values, "root", "token", "output")
+            || !TryRead(values, "root", out string root)
+            || !TryRead(values, "token", out string token))
         {
             return Fail(output, ExitInvalidArguments, "delete requires root and token.");
         }
 
         OwnedRootManager.Delete(root, token, fileSystem);
-        return Emit(output, values, Json(root, "\"deleted\":true"));
+        return Emit(output, values, JsonSerializer.Serialize(new { deleted = true }));
     }
 
     private static int RunSnapshot(IReadOnlyList<string> args, TextWriter output)
@@ -144,10 +147,27 @@ public static class Program
             return Fail(output, ExitInvalidArguments, error!);
         }
 
-        if (!TryRead(values, "data-root", out string dataRoot)
+        if (!OnlyOptions(values, "data-root", "token", "output")
+            || !TryRead(values, "data-root", out string dataRoot)
             || !TryRead(values, "token", out string token))
         {
             return Fail(output, ExitInvalidArguments, "snapshot requires data-root and token.");
+        }
+
+        bool ownedDataRoot;
+        try
+        {
+            ownedDataRoot = IsOwnedDataRoot(dataRoot, token);
+        }
+        catch (Exception failure) when (failure is IOException
+            or UnauthorizedAccessException or ArgumentException)
+        {
+            ownedDataRoot = false;
+        }
+
+        if (!ownedDataRoot)
+        {
+            return Fail(output, ExitUnsafeRoot, "The data root is not an owned probe root.");
         }
 
         SnapshotResult result = AcceptanceSnapshotReader.Read(dataRoot, token);
@@ -168,14 +188,19 @@ public static class Program
             return Fail(output, ExitInvalidArguments, error!);
         }
 
-        if (!TryRead(values, "process-id", out string processIdText)
+        if (!OnlyOptions(values, "process-id", "width-dip", "height-dip",
+                "root", "token", "output")
+            || !TryRead(values, "process-id", out string processIdText)
             || !TryRead(values, "width-dip", out string widthText)
             || !TryRead(values, "height-dip", out string heightText)
+            || !TryRead(values, "root", out string root)
+            || !TryRead(values, "token", out string token)
             || !int.TryParse(processIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int processId)
             || !int.TryParse(widthText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int width)
             || !int.TryParse(heightText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int height))
         {
-            return Fail(output, ExitInvalidArguments, "resize requires process-id, width-dip and height-dip.");
+            return Fail(output, ExitInvalidArguments,
+                "resize requires process-id, width-dip, height-dip, root and token.");
         }
 
         if (!OperatingSystem.IsWindows())
@@ -183,81 +208,160 @@ public static class Program
             return Fail(output, ExitWindowUnavailable, "The window command requires Windows.");
         }
 
-        if (!TryReadProcess(processId, out string? executable))
+        if (!IsValidOwnedRoot(root, token))
+        {
+            return Fail(output, ExitUnsafeRoot, "The process root is not owned.");
+        }
+
+        if (!TryReadProcess(processId, out Process? process, out string? executable,
+                out long startTicks))
         {
             return Fail(output, ExitWindowUnavailable, "The window is unavailable.");
         }
 
-        bool ownedByRunner = OwnedProcessIds().Contains(processId);
-        uint windowDpi = GetDpiForWindow(Process.GetProcessById(processId).MainWindowHandle);
-        int dpi = windowDpi == 0 ? 96 : (int)windowDpi;
-        ViewportRequest? request = WindowViewportController.TryCreateRequest(
-            width,
-            height,
-            processId,
-            executable!,
-            ownedByRunner,
-            dpi <= 0 ? 96 : dpi,
-            0,
-            0);
-        if (request is null)
+        using (process)
         {
-            return Fail(output, ExitWindowUnavailable, "The window request was refused.");
-        }
+            if (!IsRecordedProcess(root, processId, startTicks, executable!)
+                || WindowViewportController.Validate(width, height, processId,
+                    Path.GetFileName(executable!), ownedByRunner: true)
+                    != ViewportRejection.None
+                || process!.HasExited)
+            {
+                return Fail(output, ExitWindowUnavailable, "The window request was refused.");
+            }
 
-        return Emit(output, values, Json(
-            dataRoot: null,
-            $"\"processId\":{request.ProcessId},\"widthPixels\":{request.WidthPixels},"
-            + $"\"heightPixels\":{request.HeightPixels}"));
+            ViewportResizeResult? result = WindowViewportController.Resize(
+                process.MainWindowHandle, width, height, new Win32WindowViewportNative());
+            if (result is null)
+            {
+                return Fail(output, ExitWindowUnavailable,
+                    "The client area could not be set to the requested size.");
+            }
+
+            return Emit(output, values, JsonSerializer.Serialize(new
+            {
+                processId,
+                widthPixels = result.RequestedWidthPixels,
+                heightPixels = result.RequestedHeightPixels,
+                clientWidthPixels = result.ActualWidthPixels,
+                clientHeightPixels = result.ActualHeightPixels,
+            }));
+        }
     }
 
-    private static bool TryReadProcess(int processId, out string? executable)
+    private static bool TryReadProcess(int processId, out Process? process,
+        out string? executable, out long startTicks)
     {
+        process = null;
         executable = null;
+        startTicks = 0;
         try
         {
-            using Process process = Process.GetProcessById(processId);
+            process = Process.GetProcessById(processId);
+            process.Refresh();
             executable = process.MainModule?.FileName;
-            return executable is not null && process.MainWindowHandle != IntPtr.Zero;
+            startTicks = process.StartTime.ToUniversalTime().Ticks;
+            if (executable is not null && process.MainWindowHandle != IntPtr.Zero
+                && !process.HasExited)
+            {
+                return true;
+            }
         }
         catch (ArgumentException)
         {
-            return false;
         }
         catch (InvalidOperationException)
         {
-            return false;
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+
+        process?.Dispose();
+        process = null;
+        return false;
     }
 
-    private static HashSet<int> OwnedProcessIds()
+    private static bool IsRecordedProcess(string root, int processId,
+        long startTicks, string executable)
     {
-        var owned = new HashSet<int>();
-        string? value = Environment.GetEnvironmentVariable(OwnedProcessesEnvironmentVariable);
-        foreach (string part in (value ?? string.Empty).Split([';', ','], StringSplitOptions.RemoveEmptyEntries))
+        string ledger = Path.Combine(OwnedRootManager.CanonicalDirectory(root),
+            OwnedRootManager.LiveProcessFileName);
+        var fileSystem = new SystemRootFileSystem();
+        if (!File.Exists(ledger) || fileSystem.IsReparsePoint(ledger))
         {
-            if (int.TryParse(part.Trim(), out int processId))
-            {
-                owned.Add(processId);
-            }
+            return false;
         }
 
-        return owned;
+        return WindowViewportController.IsRecordedProcess(
+            File.ReadLines(ledger), processId, startTicks, executable);
     }
 
     private static int Emit(TextWriter output, Dictionary<string, string> values, string json)
     {
         if (TryRead(values, "output", out string path))
         {
-            File.WriteAllText(path, json);
+            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            using var writer = new StreamWriter(stream);
+            writer.Write(json);
         }
 
         output.WriteLine(json);
         return ExitSuccess;
     }
 
-    private static string Json(string? dataRoot, string body) =>
-        (dataRoot is null ? "{" : "{\"dataRoot\":\"" + dataRoot + "\",") + body + "}";
+    private static bool IsOwnedDataRoot(string dataRoot, string token)
+    {
+        if (string.IsNullOrWhiteSpace(dataRoot) || !Directory.Exists(dataRoot))
+        {
+            return false;
+        }
+
+        string canonical = OwnedRootManager.CanonicalDirectory(dataRoot);
+        string temp = OwnedRootManager.CanonicalDirectory(Path.GetTempPath());
+        string? ownedRoot = canonical;
+        while (ownedRoot is not null
+            && !string.Equals(Path.GetDirectoryName(ownedRoot), temp,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            ownedRoot = Path.GetDirectoryName(ownedRoot);
+        }
+
+        if (ownedRoot is null || !IsValidOwnedRoot(ownedRoot, token))
+        {
+            return false;
+        }
+
+        var fileSystem = new SystemRootFileSystem();
+        for (string? current = canonical;
+            current is not null
+                && !string.Equals(current, ownedRoot, StringComparison.OrdinalIgnoreCase);
+            current = Path.GetDirectoryName(current))
+        {
+            if (fileSystem.IsReparsePoint(current))
+            {
+                return false;
+            }
+        }
+
+        return !fileSystem.IsReparsePoint(Path.Combine(canonical,
+            AcceptanceSnapshotReader.DatabaseFileName));
+    }
+
+    private static bool IsValidOwnedRoot(string root, string token)
+    {
+        try
+        {
+            return OwnedRootManager.Validate(root, token,
+                new SystemRootFileSystem(), allowLiveProcessForRead: true)
+                == RootRejection.None;
+        }
+        catch (Exception error) when (error is IOException
+            or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
 
     private static int Fail(TextWriter output, int exitCode, string message)
     {
@@ -270,6 +374,10 @@ public static class Program
         string name,
         out string value) =>
         values.TryGetValue(name, out value!);
+
+    private static bool OnlyOptions(
+        Dictionary<string, string> values, params string[] allowed) =>
+        values.Keys.All(key => allowed.Contains(key, StringComparer.Ordinal));
 
     private static bool TryParsePairs(
         IReadOnlyList<string> args,
@@ -290,14 +398,14 @@ public static class Program
 
             if (index + 1 >= args.Count || args[index + 1].StartsWith("--", StringComparison.Ordinal))
             {
-                error = "The option " + token + " has no value.";
+                error = "An option has no value.";
                 return false;
             }
 
             string name = token[2..];
             if (values.ContainsKey(name))
             {
-                error = "The option " + token + " is repeated.";
+                error = "An option is repeated.";
                 return false;
             }
 
@@ -308,6 +416,4 @@ public static class Program
         return true;
     }
 
-    [DllImport("user32.dll")]
-    private static extern uint GetDpiForWindow(IntPtr windowHandle);
 }

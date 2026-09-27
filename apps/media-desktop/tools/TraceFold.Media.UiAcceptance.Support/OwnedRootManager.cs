@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Runtime.InteropServices;
 
 namespace TraceFold.Media.UiAcceptance.Support;
 
@@ -27,11 +28,15 @@ public interface IRootFileSystem
 
     bool DirectoryExists(string path);
 
+    void CreateNewDirectory(string path);
+
     bool IsReparsePoint(string path);
 
     string ReadAllText(string path);
 
     void WriteAllText(string path, string contents);
+
+    void WriteNewFile(string path, string contents);
 
     bool ProcessIsAlive(int processId);
 
@@ -48,12 +53,53 @@ public sealed class SystemRootFileSystem : IRootFileSystem
 
     public bool DirectoryExists(string path) => Directory.Exists(path);
 
-    public bool IsReparsePoint(string path) =>
-        File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
+    public void CreateNewDirectory(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            if (!CreateDirectoryW(path, IntPtr.Zero))
+            {
+                throw new IOException("The owned root could not be created exclusively.",
+                    Marshal.GetHRForLastWin32Error());
+            }
+
+            return;
+        }
+
+        if (Directory.Exists(path) || File.Exists(path))
+        {
+            throw new IOException("The owned root already exists.");
+        }
+
+        Directory.CreateDirectory(path);
+    }
+
+    public bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
 
     public string ReadAllText(string path) => File.ReadAllText(path);
 
     public void WriteAllText(string path, string contents) => File.WriteAllText(path, contents);
+
+    public void WriteNewFile(string path, string contents)
+    {
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using var writer = new StreamWriter(stream, Encoding.UTF8);
+        writer.Write(contents);
+    }
 
     public bool ProcessIsAlive(int processId)
     {
@@ -70,6 +116,10 @@ public sealed class SystemRootFileSystem : IRootFileSystem
         {
             return false;
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return true;
+        }
     }
 
     public string[] EnumerateFileSystemEntries(string path) =>
@@ -78,6 +128,11 @@ public sealed class SystemRootFileSystem : IRootFileSystem
     public void DeleteFile(string path) => File.Delete(path);
 
     public void DeleteDirectory(string path) => Directory.Delete(path);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode,
+        EntryPoint = "CreateDirectoryW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateDirectoryW(string path, IntPtr securityAttributes);
 }
 
 /// <summary>
@@ -90,6 +145,10 @@ public static class OwnedRootManager
 {
     public const string MarkerFileName = "owner.marker";
 
+    /// <summary>
+    /// Runner ledger: one <c>pid|startUtcTicks|absoluteExecutablePath</c> record per line.
+    /// A live PID blocks deletion; window operations also verify the start time and path.
+    /// </summary>
     public const string LiveProcessFileName = "owned-processes.txt";
 
     private const string LeafPrefix = "TraceFold-UIA-";
@@ -117,14 +176,27 @@ public static class OwnedRootManager
             throw new IOException("The owned root parent must be the canonical system temp directory.");
         }
 
+        for (string? current = parent; current is not null; current = Path.GetDirectoryName(current))
+        {
+            if (fileSystem.IsReparsePoint(current))
+            {
+                throw new IOException("The temporary directory crosses a reparse point.");
+            }
+        }
+
         string root = Path.Combine(parent, LeafName(runId));
-        if (fileSystem.DirectoryExists(root))
+        if (fileSystem.DirectoryExists(root) || fileSystem.FileExists(root))
         {
             throw new IOException("The owned root already exists.");
         }
 
-        Directory.CreateDirectory(root);
-        fileSystem.WriteAllText(
+        fileSystem.CreateNewDirectory(root);
+        if (fileSystem.IsReparsePoint(root))
+        {
+            throw new IOException("The new root is a reparse point.");
+        }
+
+        fileSystem.WriteNewFile(
             Path.Combine(root, MarkerFileName),
             MarkerContents(runId, token));
         return root;
@@ -134,7 +206,8 @@ public static class OwnedRootManager
         string root,
         string token,
         IRootFileSystem fileSystem,
-        Guid? runId = null)
+        Guid? runId = null,
+        bool allowLiveProcessForRead = false)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         if (string.IsNullOrWhiteSpace(root) || !fileSystem.DirectoryExists(root))
@@ -166,13 +239,14 @@ public static class OwnedRootManager
                 return RootRejection.ReparsePoint;
             }
 
-            if (string.Equals(current, temp, StringComparison.OrdinalIgnoreCase))
-            {
-                break;
-            }
         }
 
         string markerPath = Path.Combine(canonicalRoot, MarkerFileName);
+        if (fileSystem.IsReparsePoint(markerPath))
+        {
+            return RootRejection.ReparsePoint;
+        }
+
         if (!fileSystem.FileExists(markerPath))
         {
             return RootRejection.MissingMarker;
@@ -186,13 +260,18 @@ public static class OwnedRootManager
         }
 
         string livePath = Path.Combine(canonicalRoot, LiveProcessFileName);
-        bool markerBelongsToAnotherRun = !string.Equals(
+        if (fileSystem.IsReparsePoint(livePath))
+        {
+            return RootRejection.ReparsePoint;
+        }
+
+        bool markerBelongsToRequestedRun = string.Equals(
             markerRunId,
             runId?.ToString("N") ?? leafRunId.ToString("N"),
             StringComparison.OrdinalIgnoreCase);
-        if (markerBelongsToAnotherRun
-            && fileSystem.FileExists(livePath)
-            && AnyLiveProcess(fileSystem, fileSystem.ReadAllText(livePath)))
+        if (fileSystem.FileExists(livePath)
+            && AnyLiveProcess(fileSystem, fileSystem.ReadAllText(livePath))
+            && (!allowLiveProcessForRead || !markerBelongsToRequestedRun))
         {
             return RootRejection.UnownedLiveProcess;
         }
@@ -230,19 +309,27 @@ public static class OwnedRootManager
         }
 
         string canonicalRoot = CanonicalDirectory(root);
-        foreach (string entry in fileSystem.EnumerateFileSystemEntries(canonicalRoot))
+        var files = new List<string>();
+        var directories = new List<string>();
+        CollectValidatedEntries(canonicalRoot, fileSystem, files, directories);
+        string marker = Path.Combine(canonicalRoot, MarkerFileName);
+        files.RemoveAll(file => string.Equals(file, marker,
+            StringComparison.OrdinalIgnoreCase));
+        foreach (string file in files)
         {
-            if (fileSystem.DirectoryExists(entry))
-            {
-                DeleteTree(entry, fileSystem);
-                fileSystem.DeleteDirectory(entry);
-            }
-            else
-            {
-                fileSystem.DeleteFile(entry);
-            }
+            EnsureNoReparseAncestors(file, canonicalRoot, fileSystem);
+            fileSystem.DeleteFile(file);
         }
 
+        foreach (string directory in directories)
+        {
+            EnsureNoReparseAncestors(directory, canonicalRoot, fileSystem);
+            fileSystem.DeleteDirectory(directory);
+        }
+
+        EnsureNoReparseAncestors(marker, canonicalRoot, fileSystem);
+        fileSystem.DeleteFile(marker);
+        EnsureNoReparseAncestors(canonicalRoot, canonicalRoot, fileSystem);
         fileSystem.DeleteDirectory(canonicalRoot);
     }
 
@@ -295,7 +382,8 @@ public static class OwnedRootManager
     {
         foreach (string line in contents.Split('\n'))
         {
-            if (int.TryParse(line.Trim(), out int processId)
+            string processText = line.Split('|', 2)[0].Trim();
+            if (int.TryParse(processText, out int processId)
                 && processId > 0
                 && fileSystem.ProcessIsAlive(processId))
             {
@@ -306,19 +394,60 @@ public static class OwnedRootManager
         return false;
     }
 
-    private static void DeleteTree(string directory, IRootFileSystem fileSystem)
+    private static void CollectValidatedEntries(
+        string directory,
+        IRootFileSystem fileSystem,
+        List<string> files,
+        List<string> directories)
     {
+        if (fileSystem.IsReparsePoint(directory))
+        {
+            throw new IOException("The owned root contains a reparse point.");
+        }
+
         foreach (string entry in fileSystem.EnumerateFileSystemEntries(directory))
         {
+            string canonical = Path.GetFullPath(entry);
+            if (!string.Equals(Path.GetDirectoryName(canonical), directory,
+                    StringComparison.OrdinalIgnoreCase)
+                || fileSystem.IsReparsePoint(canonical))
+            {
+                throw new IOException("The owned root contains an unsafe entry.");
+            }
+
             if (fileSystem.DirectoryExists(entry))
             {
-                DeleteTree(entry, fileSystem);
-                fileSystem.DeleteDirectory(entry);
+                CollectValidatedEntries(canonical, fileSystem, files, directories);
+                directories.Add(canonical);
+            }
+            else if (fileSystem.FileExists(entry))
+            {
+                files.Add(canonical);
             }
             else
             {
-                fileSystem.DeleteFile(entry);
+                throw new IOException("The owned root contains an unreadable entry.");
             }
         }
+    }
+
+    private static void EnsureNoReparseAncestors(
+        string path, string root, IRootFileSystem fileSystem)
+    {
+        for (string? current = path; current is not null;
+            current = Path.GetDirectoryName(current))
+        {
+            if (fileSystem.IsReparsePoint(current))
+            {
+                throw new IOException("The owned root changed before deletion.");
+            }
+
+            if (string.Equals(current, root, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        throw new IOException("The deletion target escaped the owned root.");
     }
 }
