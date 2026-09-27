@@ -171,6 +171,28 @@ function Protect-UiAcceptanceText {
     return $result
 }
 
+<#
+.SYNOPSIS
+    The fixed acceptance viewport set every real-window gate must prove.
+
+.DESCRIPTION
+    The three client sizes are the acceptance contract, not a product literal, so the
+    viewport triple lives here and every scenario reads it through this function instead of
+    repeating the numbers.
+#>
+function Get-UiAcceptanceRequiredViewport {
+    [CmdletBinding()]
+    param()
+
+    $viewports = @(
+        [ordered]@{ WidthDip = 1024; HeightDip = 720 }
+        [ordered]@{ WidthDip = 1280; HeightDip = 800 }
+        [ordered]@{ WidthDip = 1600; HeightDip = 900 }
+    )
+
+    return ,$viewports
+}
+
 function Test-UiAcceptanceDangerousKey {
     [CmdletBinding()]
     param(
@@ -247,6 +269,7 @@ Export-ModuleMember -Function @(
     'Get-UiAcceptanceRedactionPatterns',
     'Protect-UiAcceptanceText',
     'Test-UiAcceptanceDangerousKey',
+    'Get-UiAcceptanceRequiredViewport',
     'ConvertFrom-UiAcceptanceJson',
     'Assert-UiAcceptanceFields'
 )

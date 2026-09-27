@@ -12,6 +12,8 @@
 #   TRACEFOLD_FAKE_STDERR      text written to stderr before exiting
 #   TRACEFOLD_FAKE_HANG_MS     sleeps this long before answering (timeout tests)
 #   TRACEFOLD_FAKE_RAW         text written verbatim to stdout (JSON validation tests)
+#   TRACEFOLD_FAKE_UIA_TREE_SEQ file with a JSON array of inspect payloads, consumed in order
+#   TRACEFOLD_FAKE_UIA_STATE   counter file for TRACEFOLD_FAKE_UIA_TREE_SEQ
 
 $Arguments = [string[]] $args
 
@@ -91,12 +93,48 @@ $command = $Arguments[0]
 $sub = ''
 if ($Arguments.Count -ge 2) { $sub = $Arguments[1] }
 
+function Get-FakeUiaPayload {
+    $sequencePath = $env:TRACEFOLD_FAKE_UIA_TREE_SEQ
+    if ([string]::IsNullOrWhiteSpace($sequencePath) -or -not (Test-Path -LiteralPath $sequencePath)) {
+        return $null
+    }
+
+    $statePath = $env:TRACEFOLD_FAKE_UIA_STATE
+    $index = 0
+    if (-not [string]::IsNullOrWhiteSpace($statePath) -and (Test-Path -LiteralPath $statePath)) {
+        $raw = Get-Content -LiteralPath $statePath -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            [void][int]::TryParse($raw.Trim(), [ref] $index)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($statePath)) {
+        Set-Content -LiteralPath $statePath -Value ([string] ($index + 1)) -Encoding ASCII
+    }
+
+    $payloads = @(Get-Content -LiteralPath $sequencePath -Raw | ConvertFrom-Json)
+    if ($index -ge $payloads.Count) { return $null }
+    return [string] $payloads[$index]
+}
+
+function Get-FakeOption {
+    param([string] $Name)
+    for ($index = 0; $index -lt $Arguments.Count - 1; $index++) {
+        if ($Arguments[$index] -ceq ('--' + $Name)) { return [string] $Arguments[$index + 1] }
+    }
+    return ''
+}
+
 if ($command -ne 'ui') {
     Write-FakeFailure -ExitCode 2 -Message ('unsupported command group: ' + $command)
 }
 
 switch ($sub) {
     'inspect' {
+        $payload = Get-FakeUiaPayload
+        if (-not [string]::IsNullOrWhiteSpace($payload)) {
+            [Console]::Out.Write($payload)
+            exit 0
+        }
         [Console]::Out.Write('{"tree":[{"automationId":"TraceFoldMainWindow","controlType":"Window"},{"automationId":"NavInbox","controlType":"NavigationViewItem"}]}')
         exit 0
     }
@@ -105,11 +143,23 @@ switch ($sub) {
         exit 0
     }
     'wait-for' {
-        [Console]::Out.Write('{"found":true,"automationId":"InboxOperationStatus"}')
+        $target = 'InboxOperationStatus'
+        if ($Arguments.Count -ge 3) { $target = [string] $Arguments[2] }
+        [Console]::Out.Write(([pscustomobject]@{ found = $true; automationId = $target } | ConvertTo-Json -Compress))
         exit 0
     }
     'screenshot' {
-        [Console]::Out.Write('{"captured":true,"name":"step.png"}')
+        $output = Get-FakeOption 'output'
+        if (-not [string]::IsNullOrWhiteSpace($output)) {
+            $directory = Split-Path -Parent $output
+            if (-not [string]::IsNullOrWhiteSpace($directory) -and
+                -not [IO.Directory]::Exists($directory)) {
+                [void][IO.Directory]::CreateDirectory($directory)
+            }
+            $bytes = [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=')
+            [IO.File]::WriteAllBytes($output, $bytes)
+        }
+        [Console]::Out.Write(([pscustomobject]@{ captured = $true; path = $output } | ConvertTo-Json -Compress))
         exit 0
     }
     'get-value' {

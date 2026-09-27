@@ -181,4 +181,10 @@ function Write-UiAcceptanceReport {
     return [pscustomobject]@{ Status=$overall; ReportPath=$target }
 }
 
-Export-ModuleMember -Function @('Write-UiFailureEvidence','Write-UiAcceptanceReport')
+Export-ModuleMember -Function @(
+    'Write-UiFailureEvidence',
+    'Write-UiAcceptanceReport',
+    'Assert-UiPngBytes',
+    'Assert-UiOwnedEvidenceFile',
+    'Assert-UiEvidenceDirectory'
+)

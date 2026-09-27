@@ -28,6 +28,64 @@ function Reset-UiAcceptanceMutationSteps {
     $script:mutationSteps.Clear()
 }
 
+<#
+.SYNOPSIS
+    Quotes one argument for a hand-built Windows command line.
+
+.DESCRIPTION
+    Windows PowerShell 5.1 runs on a .NET whose ProcessStartInfo has no ArgumentList, so the
+    command line must be built by hand. The escaping follows the CommandLineToArgvW rules
+    exactly, otherwise an argument boundary would silently move and the driver would receive a
+    different argument vector on one runtime than on the other.
+#>
+function ConvertTo-UiDriverArgument {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Value
+    )
+
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+
+    $backslash = [char] 0x5C
+    $quote = [char] 0x22
+    $builder = New-Object System.Text.StringBuilder
+    [void] $builder.Append($quote)
+    $pending = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq $backslash) { $pending++; continue }
+        if ($character -eq $quote) {
+            [void] $builder.Append($backslash, ($pending * 2) + 1)
+            [void] $builder.Append($quote)
+            $pending = 0
+            continue
+        }
+        if ($pending -gt 0) {
+            [void] $builder.Append($backslash, $pending)
+            $pending = 0
+        }
+        [void] $builder.Append($character)
+    }
+    if ($pending -gt 0) { [void] $builder.Append($backslash, $pending * 2) }
+    [void] $builder.Append($quote)
+    return $builder.ToString()
+}
+
+function Set-UiDriverArgumentList {
+    param(
+        [Parameter(Mandatory)] $StartInfo,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Arguments
+    )
+
+    $property = $StartInfo.PSObject.Properties['ArgumentList']
+    if ($null -ne $property) {
+        foreach ($item in @($Arguments)) { [void] $property.Value.Add([string] $item) }
+        return
+    }
+
+    $quoted = @()
+    foreach ($item in @($Arguments)) { $quoted += (ConvertTo-UiDriverArgument -Value ([string] $item)) }
+    $StartInfo.Arguments = ($quoted -join ' ')
+}
+
 function Invoke-UiDriverProcess {
     [CmdletBinding()]
     param(
@@ -39,12 +97,14 @@ function Invoke-UiDriverProcess {
     try { $target = (Resolve-Path -LiteralPath $WinAppPath -ErrorAction Stop).ProviderPath }
     catch { return [pscustomobject]@{ ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver unavailable' } }
     $start = New-Object System.Diagnostics.ProcessStartInfo
+    $commandArguments = New-Object 'System.Collections.Generic.List[string]'
     if ([IO.Path]::GetExtension($target) -ieq '.ps1') {
         $start.FileName = (Get-Command pwsh -ErrorAction Stop).Source
-        foreach ($item in @('-NoProfile', '-File', $target)) { [void] $start.ArgumentList.Add($item) }
+        foreach ($item in @('-NoProfile', '-File', $target)) { [void] $commandArguments.Add($item) }
     }
     else { $start.FileName = $target }
-    foreach ($item in $Arguments) { [void] $start.ArgumentList.Add([string] $item) }
+    foreach ($item in $Arguments) { [void] $commandArguments.Add([string] $item) }
+    Set-UiDriverArgumentList -StartInfo $start -Arguments $commandArguments.ToArray()
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Xml.Linq;
+using TraceFold.Media.Desktop.Controls;
 using Xunit;
 
 namespace TraceFold.Media.Desktop.Tests.Pages;
@@ -364,6 +365,72 @@ public sealed class UiAutomationContractTests
 
         Assert.Equal("{x:Bind AccessibleName, Mode=OneWay}",
             row.Attribute("AutomationProperties.Name")?.Value);
+    }
+
+    /// <summary>
+    /// The real-window startup gate reads its scopes, its probe targets and its three client
+    /// sizes from this manifest, so the manifest must agree with the production layout policy
+    /// the gate compares it against. Drift here would let the gate prove the wrong layout.
+    /// </summary>
+    [Fact]
+    public void Startup_scopes_and_layout_policy_agree_with_the_production_policy()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement root = manifest.RootElement;
+
+        string[] entryIds = [.. root.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("automationId").GetString()!)];
+        string[] allScopes = [.. root.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("scope").GetString()!)
+            .Distinct(StringComparer.Ordinal)];
+
+        string[] startupScopes = [.. root.GetProperty("startupScopes").EnumerateArray()
+            .Select(scope => scope.GetString()!)];
+        Assert.Equal(["window", "shell", "pages_inboxpage", "page_host:inbox"], startupScopes);
+        Assert.All(startupScopes, scope => Assert.Contains(scope, allScopes));
+        // Dialog scopes are not reachable at startup, so the gate must not require them there.
+        Assert.All(startupScopes, scope =>
+            Assert.DoesNotContain("dialog", scope, StringComparison.Ordinal));
+
+        // Exactly one entry owns the window scope: the gate waits for the window by that id.
+        Assert.Single(root.GetProperty("entries").EnumerateArray(),
+            entry => entry.GetProperty("scope").GetString() == "window");
+
+        JsonElement probe = root.GetProperty("layoutProbe");
+        string[] probeTargets =
+        [
+            "navigationItemAutomationId",
+            "inlineInspectorAutomationId",
+            "inspectorOpenButtonAutomationId",
+        ];
+        foreach (string target in probeTargets)
+        {
+            Assert.Contains(probe.GetProperty(target).GetString(), entryIds);
+        }
+
+        Assert.True(probe.GetProperty("pixelTolerance").GetInt32() > 0);
+
+        (int Width, int Height, int NavigationWidth, bool Inline)[] expected =
+        [
+            (1024, 720, 48, false),
+            (1280, 800, 176, true),
+            (1600, 900, 176, true),
+        ];
+        (int Width, int Height, int NavigationWidth, bool Inline)[] actual = [.. root
+            .GetProperty("layoutViewports").EnumerateArray()
+            .Select(viewport => (
+                viewport.GetProperty("widthDip").GetInt32(),
+                viewport.GetProperty("heightDip").GetInt32(),
+                viewport.GetProperty("navigationItemWidthDip").GetInt32(),
+                viewport.GetProperty("inlineInspector").GetBoolean()))];
+        Assert.Equal(expected, actual);
+
+        foreach ((int width, _, int navigationWidth, bool inline) in expected)
+        {
+            WorkspaceLayoutMode mode = WorkspaceLayoutPolicy.GetMode(width);
+            Assert.Equal(mode == WorkspaceLayoutMode.Wide, inline);
+            Assert.Equal(mode == WorkspaceLayoutMode.Wide ? 176 : 48, navigationWidth);
+        }
     }
 
     /// <summary>

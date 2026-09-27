@@ -224,6 +224,18 @@
     {"file":"Pages/InboxPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"待入库文件 paired.mp4，状态 等待前置处理","fixedFilename":"paired.mp4","forbidGuidSelectors":true},
     {"file":"Pages/LibraryPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"正式文件 photo.jpg，实际文件 photo.jpg，图片","fixedFilename":"photo.jpg","forbidGuidSelectors":true}
   ],
+  "startupScopes": ["window", "shell", "pages_inboxpage", "page_host:inbox"],
+  "layoutProbe": {
+    "navigationItemAutomationId": "NavInbox",
+    "inlineInspectorAutomationId": "InspectorPane",
+    "inspectorOpenButtonAutomationId": "InboxInspectorOpenButton",
+    "pixelTolerance": 2
+  },
+  "layoutViewports": [
+    {"widthDip":1024,"heightDip":720,"navigationItemWidthDip":48,"inlineInspector":false},
+    {"widthDip":1280,"heightDip":800,"navigationItemWidthDip":176,"inlineInspector":true},
+    {"widthDip":1600,"heightDip":900,"navigationItemWidthDip":176,"inlineInspector":true}
+  ],
   "runtimeControls": [
     {"file":"Dialogs/WindowsTaxonomyMaintenanceDialogService.cs","automationId":"TaxonomyDeleteConfirmDialog","name":"确认删除未使用词条","controlType":"ContentDialog","requiredPatterns":[],"scope":"dialog:taxonomy_delete","dynamicSelectorPolicy":"static_id"},
     {"file":"Dialogs/WindowsTaxonomyMaintenanceDialogService.cs","automationId":"TaxonomyDeleteTermList","name":"将删除的未使用词条列表","controlType":"ListView","requiredPatterns":[],"scope":"dialog:taxonomy_delete","dynamicSelectorPolicy":"static_id"}
