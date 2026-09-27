@@ -38,6 +38,7 @@ public static class Program
                     "root" => RunRoot(args, output),
                     "snapshot" => RunSnapshot(args, output),
                     "window" => RunWindow(args, output),
+                    "native" => RunNative(args, output),
                     _ => Fail(output, ExitInvalidArguments, "The command is not supported."),
                 };
         }
@@ -249,8 +250,147 @@ public static class Program
         }
     }
 
-    private static bool TryReadProcess(int processId, out Process? process,
-        out string? executable, out long startTicks)
+    /// <summary>
+    /// Read-only native UIA verification of one element, addressed by exact AutomationId inside
+    /// the launched window's subtree. It refuses anything that is not the runner's own process,
+    /// and it never mutates UI state.
+    /// </summary>
+    private static int RunNative(IReadOnlyList<string> args, TextWriter output)
+    {
+        if (args.Count < 2 || args[1] != "lookup")
+        {
+            return Fail(output, ExitInvalidArguments, "The native action is not supported.");
+        }
+
+        if (!TryParseNamedPairs(args, 2, out List<KeyValuePair<string, string>> pairs))
+        {
+            return Fail(output, ExitInvalidArguments, "Every argument must be a named option with a value.");
+        }
+
+        string[] allowed = ["root", "token", "process-id", "automation-id", "pattern", "output"];
+        if (pairs.Any(pair => !allowed.Contains(pair.Key, StringComparer.Ordinal)))
+        {
+            return Fail(output, ExitInvalidArguments, "The arguments are invalid.");
+        }
+
+        string? root = Single(pairs, "root");
+        string? token = Single(pairs, "token");
+        string? processIdText = Single(pairs, "process-id");
+        string? automationId = Single(pairs, "automation-id");
+        string[] patterns = [.. pairs
+            .Where(pair => pair.Key == "pattern")
+            .Select(pair => pair.Value)];
+        if (root is null || token is null || processIdText is null || automationId is null
+            || !int.TryParse(processIdText, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out int processId)
+            || patterns.Length != patterns.Distinct(StringComparer.Ordinal).Count()
+            || patterns.Any(pattern => !UiAutomationProbe.IsKnownPatternName(pattern)))
+        {
+            return Fail(output, ExitInvalidArguments,
+                "lookup requires root, token, process-id and automation-id, plus known pattern names.");
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return Fail(output, ExitWindowUnavailable, "The native command requires Windows.");
+        }
+
+        if (!IsValidOwnedRoot(root, token))
+        {
+            return Fail(output, ExitUnsafeRoot, "The process root is not owned.");
+        }
+
+        if (!TryReadProcess(processId, out Process? process, out string? executable,
+                out long startTicks))
+        {
+            return Fail(output, ExitWindowUnavailable, "The window is unavailable.");
+        }
+
+        using (process)
+        {
+            UiLookupRejection rejection = UiAutomationProbe.Validate(
+                automationId,
+                processId,
+                Path.GetFileName(executable!),
+                IsRecordedProcess(root, processId, startTicks, executable!),
+                process!.MainWindowHandle);
+            if (rejection != UiLookupRejection.None)
+            {
+                return rejection is UiLookupRejection.UnownedProcess
+                    or UiLookupRejection.UnexpectedExecutable
+                    ? Fail(output, ExitUnsafeRoot, "The process is not owned by this run.")
+                    : Fail(output, ExitWindowUnavailable, "The native probe was refused.");
+            }
+
+            UiElementFact? fact = UiAutomationProbe.Lookup(
+                process.MainWindowHandle, automationId, patterns, new WindowsUiAutomationNative());
+            if (fact is null)
+            {
+                // The probe could not answer: the gate must treat this as blocked, never as an
+                // unsupported pattern or an absent element.
+                return Fail(output, ExitWindowUnavailable, "The native probe could not answer.");
+            }
+
+            var emitValues = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, string> pair in pairs)
+            {
+                emitValues[pair.Key] = pair.Value;
+            }
+
+            return Emit(output, emitValues, JsonSerializer.Serialize(new
+            {
+                automationId,
+                matchCount = fact.MatchCount,
+                name = fact.Name,
+                controlType = fact.ControlType,
+                className = fact.ClassName,
+                isEnabled = fact.IsEnabled,
+                isOffscreen = fact.IsOffscreen,
+                x = fact.X,
+                y = fact.Y,
+                width = fact.Width,
+                height = fact.Height,
+                patterns = fact.Patterns
+                    .Select(pattern => new { name = pattern.Name, available = pattern.Available })
+                    .ToArray(),
+            }));
+        }
+    }
+
+    private static string? Single(List<KeyValuePair<string, string>> pairs, string name)
+    {
+        string[] values = [.. pairs.Where(pair => pair.Key == name).Select(pair => pair.Value)];
+        return values.Length == 1 ? values[0] : null;
+    }
+
+    /// <summary>
+    /// Named-option parsing that permits a repeated option, which the pattern list needs.
+    /// </summary>
+    private static bool TryParseNamedPairs(
+        IReadOnlyList<string> args,
+        int start,
+        out List<KeyValuePair<string, string>> pairs)
+    {
+        pairs = [];
+        for (int index = start; index < args.Count; index++)
+        {
+            string token = args[index];
+            if (!token.StartsWith("--", StringComparison.Ordinal)
+                || index + 1 >= args.Count
+                || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            pairs.Add(new KeyValuePair<string, string>(token[2..], args[index + 1]));
+            index++;
+        }
+
+        return true;
+    }
+
+    private static bool TryReadProcess(int processId, out Process? process, out string? executable,
+        out long startTicks)
     {
         process = null;
         executable = null;
