@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml.Linq;
 using TraceFold.Media.Desktop.Controls;
@@ -430,6 +431,83 @@ public sealed class UiAutomationContractTests
             WorkspaceLayoutMode mode = WorkspaceLayoutPolicy.GetMode(width);
             Assert.Equal(mode == WorkspaceLayoutMode.Wide, inline);
             Assert.Equal(mode == WorkspaceLayoutMode.Wide ? 176 : 48, navigationWidth);
+        }
+    }
+
+    /// <summary>
+    /// A dynamic media row is only reachable in the phase that materialises it, and the gate may
+    /// only seed from a repository fixture it can verify byte for byte. This locks both: the row
+    /// phases, the preparation controls the gate drives, and the manifest's description of the
+    /// real fixture bytes. A drift here would make the gate require a row the phase cannot have
+    /// produced, or copy an asset it never verified.
+    /// </summary>
+    [Fact]
+    public void Dynamic_rows_declare_their_phase_and_the_fixture_matches_the_repository_asset()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement root = manifest.RootElement;
+
+        string[] entryIds = [.. root.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("automationId").GetString()!)];
+        string[] knownPhases = ["startup", "inbox-seeded", "post-ingest"];
+
+        JsonElement rows = root.GetProperty("dynamicRows");
+        Assert.Equal(2, rows.GetArrayLength());
+        string[] rowPhases = [.. rows.EnumerateArray()
+            .Select(row => row.GetProperty("phase").GetString()!)];
+        Assert.All(rowPhases, phase => Assert.Contains(phase, knownPhases));
+
+        // A brand-new owned root has no media rows at all, so nothing the startup phase requires
+        // may depend on a row; the library row only exists after a real ingest.
+        Assert.Equal("inbox-seeded", rowPhases[0]);
+        Assert.Equal("post-ingest", rowPhases[1]);
+
+        JsonElement preparation = root.GetProperty("sessionPreparation");
+        string materializedPhase = preparation.GetProperty("materializedRowPhase").GetString()!;
+        Assert.Contains(materializedPhase, knownPhases);
+        Assert.NotEqual("startup", materializedPhase);
+        Assert.Equal(rowPhases[0], materializedPhase);
+
+        foreach (string key in new[]
+        {
+            "settingsNavigationAutomationId",
+            "inboxNavigationAutomationId",
+            "saveFolderSettingsAutomationId",
+            "scanTriggerAutomationId",
+        })
+        {
+            // The gate drives preparation only through declared native controls.
+            Assert.Contains(preparation.GetProperty(key).GetString(), entryIds);
+        }
+
+        JsonElement folderInputs = preparation.GetProperty("folderInputs");
+        Assert.Equal(["inbox", "library", "work"], folderInputs.EnumerateArray()
+            .Select(input => input.GetProperty("key").GetString()!).ToArray());
+        Assert.All(folderInputs.EnumerateArray(), input =>
+        {
+            Assert.Contains(input.GetProperty("automationId").GetString(), entryIds);
+            Assert.False(string.IsNullOrWhiteSpace(
+                input.GetProperty("relativeDirectory").GetString()));
+        });
+
+        JsonElement assets = root.GetProperty("fixtureAssets");
+        string[] seededNames = [.. assets.EnumerateArray()
+            .Select(asset => asset.GetProperty("fixedFilename").GetString()!)];
+        string[] materializedNames = [.. rows.EnumerateArray()
+            .Where(row => row.GetProperty("phase").GetString() == materializedPhase)
+            .Select(row => row.GetProperty("fixedFilename").GetString()!)];
+        Assert.NotEmpty(materializedNames);
+        Assert.All(materializedNames, name => Assert.Contains(name, seededNames));
+
+        string[] seedKeys = [.. folderInputs.EnumerateArray()
+            .Select(input => input.GetProperty("key").GetString()!)];
+        Assert.NotEmpty(assets.EnumerateArray());
+        foreach (JsonElement asset in assets.EnumerateArray())
+        {
+            Assert.Contains(asset.GetProperty("seedDirectory").GetString(), seedKeys);
+            byte[] bytes = File.ReadAllBytes(FindFile(asset.GetProperty("repositoryPath").GetString()!));
+            Assert.Equal(asset.GetProperty("sizeBytes").GetInt64(), bytes.LongLength);
+            Assert.Equal(asset.GetProperty("sha256").GetString(), Convert.ToHexString(SHA256.HashData(bytes)));
         }
     }
 

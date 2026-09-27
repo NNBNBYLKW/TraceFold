@@ -5,7 +5,10 @@
 
 function New-StartupLayoutContract {
     param(
-        [Parameter(Mandatory)][string] $Path
+        [Parameter(Mandatory)][string] $Path,
+        [string] $RowSelectorPolicy = 'accessible_name',
+        [string] $AssetSha256 = 'B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3',
+        [string] $InboxRowPhase = 'inbox-seeded'
     )
 
     $entries = @(
@@ -18,7 +21,27 @@ function New-StartupLayoutContract {
     $contract = [ordered]@{
         schemaVersion  = 1
         entries        = $entries
-        dynamicRows    = @([ordered]@{ file='Pages/InboxPage.xaml'; controlType='Grid'; selector='accessible_name'; fixedAccessibleName='Inbox row paired.mp4'; fixedFilename='paired.mp4'; forbidGuidSelectors=$true })
+        # The inbox row only exists after the scenario materialises the fixture; the library row
+        # belongs to a later phase and must never be required by this scenario.
+        dynamicRows    = @(
+            [ordered]@{ file='Pages/InboxPage.xaml'; controlType='Grid'; selector=$RowSelectorPolicy; fixedAccessibleName='Inbox row paired.mp4'; fixedFilename='paired.mp4'; forbidGuidSelectors=$true; phase=$InboxRowPhase }
+            [ordered]@{ file='Pages/LibraryPage.xaml'; controlType='Grid'; selector='accessible_name'; fixedAccessibleName='Library row photo.jpg'; fixedFilename='photo.jpg'; forbidGuidSelectors=$true; phase='post-ingest' }
+        )
+        fixtureAssets  = @(
+            [ordered]@{ fixedFilename='paired.mp4'; repositoryPath='apps/media-api/tests/fixtures/media/paired.mp4'; sha256=$AssetSha256; sizeBytes=2405; seedDirectory='inbox' }
+        )
+        sessionPreparation = [ordered]@{
+            materializedRowPhase           = 'inbox-seeded'
+            settingsNavigationAutomationId = 'NavSettings'
+            inboxNavigationAutomationId    = 'NavInbox'
+            saveFolderSettingsAutomationId = 'SaveFolderSettings'
+            scanTriggerAutomationId        = 'InboxRefreshButton'
+            folderInputs                   = @(
+                [ordered]@{ key='inbox'; automationId='InboxFolderPath'; relativeDirectory='inbox' }
+                [ordered]@{ key='library'; automationId='LibraryFolderPath'; relativeDirectory='library' }
+                [ordered]@{ key='work'; automationId='WorkFolderPath'; relativeDirectory='work' }
+            )
+        }
         startupScopes  = @('window', 'shell', 'pages_inboxpage', 'page_host:inbox')
         layoutProbe    = [ordered]@{
             navigationItemAutomationId      = 'NavInbox'
@@ -65,8 +88,9 @@ function New-StartupLayoutTree {
     param(
         [Parameter(Mandatory)][int] $NavigationWidth,
         [Parameter(Mandatory)][bool] $InlineInspector,
-        [bool] $InspectorOpenButtonEnabled = $true,
+        [bool] $InspectorOpenButtonEnabled = $false,
         [int] $InspectorX = 900,
+        [switch] $IncludeInboxRow,
         [switch] $OmitInspectorNode
     )
 
@@ -74,8 +98,14 @@ function New-StartupLayoutTree {
         New-StartupLayoutNode -Id 'TraceFoldMainWindow' -ControlType 'Window' -Name 'TraceFold main window' -Width 1024 -Height 720
         New-StartupLayoutNode -Id 'NavInbox' -ControlType 'NavigationViewItem' -Name 'Inbox navigation' -Patterns @('SelectionItem') -Width $NavigationWidth -Height 40
         New-StartupLayoutNode -Id 'InboxInspectorOpenButton' -ControlType 'Button' -Name 'Open inbox file panel' -Patterns @('Invoke') -Enabled $InspectorOpenButtonEnabled -X 700 -Y 60 -Width 32 -Height 32
-        New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'Grid' -Name 'Inbox row paired.mp4' -X 100 -Y 100 -Width 200 -Height 60
     )
+
+    # A brand-new owned root has no media rows; the row only appears after the scenario has
+    # seeded the inbox through the product UI. Its runtime id is deliberately a generated value
+    # so any attempt to address the row by id becomes a visible failure.
+    if ($IncludeInboxRow) {
+        $nodes += New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'Grid' -Name 'Inbox row paired.mp4' -X 100 -Y 100 -Width 200 -Height 60
+    }
 
     if ($OmitInspectorNode) { return $nodes }
 
@@ -89,26 +119,39 @@ function New-StartupLayoutTree {
     return $nodes
 }
 
+<#
+.SYNOPSIS
+    The seven trees the scenario must observe, in order.
+
+.DESCRIPTION
+    Three startup viewports with an empty inbox, then - after the product UI has been driven to
+    point the folders at the owned root and to scan - the inbox row appears, gets selected, opens
+    the drawer, and closes it again.
+#>
 function New-StartupLayoutTreeSequence {
     param(
         [Parameter(Mandatory)][string] $Path,
-        [switch] $OmitInspectorNode
+        [switch] $OmitInspectorNode,
+        [switch] $OmitMaterializedRow
     )
 
-    $compactClosed = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $false -OmitInspectorNode:$OmitInspectorNode
-    $compactReady = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -OmitInspectorNode:$OmitInspectorNode
-    $compactDrawer = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $true -InspectorOpenButtonEnabled $true -InspectorX 720 -OmitInspectorNode:$OmitInspectorNode
-    $compactClosedAgain = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -OmitInspectorNode:$OmitInspectorNode
-    $wide1280 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
-    $wide1600 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
+    $rowSwitch = -not $OmitMaterializedRow
+    $startupCompact = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -OmitInspectorNode:$OmitInspectorNode
+    $startupWide1280 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
+    $startupWide1600 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
+    $rowPresent = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
+    $rowSelected = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
+    $drawerOpen = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $true -InspectorOpenButtonEnabled $true -InspectorX 720 -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
+    $drawerClosed = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
 
     $payloads = @(
-        ([ordered]@{ tree = $compactClosed } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $wide1280 } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $wide1600 } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $compactReady } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $compactDrawer } | ConvertTo-Json -Depth 12 -Compress)
-        ([ordered]@{ tree = $compactClosedAgain } | ConvertTo-Json -Depth 12 -Compress)
+        ([ordered]@{ tree = $startupCompact } | ConvertTo-Json -Depth 12 -Compress)
+        ([ordered]@{ tree = $startupWide1280 } | ConvertTo-Json -Depth 12 -Compress)
+        ([ordered]@{ tree = $startupWide1600 } | ConvertTo-Json -Depth 12 -Compress)
+        ([ordered]@{ tree = $rowPresent } | ConvertTo-Json -Depth 12 -Compress)
+        ([ordered]@{ tree = $rowSelected } | ConvertTo-Json -Depth 12 -Compress)
+        ([ordered]@{ tree = $drawerOpen } | ConvertTo-Json -Depth 12 -Compress)
+        ([ordered]@{ tree = $drawerClosed } | ConvertTo-Json -Depth 12 -Compress)
     )
 
     [IO.File]::WriteAllText($Path, ($payloads | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
@@ -332,15 +375,19 @@ function Get-TestCases {
                 Assert-NotContains $source 'SetCursorPos'
                 Assert-NotContains $source 'SendInput'
                 Assert-NotContains $source '{x:Bind'
+                Assert-NotContains $source 'photo.jpg'
+                Assert-NotContains $source 'paired.mp4'
                 Assert-True ($source -notmatch "'[0-9]+\s*,\s*[0-9]+'") 'scenario must not carry coordinate literals'
                 Assert-True ($source -notmatch '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}') 'scenario must not carry generated row identifiers'
 
-                # ReadAllText decodes UTF-8 without relying on the host's default code page, so
-                # the manifest's Chinese names survive on both runtimes.
                 $manifestPath = Join-Path $script:root 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
                 $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+                # A selector may only reach the driver through the manifest, so no contract id may
+                # appear as a string literal here. Unquoted mentions are fine: the manifest is read
+                # through property names, and a property name is not a selector.
                 foreach ($entry in @($manifest.entries)) {
-                    Assert-True ($source -notmatch [regex]::Escape([string]$entry.automationId)) ('scenario must read ' + $entry.automationId + ' from the contract')
+                    $literal = "['\`"]" + [regex]::Escape([string]$entry.automationId) + "['\`"]"
+                    Assert-True ($source -notmatch $literal) ('scenario must read ' + $entry.automationId + ' from the contract')
                 }
             }
         },
@@ -368,12 +415,15 @@ function Get-TestCases {
                     # A comma keeps each argument vector as one element instead of flattening it.
                     $argv = @()
                     foreach ($invocation in $invocations) { $argv += ,@($invocation.argv) }
-                    Assert-Equal 13 $argv.Count
-                    $wait = @($argv | Where-Object { $_[1] -ceq 'wait-for' })
-                    Assert-Equal 1 $wait.Count
-                    Assert-Equal 'TraceFoldMainWindow' $wait[0][2]
-                    Assert-True ($wait[0] -contains '-a')
-                    Assert-Equal '4242' $wait[0][4]
+                    Assert-Equal 22 $argv.Count
+
+                    $waits = @($argv | Where-Object { $_[1] -ceq 'wait-for' })
+                    Assert-Equal 2 $waits.Count
+                    Assert-Equal 'TraceFoldMainWindow' $waits[0][2]
+                    Assert-True ($waits[0] -contains '-a')
+                    Assert-Equal '4242' $waits[0][4]
+                    # The row is awaited by its deterministic accessible name, never by an id.
+                    Assert-Equal 'Inbox row paired.mp4' $waits[1][2]
 
                     $resizes = @($argv | Where-Object { $_[1] -ceq 'resize' })
                     Assert-Equal 0 $resizes.Count
@@ -383,23 +433,54 @@ function Get-TestCases {
                     Assert-Equal 4 @($supportActions | Where-Object { $_ -ceq 'resize' }).Count
 
                     $inspections = @($argv | Where-Object { $_[1] -ceq 'inspect' })
-                    Assert-Equal 6 $inspections.Count
+                    Assert-Equal 7 $inspections.Count
                     $screenshots = @($argv | Where-Object { $_[1] -ceq 'screenshot' })
                     Assert-Equal 3 $screenshots.Count
                     foreach ($item in $screenshots) { Assert-True ($item -ccontains '--output') }
 
+                    # The product UI is the only preparation channel: folders, save, scan.
+                    $values = @($argv | Where-Object { $_[1] -ceq 'set-value' })
+                    Assert-Equal 3 $values.Count
+                    $valueTargets = @($values | ForEach-Object { $_[2] })
+                    foreach ($target in @('InboxFolderPath','LibraryFolderPath','WorkFolderPath')) {
+                        Assert-True ($valueTargets -ccontains $target) ('the scenario must set ' + $target + ' through the product UI')
+                    }
+                    foreach ($item in $values) {
+                        Assert-True ([string] $item[3] -like (([IO.Path]::GetFullPath((Join-Path $base 'owned'))) + '*')) 'folder settings must point inside the owned root'
+                    }
+
                     $invokes = @($argv | Where-Object { $_[1] -ceq 'invoke' })
-                    Assert-Equal 2 $invokes.Count
-                    Assert-Equal 'Inbox row paired.mp4' $invokes[0][2]
-                    Assert-Equal 'InboxInspectorOpenButton' $invokes[1][2]
+                    Assert-Equal 6 $invokes.Count
+                    $invokeTargets = @($invokes | ForEach-Object { $_[2] })
+                    foreach ($target in @('NavSettings','SaveFolderSettings','NavInbox','InboxRefreshButton')) {
+                        Assert-True ($invokeTargets -ccontains $target) ('the scenario must drive ' + $target)
+                    }
+                    Assert-True ($invokeTargets -ccontains 'Inbox row paired.mp4') 'the row must be selected by its accessible name'
+                    Assert-True ($invokeTargets -ccontains 'InboxInspectorOpenButton')
                     $keys = @($argv | Where-Object { $_[1] -ceq 'send-keys' })
                     Assert-Equal 1 $keys.Count
 
                     foreach ($item in $argv) {
                         foreach ($argument in $item) {
-                            Assert-True ([string]$argument -notmatch '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-') 'the scenario must never select a generated row identifier'
+                            Assert-True ([string] $argument -notmatch '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-') 'the scenario must never select a generated row identifier'
+                            Assert-True ([string] $argument -notlike '*photo.jpg*') 'the post-ingest library row must not be required by this scenario'
                         }
                     }
+
+                    # The three startup trees were inspected before any preparation: no media rows.
+                    foreach ($name in @('1024x720','1280x800','1600x900')) {
+                        $treeText = [IO.File]::ReadAllText((Join-Path $base ('out/viewport-' + $name + '-uia.json')))
+                        Assert-True ($treeText -notlike '*Inbox row paired.mp4*') 'a brand-new owned root must not already contain the inbox row'
+                    }
+
+                    # Only the owned inbox received the verified fixture.
+                    $copied = Join-Path $base 'owned/inbox/paired.mp4'
+                    Assert-True ([IO.File]::Exists($copied)) 'the verified fixture must be copied into the owned inbox'
+                    Assert-Equal 2405 ([IO.File]::ReadAllBytes($copied).Length)
+                    Assert-True (-not [IO.File]::Exists((Join-Path $base 'owned/library/paired.mp4')))
+                    Assert-True (-not [IO.File]::Exists((Join-Path $base 'owned/work/paired.mp4')))
+                    Assert-Equal 'B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3' (Get-FileHash -LiteralPath (Join-Path $script:root 'apps/media-api/tests/fixtures/media/paired.mp4') -Algorithm SHA256).Hash
+
                     foreach ($viewport in @($result.Viewports)) {
                         Assert-True ([IO.File]::Exists((Join-Path $base ('out/' + $viewport.tree))))
                         Assert-True ([IO.File]::Exists((Join-Path $base ('out/' + $viewport.screenshot))))
@@ -455,6 +536,65 @@ function Get-TestCases {
                 }
                 finally {
                     foreach ($name in @('TRACEFOLD_FAKE_UIA_TREE_SEQ','TRACEFOLD_FAKE_UIA_STATE','TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN')) {
+                        Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
+                    }
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'startup layout scenario enforces the fixed-name row policy before any preparation'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
+                [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
+                $argvLog = Join-Path $base 'argv.jsonl'
+                try {
+                    New-StartupLayoutContract -Path (Join-Path $base 'contract.json') -RowSelectorPolicy 'automation_id'
+                    New-StartupLayoutTreeSequence -Path (Join-Path $base 'tree-sequence.json')
+                    $env:TRACEFOLD_FAKE_ARGV_LOG = $argvLog
+                    $env:TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN = '1'
+                    $env:TRACEFOLD_FAKE_UIA_TREE_SEQ = (Join-Path $base 'tree-sequence.json')
+                    $env:TRACEFOLD_FAKE_UIA_STATE = (Join-Path $base 'sequence-state.txt')
+                    $arguments = New-StartupLayoutScenarioArguments -Base $base -Overrides @{}
+                    $result = Invoke-UiAcceptanceScenario -Path (Join-Path $script:uiRoot 'scenarios/00-startup-layout.ps1') -Arguments $arguments
+                    Assert-Equal 'Failed' $result.Status
+                    Assert-Contains $result.Reason 'dynamic_selector'
+                    # The row policy is validated from the manifest before the product is touched.
+                    Assert-True (-not [IO.File]::Exists($argvLog)) 'no driver call may happen before the row policy is accepted'
+                }
+                finally {
+                    foreach ($name in @('TRACEFOLD_FAKE_ARGV_LOG','TRACEFOLD_FAKE_UIA_TREE_SEQ','TRACEFOLD_FAKE_UIA_STATE','TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN')) {
+                        Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
+                    }
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'startup layout scenario blocks instead of failing when the fixture asset does not match'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
+                [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
+                $argvLog = Join-Path $base 'argv.jsonl'
+                try {
+                    # A missing or altered repository fixture is a blocked gate, never a product failure.
+                    New-StartupLayoutContract -Path (Join-Path $base 'contract.json') -AssetSha256 ('0' * 64)
+                    New-StartupLayoutTreeSequence -Path (Join-Path $base 'tree-sequence.json')
+                    $env:TRACEFOLD_FAKE_ARGV_LOG = $argvLog
+                    $env:TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN = '1'
+                    $env:TRACEFOLD_FAKE_UIA_TREE_SEQ = (Join-Path $base 'tree-sequence.json')
+                    $env:TRACEFOLD_FAKE_UIA_STATE = (Join-Path $base 'sequence-state.txt')
+                    $arguments = New-StartupLayoutScenarioArguments -Base $base -Overrides @{}
+                    $result = Invoke-UiAcceptanceScenario -Path (Join-Path $script:uiRoot 'scenarios/00-startup-layout.ps1') -Arguments $arguments
+                    Assert-Equal 'Blocked' $result.Status
+                    Assert-Contains $result.Reason 'fixture'
+                    Assert-True (-not [IO.File]::Exists((Join-Path $base 'owned/inbox/paired.mp4'))) 'an unverified fixture must never be copied'
+                    Assert-True ([IO.File]::ReadAllText($argvLog) -notlike '*send-keys*') 'the compact drawer phase must not start without a materialised row'
+                }
+                finally {
+                    foreach ($name in @('TRACEFOLD_FAKE_ARGV_LOG','TRACEFOLD_FAKE_UIA_TREE_SEQ','TRACEFOLD_FAKE_UIA_STATE','TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN')) {
                         Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
                     }
                     Remove-UiTestTree -Path $base

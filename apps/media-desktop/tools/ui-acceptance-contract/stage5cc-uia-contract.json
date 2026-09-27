@@ -221,9 +221,24 @@
     {"file":"Dialogs/TaxonomyMergeDialog.xaml","automationId":"TaxonomyMergeApplyButton","name":"确认应用词条合并","controlType":"Button","requiredPatterns":["Invoke"],"scope":"dialogs_taxonomymergedialog","dynamicSelectorPolicy":"static_id"}
   ],
   "dynamicRows": [
-    {"file":"Pages/InboxPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"待入库文件 paired.mp4，状态 等待前置处理","fixedFilename":"paired.mp4","forbidGuidSelectors":true},
-    {"file":"Pages/LibraryPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"正式文件 photo.jpg，实际文件 photo.jpg，图片","fixedFilename":"photo.jpg","forbidGuidSelectors":true}
+    {"file":"Pages/InboxPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"待入库文件 paired.mp4，状态 等待前置处理","fixedFilename":"paired.mp4","forbidGuidSelectors":true,"phase":"inbox-seeded"},
+    {"file":"Pages/LibraryPage.xaml","controlType":"Grid","selector":"accessible_name","fixedAccessibleName":"正式文件 photo.jpg，实际文件 photo.jpg，图片","fixedFilename":"photo.jpg","forbidGuidSelectors":true,"phase":"post-ingest"}
   ],
+  "fixtureAssets": [
+    {"fixedFilename":"paired.mp4","repositoryPath":"apps/media-api/tests/fixtures/media/paired.mp4","sha256":"B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3","sizeBytes":2405,"seedDirectory":"inbox"}
+  ],
+  "sessionPreparation": {
+    "materializedRowPhase": "inbox-seeded",
+    "settingsNavigationAutomationId": "NavSettings",
+    "inboxNavigationAutomationId": "NavInbox",
+    "saveFolderSettingsAutomationId": "SaveFolderSettings",
+    "scanTriggerAutomationId": "InboxRefreshButton",
+    "folderInputs": [
+      {"key":"inbox","automationId":"InboxFolderPath","relativeDirectory":"inbox"},
+      {"key":"library","automationId":"LibraryFolderPath","relativeDirectory":"library"},
+      {"key":"work","automationId":"WorkFolderPath","relativeDirectory":"work"}
+    ]
+  },
   "startupScopes": ["window", "shell", "pages_inboxpage", "page_host:inbox"],
   "layoutProbe": {
     "navigationItemAutomationId": "NavInbox",

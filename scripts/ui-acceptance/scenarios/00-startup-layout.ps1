@@ -1,9 +1,21 @@
 # TraceFold UI acceptance - startup/layout scenario.
 #
-# Proves the pinned driver against the published window at the three accepted client sizes.
-# Every selector, expected control type, expected pattern and expected layout width is read
-# from the shared UIA contract at runtime: this file must not carry product literals, must not
-# carry coordinates, must not sleep, and must never end a process by name.
+# Proves the pinned driver against the published window at the three accepted client sizes,
+# then - still only through the product's own UI - materialises the inbox row and accepts the
+# compact drawer interaction.
+#
+# Phase rules this file must respect:
+#   * Startup phase: only the static elements the startup scopes declare are required. A brand
+#     new owned root has no media rows, so no dynamic row may be required there.
+#   * Row policy: the manifest's fixed-filename/accessible-name selection policy is validated
+#     from the manifest itself, before the product is touched at all.
+#   * Preparation: the owned inbox/library/work directories are set through the product's
+#     Settings UI, the repository fixture is verified by size and SHA-256 and copied only into
+#     the owned inbox, and the scan is triggered through the product's own control.
+#   * The library row belongs to the post-ingest phase and is never required here.
+#
+# Bans: no coordinates, no sleeps, no shell folder-picker automation, no process termination
+# by name, no direct database access, no generated row identifiers, and no pre-seeded fake rows.
 #
 # Host seams (declared so a dispatcher can hand them over, and so the contract tests can drive
 # the whole scenario against the fake driver):
@@ -25,6 +37,7 @@ param(
     [Parameter(Mandatory)][string] $SupportPath,
     [Parameter(Mandatory)][string] $WinAppPath,
     [int] $WaitTimeoutSeconds = 30,
+    [int] $RowWaitTimeoutSeconds = 30,
     [int] $ObservationTimeoutSeconds = 20,
     [int] $InspectDepth = 8,
     [int] $MutationTimeoutMs = 5000,
@@ -40,6 +53,17 @@ Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Contracts.psm1
 Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Processes.psm1') -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Driver.psm1') -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Evidence.psm1') -DisableNameChecking
+
+# This file lives in scripts/ui-acceptance/scenarios, so the repository root is three levels up.
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
+
+# A precondition this host cannot satisfy never counts as a product failure.
+$blockedFailureCodes = @(
+    'startup_layout.desktop_unavailable',
+    'startup_layout.fixture_missing',
+    'startup_layout.fixture_mismatch',
+    'startup_layout.fixture_target'
+)
 
 function Get-StartupLayoutIndex {
     param([object[]] $Nodes)
@@ -135,24 +159,53 @@ function Assert-StartupLayoutEntry {
     }
 }
 
-function Assert-StartupLayoutDynamicRow {
+<#
+.SYNOPSIS
+    Validates the manifest's dynamic-row selection policy without touching the product.
+
+.DESCRIPTION
+    Runs before the product is launched: a row whose declared selection policy is unusable must
+    stop the gate before any mutation, and the policy is a property of the manifest, not of the
+    phase - so it is checked for every declared row, present or not.
+#>
+function Assert-StartupLayoutDynamicPolicy {
+    param(
+        [Parameter(Mandatory)][object[]] $Rows,
+        [Parameter(Mandatory)][string[]] $Phases
+    )
+
+    foreach ($row in $Rows) {
+        Assert-UiAcceptanceFields -InputObject $row -Required @('file','controlType','selector','fixedAccessibleName','fixedFilename','forbidGuidSelectors','phase')
+        if ([string] $row.selector -cne 'accessible_name') { throw 'startup_layout.dynamic_selector' }
+        if (-not [bool] $row.forbidGuidSelectors) { throw 'startup_layout.dynamic_selector' }
+        if ([string] $row.fixedFilename -notmatch '\S') { throw 'startup_layout.dynamic_selector' }
+        if ([string] $row.fixedAccessibleName -notlike ('*' + [string] $row.fixedFilename + '*')) {
+            throw 'startup_layout.dynamic_selector'
+        }
+        if ([string] $row.fixedAccessibleName -match '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-') { throw 'startup_layout.dynamic_selector' }
+        if ([string] $row.fixedAccessibleName -match '[\{\}]') { throw 'startup_layout.dynamic_selector' }
+        if ($Phases -cnotcontains [string] $row.phase) { throw 'startup_layout.dynamic_phase' }
+    }
+}
+
+<#
+.SYNOPSIS
+    Requires exactly one unique match for every row the current phase must have produced.
+#>
+function Assert-StartupLayoutPhaseRow {
     param(
         [Parameter(Mandatory)][object[]] $Nodes,
         [Parameter(Mandatory)][object[]] $Rows
     )
 
     foreach ($row in $Rows) {
-        Assert-UiAcceptanceFields -InputObject $row -Required @('controlType','selector','fixedAccessibleName','forbidGuidSelectors')
-        # Rows are addressed by their deterministic accessible name and never by a generated id.
-        if ([string] $row.selector -cne 'accessible_name') { throw 'startup_layout.dynamic_selector' }
-        if ([string] $row.fixedAccessibleName -match '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-') {
-            throw 'startup_layout.dynamic_selector'
-        }
         $matches = @($Nodes | Where-Object {
             [string] $_.controlType -ceq [string] $row.controlType -and
             [string] $_.name -ceq [string] $row.fixedAccessibleName })
         if ($matches.Count -ne 1) { throw 'startup_layout.dynamic_row' }
         foreach ($match in $matches) {
+            # The runtime id must never be a binding expression, because the gate addresses the
+            # row by its accessible name and an unresolved binding would mean the row is not real.
             if ([string] $match.automationId -match '^\{') { throw 'startup_layout.dynamic_selector' }
         }
     }
@@ -173,6 +226,48 @@ function Get-StartupLayoutBounds {
     return $matches[0]
 }
 
+function Invoke-StartupLayoutMutation {
+    param(
+        [Parameter(Mandatory)][string] $StepId,
+        [Parameter(Mandatory)][string[]] $Arguments,
+        [Parameter(Mandatory)][int] $ProcessId,
+        [Parameter(Mandatory)][string] $FailureCode
+    )
+
+    $result = Invoke-WinAppMutation -StepId $StepId -Arguments $Arguments -ProcessId $ProcessId `
+        -WinAppPath $WinAppPath -TimeoutMs $MutationTimeoutMs -RunToken $RunToken -OwnedRoot $OwnedRoot
+    if ($result.Status -cne 'Passed') { throw $FailureCode }
+}
+
+<#
+.SYNOPSIS
+    Verifies one repository fixture and copies it into the owned seed directory.
+
+.DESCRIPTION
+    The gate only ever seeds from a repository fixture whose size and SHA-256 match the manifest,
+    and it only writes into a directory it created under the owned root. A missing or altered
+    fixture is a blocked gate, not a product failure.
+#>
+function Copy-StartupLayoutFixture {
+    param(
+        [Parameter(Mandatory)] $Asset,
+        [Parameter(Mandatory)][hashtable] $Folders
+    )
+
+    $source = Join-Path $repositoryRoot ([string] $Asset.repositoryPath)
+    if (-not [IO.File]::Exists($source)) { throw 'startup_layout.fixture_missing' }
+    $item = Get-Item -LiteralPath $source
+    if ($item.Length -ne [long] $Asset.sizeBytes) { throw 'startup_layout.fixture_mismatch' }
+    $hash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+    if ($hash -cne ([string] $Asset.sha256).ToUpperInvariant()) { throw 'startup_layout.fixture_mismatch' }
+
+    $seedDirectory = [string] $Asset.seedDirectory
+    if (-not $Folders.ContainsKey($seedDirectory)) { throw 'startup_layout.fixture_target' }
+    $destination = Join-Path $Folders[$seedDirectory] ([string] $Asset.fixedFilename)
+    [IO.File]::Copy($source, $destination, $true)
+    return [pscustomobject] @{ Source = $source; Destination = $destination; Sha256 = $hash }
+}
+
 $failureCode = 'startup_layout.unexpected'
 $viewports = @()
 $artifacts = @()
@@ -186,7 +281,7 @@ try {
     if (-not [IO.File]::Exists($SupportPath) -or -not [IO.File]::Exists($WinAppPath)) { throw 'startup_layout.tooling_missing' }
 
     $contract = ConvertFrom-UiAcceptanceJson -Text ([IO.File]::ReadAllText($ContractPath)) -Source 'uia contract'
-    Assert-UiAcceptanceFields -InputObject $contract -Required @('entries','dynamicRows','startupScopes','layoutProbe','layoutViewports')
+    Assert-UiAcceptanceFields -InputObject $contract -Required @('entries','dynamicRows','fixtureAssets','sessionPreparation','startupScopes','layoutProbe','layoutViewports')
 
     $startupScopes = @($contract.startupScopes)
     $required = @()
@@ -215,6 +310,34 @@ try {
         }
     }
 
+    # --- row policy and fixture declaration, validated before the product is touched ---
+    $phases = Get-UiAcceptanceDynamicRowPhase
+    $rows = @($contract.dynamicRows)
+    if ($rows.Count -eq 0) { throw 'startup_layout.contract_empty' }
+    Assert-StartupLayoutDynamicPolicy -Rows $rows -Phases $phases
+
+    $preparation = $contract.sessionPreparation
+    Assert-UiAcceptanceFields -InputObject $preparation -Required @(
+        'materializedRowPhase','settingsNavigationAutomationId','inboxNavigationAutomationId',
+        'saveFolderSettingsAutomationId','scanTriggerAutomationId','folderInputs')
+    $materializedPhase = [string] $preparation.materializedRowPhase
+    if ($phases -cnotcontains $materializedPhase) { throw 'startup_layout.dynamic_phase' }
+    $materializedRows = @($rows | Where-Object { [string] $_.phase -ceq $materializedPhase })
+    if ($materializedRows.Count -eq 0) { throw 'startup_layout.dynamic_phase' }
+
+    $folderInputs = @($preparation.folderInputs)
+    if ($folderInputs.Count -eq 0) { throw 'startup_layout.preparation_contract' }
+    foreach ($folderInput in $folderInputs) {
+        Assert-UiAcceptanceFields -InputObject $folderInput -Required @('key','automationId','relativeDirectory')
+    }
+
+    $assets = @($contract.fixtureAssets)
+    foreach ($row in $materializedRows) {
+        $assetMatches = @($assets | Where-Object { [string] $_.fixedFilename -ceq [string] $row.fixedFilename })
+        if ($assetMatches.Count -ne 1) { throw 'startup_layout.fixture_missing' }
+        Assert-UiAcceptanceFields -InputObject $assetMatches[0] -Required @('fixedFilename','repositoryPath','sha256','sizeBytes','seedDirectory')
+    }
+
     [void][IO.Directory]::CreateDirectory($OutputDirectory)
     $screenshotDirectory = Join-Path $OwnedRoot 'screenshots'
     [void][IO.Directory]::CreateDirectory($screenshotDirectory)
@@ -230,6 +353,7 @@ try {
     if ($waited.Status -cne 'Passed') { throw 'startup_layout.window_unavailable' }
     if ($null -eq $waited.Data -or $waited.Data.found -ne $true) { throw 'startup_layout.window_unavailable' }
 
+    # --- startup phase: static entries only; the owned root has no media rows yet ---
     foreach ($position in 0..($declared.Count - 1)) {
         $spec = $declared[$position]
         $widthDip = [int] $spec.widthDip
@@ -246,8 +370,6 @@ try {
 
         if ($index.Count -eq 0) { $failureCode = $indent + '_empty_tree'; throw $failureCode }
         try { Assert-StartupLayoutEntry -Index $index -Required $required -OffscreenAllowed @([string] $probe.inlineInspectorAutomationId) }
-        catch { $failureCode = $_.Exception.Message; throw $failureCode }
-        try { Assert-StartupLayoutDynamicRow -Nodes $nodes -Rows @($contract.dynamicRows) }
         catch { $failureCode = $_.Exception.Message; throw $failureCode }
 
         $navigationId = [string] $probe.navigationItemAutomationId
@@ -299,8 +421,52 @@ try {
         }
     }
 
-    # The compact policy needs a live interactive desktop: it selects a row, opens the drawer
-    # and closes it with Escape. Without one the run is Blocked, never silently Passed.
+    # --- preparation: owned folders through the product UI, then the scan ---
+    $folders = @{}
+    foreach ($folderInput in $folderInputs) {
+        $directory = Join-Path $OwnedRoot ([string] $folderInput.relativeDirectory)
+        [void][IO.Directory]::CreateDirectory($directory)
+        $folders[[string] $folderInput.key] = $directory
+    }
+
+    Invoke-StartupLayoutMutation -StepId 'startup.open-settings' `
+        -Arguments @('ui','invoke',[string] $preparation.settingsNavigationAutomationId) `
+        -ProcessId $productProcessId -FailureCode 'startup_layout.settings_unavailable'
+    foreach ($folderInput in $folderInputs) {
+        Invoke-StartupLayoutMutation -StepId ('startup.set-' + [string] $folderInput.key + '-folder') `
+            -Arguments @('ui','set-value',[string] $folderInput.automationId,$folders[[string] $folderInput.key]) `
+            -ProcessId $productProcessId -FailureCode 'startup_layout.folder_settings'
+    }
+    Invoke-StartupLayoutMutation -StepId 'startup.save-folder-settings' `
+        -Arguments @('ui','invoke',[string] $preparation.saveFolderSettingsAutomationId) `
+        -ProcessId $productProcessId -FailureCode 'startup_layout.folder_settings'
+    Invoke-StartupLayoutMutation -StepId 'startup.open-inbox' `
+        -Arguments @('ui','invoke',[string] $preparation.inboxNavigationAutomationId) `
+        -ProcessId $productProcessId -FailureCode 'startup_layout.inbox_navigation'
+
+    # Only a fixture whose size and hash match the manifest is copied, and only into the owned
+    # inbox: the library stays empty until a real ingest happens.
+    foreach ($row in $materializedRows) {
+        $asset = @($assets | Where-Object { [string] $_.fixedFilename -ceq [string] $row.fixedFilename })[0]
+        $null = Copy-StartupLayoutFixture -Asset $asset -Folders $folders
+    }
+
+    Invoke-StartupLayoutMutation -StepId 'startup.scan-inbox' `
+        -Arguments @('ui','invoke',[string] $preparation.scanTriggerAutomationId) `
+        -ProcessId $productProcessId -FailureCode 'startup_layout.scan_trigger'
+
+    foreach ($row in $materializedRows) {
+        $appeared = Invoke-WinAppObservation -Arguments @('ui','wait-for',[string] $row.fixedAccessibleName) `
+            -ProcessId $productProcessId -TimeoutSeconds $RowWaitTimeoutSeconds `
+            -WinAppPath $WinAppPath -RunToken $RunToken -OwnedRoot $OwnedRoot
+        if ($appeared.Status -cne 'Passed') { throw 'startup_layout.dynamic_row' }
+        if ($null -eq $appeared.Data -or $appeared.Data.found -ne $true) { throw 'startup_layout.dynamic_row' }
+    }
+
+    $seededTree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
+    Assert-StartupLayoutPhaseRow -Nodes @($seededTree.tree) -Rows $materializedRows
+
+    # --- compact drawer policy, only once a real row exists ---
     $compactSpecs = @($declared | Where-Object { -not [bool] $_.inlineInspector })
     if ($compactSpecs.Count -gt 0) {
         if (-not (& $DesktopCheck)) {
@@ -313,11 +479,10 @@ try {
         $resized = Resize-StartupLayoutWindow -ProcessId $productProcessId -WidthDip $compactWidth -HeightDip $compactHeight
         $clientWidth = [int] $resized.clientWidthPixels
 
-        $row = @($contract.dynamicRows)[0]
-        $selected = Invoke-WinAppMutation -StepId ('startup.select-row.' + $compactWidth) `
-            -Arguments @('ui','invoke',[string] $row.fixedAccessibleName) -ProcessId $productProcessId `
-            -WinAppPath $WinAppPath -TimeoutMs $MutationTimeoutMs -RunToken $RunToken -OwnedRoot $OwnedRoot
-        if ($selected.Status -cne 'Passed') { throw 'startup_layout.row_selection' }
+        $row = $materializedRows[0]
+        Invoke-StartupLayoutMutation -StepId ('startup.select-row.' + $compactWidth) `
+            -Arguments @('ui','invoke',[string] $row.fixedAccessibleName) `
+            -ProcessId $productProcessId -FailureCode 'startup_layout.row_selection'
 
         $readyTree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
         $readyIndex = Get-StartupLayoutIndex -Nodes @($readyTree.tree)
@@ -325,10 +490,9 @@ try {
         $openButton = Get-StartupLayoutBounds -Index $readyIndex -AutomationId $openButtonId -FailureCode 'startup_layout.inspector_open_button'
         if (-not [bool] $openButton.enabled) { throw 'startup_layout.inspector_open_button' }
 
-        $opened = Invoke-WinAppMutation -StepId ('startup.open-inspector.' + $compactWidth) `
-            -Arguments @('ui','invoke',$openButtonId) -ProcessId $productProcessId `
-            -WinAppPath $WinAppPath -TimeoutMs $MutationTimeoutMs -RunToken $RunToken -OwnedRoot $OwnedRoot
-        if ($opened.Status -cne 'Passed') { throw 'startup_layout.inspector_open' }
+        Invoke-StartupLayoutMutation -StepId ('startup.open-inspector.' + $compactWidth) `
+            -Arguments @('ui','invoke',$openButtonId) `
+            -ProcessId $productProcessId -FailureCode 'startup_layout.inspector_open'
 
         $drawerTree = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
         $drawerIndex = Get-StartupLayoutIndex -Nodes @($drawerTree.tree)
@@ -363,8 +527,6 @@ catch {
     if ([string]::IsNullOrWhiteSpace($code) -or $code -notlike 'startup_layout.*') {
         $code = 'startup_layout.unexpected'
     }
-    if ($code -ceq 'startup_layout.desktop_unavailable') {
-        return [pscustomobject] @{ ScenarioId = $ScenarioId; Status = 'Blocked'; Reason = $code; Viewports = @(); Artifacts = @() }
-    }
-    return [pscustomobject] @{ ScenarioId = $ScenarioId; Status = 'Failed'; Reason = $code; Viewports = @(); Artifacts = @() }
+    $status = if ($blockedFailureCodes -ccontains $code) { 'Blocked' } else { 'Failed' }
+    return [pscustomobject] @{ ScenarioId = $ScenarioId; Status = $status; Reason = $code; Viewports = @(); Artifacts = @() }
 }

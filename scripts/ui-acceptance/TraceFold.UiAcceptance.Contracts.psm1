@@ -193,6 +193,22 @@ function Get-UiAcceptanceRequiredViewport {
     return ,$viewports
 }
 
+<#
+.SYNOPSIS
+    The phase vocabulary a dynamic media row may declare.
+
+.DESCRIPTION
+    A dynamic row is only reachable in the phase that materialises it: the inbox row needs the
+    inbox to have been seeded and scanned, and the library row only exists after an ingest. A
+    gate must therefore never require a row the current phase cannot have produced.
+#>
+function Get-UiAcceptanceDynamicRowPhase {
+    [CmdletBinding()]
+    param()
+
+    return @('startup', 'inbox-seeded', 'post-ingest')
+}
+
 function Test-UiAcceptanceDangerousKey {
     [CmdletBinding()]
     param(
@@ -270,6 +286,7 @@ Export-ModuleMember -Function @(
     'Protect-UiAcceptanceText',
     'Test-UiAcceptanceDangerousKey',
     'Get-UiAcceptanceRequiredViewport',
+    'Get-UiAcceptanceDynamicRowPhase',
     'ConvertFrom-UiAcceptanceJson',
     'Assert-UiAcceptanceFields'
 )
