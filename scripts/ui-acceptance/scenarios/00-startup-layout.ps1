@@ -88,7 +88,9 @@ function Read-StartupLayoutTree {
         -ProcessId $ProcessId -TimeoutSeconds $ObservationTimeoutSeconds `
         -WinAppPath $WinAppPath -RunToken $RunToken -OwnedRoot $OwnedRoot
     if ($observation.Status -cne 'Passed') { throw $FailureCode }
-    Assert-UiAcceptanceFields -InputObject $observation.Data -Required @('tree')
+    if ($null -eq $observation.Data -or $null -eq $observation.Data.PSObject.Properties['tree']) {
+        throw 'startup_layout.driver_schema_incompatible'
+    }
     return $observation.Data
 }
 

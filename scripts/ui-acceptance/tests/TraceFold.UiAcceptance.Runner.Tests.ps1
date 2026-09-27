@@ -345,7 +345,7 @@ function Get-TestCases {
                     $support = Join-Path $script:uiRoot 'tests/fixtures/fake-support.ps1'
                     $runId = [guid]::NewGuid()
                     $root = New-UiAcceptanceRunRoot -SupportPath $support -ParentDirectory $base -RunId $runId -RunToken 'test-token'
-                    Assert-Equal ([IO.Path]::GetFullPath((Join-Path $base ('TraceFold-UIA-' + $runId.ToString('D'))))) $root
+                    Assert-Equal ([IO.Path]::GetFullPath((Join-Path $base ('TraceFold-UIA-' + $runId.ToString('N'))))) $root
                     Assert-True ([IO.Directory]::Exists($root))
                     Assert-Throws { New-UiAcceptanceRunRoot -SupportPath $support -ParentDirectory $base -RunId ([guid]::Empty) -RunToken 'test-token' }
                     Assert-Throws { New-UiAcceptanceRunRoot -SupportPath $support -ParentDirectory $base -RunId $runId -RunToken '' }
@@ -493,6 +493,36 @@ function Get-TestCases {
                 }
                 finally {
                     foreach ($name in @('TRACEFOLD_FAKE_ARGV_LOG','TRACEFOLD_FAKE_UIA_TREE_SEQ','TRACEFOLD_FAKE_UIA_STATE','TRACEFOLD_FAKE_SUPPORT_LOG','TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN')) {
+                        Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
+                    }
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'startup layout reports the pinned driver inspect schema mismatch'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
+                [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
+                $sequence = Join-Path $base 'tree-sequence.json'
+                $argvLog = Join-Path $base 'argv.jsonl'
+                try {
+                    $nativeInspect = '{"depth":8,"windows":[{"elements":[{"type":"Group","automationId":"TraceFoldMainWindow","isEnabled":true}]}]}'
+                    [IO.File]::WriteAllText($sequence, (ConvertTo-Json -InputObject @($nativeInspect) -Compress), [Text.UTF8Encoding]::new($false))
+                    $env:TRACEFOLD_FAKE_ARGV_LOG = $argvLog
+                    $env:TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN = '1'
+                    $env:TRACEFOLD_FAKE_UIA_TREE_SEQ = $sequence
+                    $env:TRACEFOLD_FAKE_UIA_STATE = (Join-Path $base 'sequence-state.txt')
+                    $arguments = New-StartupLayoutScenarioArguments -Base $base -Overrides @{}
+                    $result = Invoke-UiAcceptanceScenario -Path (Join-Path $script:uiRoot 'scenarios/00-startup-layout.ps1') -Arguments $arguments
+                    Assert-Equal 'Failed' $result.Status
+                    Assert-Equal 'startup_layout.driver_schema_incompatible' $result.Reason
+                    $invocations = @(Get-Content -LiteralPath $argvLog | ForEach-Object { ConvertFrom-Json $_ })
+                    Assert-Equal 0 @($invocations | Where-Object { $_.argv[1] -ceq 'invoke' }).Count
+                }
+                finally {
+                    foreach ($name in @('TRACEFOLD_FAKE_ARGV_LOG','TRACEFOLD_FAKE_UIA_TREE_SEQ','TRACEFOLD_FAKE_UIA_STATE','TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN')) {
                         Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
                     }
                     Remove-UiTestTree -Path $base

@@ -197,7 +197,7 @@ function New-UiAcceptanceRunRoot {
     Assert-UiAcceptanceFields -InputObject $created -Required @('root')
 
     $root = [IO.Path]::GetFullPath([string] $created.root)
-    $expected = [IO.Path]::GetFullPath((Join-Path $parent ('TraceFold-UIA-' + $RunId.ToString('D'))))
+    $expected = [IO.Path]::GetFullPath((Join-Path $parent ('TraceFold-UIA-' + $RunId.ToString('N'))))
     if ($root -ine $expected) { throw 'The created owned root is not where it was requested.' }
     if (-not [IO.Directory]::Exists($root)) { throw 'The created owned root is missing.' }
 

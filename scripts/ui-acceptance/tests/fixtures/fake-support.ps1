@@ -80,7 +80,9 @@ switch ($group) {
             'create' {
                 if (-not (Test-FakeSupportOption 'parent') -or
                     -not (Test-FakeSupportOption 'run-id')) { exit 2 }
-                $root = Join-Path $values['parent'] ('TraceFold-UIA-' + $values['run-id'])
+                $runId = [guid]::Empty
+                if (-not [guid]::TryParseExact($values['run-id'], 'D', [ref]$runId)) { exit 2 }
+                $root = Join-Path $values['parent'] ('TraceFold-UIA-' + $runId.ToString('N'))
                 if (-not [IO.Directory]::Exists($root)) { [void][IO.Directory]::CreateDirectory($root) }
                 Write-Output ([pscustomobject]@{ root = $root } | ConvertTo-Json -Compress)
                 exit 0

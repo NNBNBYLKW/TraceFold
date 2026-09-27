@@ -255,7 +255,7 @@ foreach ($name in $requested) {
 
         $result = Invoke-UiAcceptanceRun -ScenarioId $name -Scenario $scenarioBody -Cleanup $cleanupBody `
             -OwnedRoot $runRoot -OutputDirectory $runOutput -Metadata $metadata `
-            -RunToken $runToken -SupportPath (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe') `
+            -RunToken $runToken -SupportPath $supportExecutable `
             -ApprovedDirectories @($product)
         $reportPath = [string] $result.ReportPath
         if ([IO.File]::Exists($reportPath)) {
