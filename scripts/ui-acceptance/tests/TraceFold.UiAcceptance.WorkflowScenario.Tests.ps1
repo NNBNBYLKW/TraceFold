@@ -236,6 +236,17 @@ function Get-TestCases {
             }
         },
         @{
+            Name = 'the conflict scenario waits for the resolved row before reading final facts'
+            Body = {
+                $source = Read-ConflictScenarioSource
+                $decision = $source.IndexOf("-Step 'keep-both'", [StringComparison]::Ordinal)
+                $rowGone = $source.IndexOf("'ui','wait-for',`$photoRowPrefix,'--gone'", $decision, [StringComparison]::Ordinal)
+                $snapshot = $source.IndexOf("Read-ConflictSnapshot -EvidenceId 'conflict-after'", [StringComparison]::Ordinal)
+                Assert-True ($decision -ge 0 -and $rowGone -gt $decision -and $snapshot -gt $rowGone)
+                Assert-Contains $source 'conflict.resolution_incomplete'
+            }
+        },
+        @{
             Name = 'the conflict scenario is read-only after the decision and free of unsafe shortcuts'
             Body = {
                 $source = Read-ConflictScenarioSource

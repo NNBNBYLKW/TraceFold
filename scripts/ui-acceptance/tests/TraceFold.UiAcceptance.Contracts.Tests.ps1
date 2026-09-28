@@ -63,6 +63,17 @@ function Get-TestCases {
             }
         },
         @{
+            Name = 'redaction removes compact product card ids without hiding fixture hashes'
+            Body = {
+                $id = '9a83076933364ef2a8653c1191256999'
+                $hash = '7D1BD6791F1D40FFAFE6C7704FB2E71B6FBF6CBD26B71F9A45E62460D61312A6'
+                $safe = Protect-UiAcceptanceText -Value ("InboxCard_$id LibraryCard_$id $hash")
+                Assert-NotContains $safe $id
+                Assert-Contains $safe '[redacted-id]'
+                Assert-Contains $safe $hash
+            }
+        },
+        @{
             Name = 'dangerous report keys are refused'
             Body = {
                 foreach ($key in @('token', 'OwnerToken', 'runId', 'userName', 'machineName', 'databasePath', 'pid', 'stdout')) {

@@ -470,6 +470,11 @@ try {
     if (-not (Wait-ConflictGone -Arguments @('ui','wait-for','ConflictComparisonDialog','--gone') -Seconds $ConflictWaitSeconds)) {
         throw 'conflict.dialog_stuck'
     }
+    # The dialog closes before the asynchronous resolution has necessarily committed. Wait for
+    # this exact inbox row to leave the live UI before reading final database and file facts.
+    if (-not (Wait-ConflictGone -Arguments @('ui','wait-for',$photoRowPrefix,'--gone') -Seconds $ConflictWaitSeconds)) {
+        throw 'conflict.resolution_incomplete'
+    }
 
     # --- read-only facts: both copies exist, by hash, and nothing else does ---
     $afterSnapshot = Read-ConflictSnapshot -EvidenceId 'conflict-after'

@@ -147,6 +147,9 @@ function Get-UiAcceptanceRedactionPatterns {
     [void] $patterns.Add([pscustomobject]@{ Pattern = '[A-Za-z]:\\[^\s"'']*'; Label = '[redacted-path]' })
     # GUID-shaped identifiers (product entity ids, run ids).
     [void] $patterns.Add([pscustomobject]@{ Pattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'; Label = '[redacted-id]' })
+    # Product card AutomationIds use Guid:N, without separators. Limit this rule to their known
+    # prefixes so a fixture's 64-character SHA-256 hash remains available as evidence.
+    [void] $patterns.Add([pscustomobject]@{ Pattern = '\b(?:InboxCard|LibraryCard)_[0-9a-fA-F]{32}\b'; Label = '[redacted-id]' })
 
     return $patterns.ToArray()
 }
