@@ -422,7 +422,7 @@ public sealed class UiAutomationContractTests
             .Select(viewport => (
                 viewport.GetProperty("widthDip").GetInt32(),
                 viewport.GetProperty("heightDip").GetInt32(),
-                viewport.GetProperty("navigationItemWidthDip").GetInt32(),
+                viewport.GetProperty("navigationPaneWidthDip").GetInt32(),
                 viewport.GetProperty("inlineInspector").GetBoolean()))];
         Assert.Equal(expected, actual);
 
@@ -503,8 +503,13 @@ public sealed class UiAutomationContractTests
         Assert.Equal(["paired.mp4", "paired.m4a"], seedFilenames);
         Assert.All(seedFilenames, name => Assert.Contains(name, seededNames));
         Assert.All(materializedNames, name => Assert.Contains(name, seedFilenames));
-        Assert.Equal("待入库文件 paired.mp4，状态 需要前置处理",
-            rows[0].GetProperty("fixedAccessibleName").GetString());
+        // The live accessible name appends a status suffix that changes as the item progresses
+        // (measured 等待文件稳定, then 待入库), so the manifest fixes only the stable prefix and the
+        // gate addresses the row by its fixed file name.
+        string fixedName = rows[0].GetProperty("fixedAccessibleName").GetString()!;
+        Assert.Equal("待入库文件 paired.mp4", fixedName);
+        Assert.Contains("paired.mp4", fixedName);
+        Assert.Equal("Group", rows[0].GetProperty("nativeControlType").GetString());
 
         string[] seedKeys = [.. folderInputs.EnumerateArray()
             .Select(input => input.GetProperty("key").GetString()!)];
@@ -583,6 +588,72 @@ public sealed class UiAutomationContractTests
             FindFile(ProductRoot + "/Pages/SettingsPage.xaml.cs"));
         Assert.DoesNotContain("DirectorySettingsService", codeBehind, StringComparison.Ordinal);
         Assert.DoesNotContain("SaveAsync", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The gate asserts per phase, so the manifest must declare what each phase must contain.
+    /// Every required id has to exist in the full entry list, every required entry has to carry
+    /// the native type measured for it, the composite search box must verify Value on its unique
+    /// Edit descendant rather than claim it on the outer element, and the layout probe must
+    /// observe the pane boundary.
+    /// </summary>
+    [Fact]
+    public void Phase_sets_native_types_and_the_composite_rule_are_locked()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement root = manifest.RootElement;
+        var entries = root.GetProperty("entries").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("automationId").GetString()!,
+                entry => entry, StringComparer.Ordinal);
+
+        JsonElement phases = root.GetProperty("phaseRequiredIds");
+        string[] expectedPhases =
+        [
+            "startupSettings", "inboxReady", "rowReady", "rowSelected", "drawerOpen", "drawerClosed",
+        ];
+        Assert.Equal(expectedPhases,
+            phases.EnumerateObject().Select(property => property.Name).ToArray());
+        foreach (JsonProperty phase in phases.EnumerateObject())
+        {
+            JsonElement[] required = [.. phase.Value.EnumerateArray()];
+            Assert.NotEmpty(required);
+            foreach (JsonElement id in required)
+            {
+                string value = id.GetString()!;
+                Assert.True(entries.ContainsKey(value), "Unknown phase id: " + value);
+                Assert.Equal(JsonValueKind.String,
+                    entries[value].GetProperty("nativeControlType").ValueKind);
+            }
+        }
+
+        // The empty-root phase must not require the inbox page: measured on the published product
+        // and recorded here so a regression cannot quietly move page elements into startup.
+        Assert.DoesNotContain("InboxGrid", phases.GetProperty("startupSettings")
+            .EnumerateArray().Select(id => id.GetString()!));
+        Assert.Contains("InboxGrid", phases.GetProperty("rowReady")
+            .EnumerateArray().Select(id => id.GetString()!));
+
+        JsonElement searchBox = entries["InboxSearchBox"];
+        Assert.Equal("Group", searchBox.GetProperty("nativeControlType").GetString());
+        Assert.Empty(searchBox.GetProperty("requiredPatterns").EnumerateArray());
+        JsonElement descendant = searchBox.GetProperty("nativeDescendant");
+        Assert.Equal("TextBox", descendant.GetProperty("className").GetString());
+        Assert.Equal("搜索待入库文件", descendant.GetProperty("name").GetString());
+        Assert.Equal(["Value"],
+            [.. descendant.GetProperty("requiredPatterns").EnumerateArray()
+                .Select(pattern => pattern.GetString()!)]);
+
+        JsonElement probe = root.GetProperty("layoutProbe");
+        string paneId = probe.GetProperty("navigationPaneAutomationId").GetString()!;
+        // The pane boundary is a WinUI template id used only as a layout observation target. It is
+        // deliberately not a contract entry: no product XAML declares it, and the gate must never
+        // use it as a workflow action selector.
+        Assert.False(entries.ContainsKey(paneId),
+            "The pane observation target must stay observation-only, not a workflow selector.");
+        Assert.Equal("SplitViewPane", probe.GetProperty("navigationPaneClassName").GetString());
+        Assert.Equal("Navigation", probe.GetProperty("navigationPaneParentAutomationId").GetString());
+        // The item width is deliberately not the expectation: the pane, not the item, is measured.
+        Assert.NotEqual(probe.GetProperty("navigationItemAutomationId").GetString(), paneId);
     }
 
     /// <summary>

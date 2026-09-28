@@ -194,7 +194,21 @@ switch ($sub) {
         exit 0
     }
     'get-value' {
-        [Console]::Out.Write('{"value":"sample-value"}')
+        # Values set through 'set-value' are read back, so the scenario's read-back assertions are
+        # exercised rather than assumed. The initial map comes from a file the test writes.
+        $values = @{}
+        $valuesPath = $env:TRACEFOLD_FAKE_VALUES
+        if (-not [string]::IsNullOrEmpty($valuesPath) -and (Test-Path -LiteralPath $valuesPath)) {
+            $raw = Get-Content -LiteralPath $valuesPath -Raw -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $parsed = $raw | ConvertFrom-Json
+                foreach ($property in $parsed.PSObject.Properties) { $values[$property.Name] = [string] $property.Value }
+            }
+        }
+        $target = if ($Arguments.Count -ge 3) { [string] $Arguments[2] } else { '' }
+        $text = ''
+        if ($values.ContainsKey($target)) { $text = $values[$target] }
+        [Console]::Out.Write(([pscustomobject]@{ text = $text } | ConvertTo-Json -Compress))
         exit 0
     }
     'invoke' {
@@ -202,6 +216,21 @@ switch ($sub) {
         exit 0
     }
     'set-value' {
+        $target = if ($Arguments.Count -ge 3) { [string] $Arguments[2] } else { '' }
+        $value = if ($Arguments.Count -ge 4) { [string] $Arguments[3] } else { '' }
+        $valuesPath = $env:TRACEFOLD_FAKE_VALUES
+        if (-not [string]::IsNullOrEmpty($valuesPath)) {
+            $values = @{}
+            if (Test-Path -LiteralPath $valuesPath) {
+                $raw = Get-Content -LiteralPath $valuesPath -Raw -ErrorAction SilentlyContinue
+                if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                    $parsed = $raw | ConvertFrom-Json
+                    foreach ($property in $parsed.PSObject.Properties) { $values[$property.Name] = [string] $property.Value }
+                }
+            }
+            $values[$target] = $value
+            [IO.File]::WriteAllText($valuesPath, ((ConvertTo-Json -InputObject $values -Compress -Depth 6)), [Text.UTF8Encoding]::new($false))
+        }
         [Console]::Out.Write('{"result":"set"}')
         exit 0
     }

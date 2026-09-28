@@ -8,12 +8,20 @@
 #   root validate|create|delete
 #   window resize
 #   snapshot
+#   native lookup
 #
 # Simulation switches (environment variables):
 #   TRACEFOLD_FAKE_SUPPORT_LOG         file that receives one action name per invocation
 #   TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN   '1' accepts any non-empty token, not just test-token
 #   TRACEFOLD_FAKE_SUPPORT_SCALE       device scale used for the DIP to pixel conversion
 #   TRACEFOLD_FAKE_SUPPORT_CLIENT_DELTA physical pixels removed from each client axis
+#   TRACEFOLD_FAKE_NATIVE_JSON         verbatim native lookup response (probe failure tests)
+#   TRACEFOLD_FAKE_NATIVE_AVAILABLE    'false' reports the pattern as unsupported, 'null' as unknown
+#   TRACEFOLD_FAKE_NATIVE_OUTER        outer match count to report
+#   TRACEFOLD_FAKE_NATIVE_DESCENDANT   descendant match count to report
+#   TRACEFOLD_FAKE_NATIVE_CLASS        class name the descendant lookup resolves to
+#   TRACEFOLD_FAKE_NATIVE_NAME         accessible name the probe reports
+#   TRACEFOLD_FAKE_NATIVE_WIDTH        pixel width the probe reports
 
 $items = [string[]] $args
 
@@ -27,11 +35,13 @@ $group = $items[0]
 $action = $items[1]
 
 $values = @{}
+$patterns = New-Object System.Collections.ArrayList
 for ($index = 2; $index -lt $items.Count; $index++) {
     $token = $items[$index]
     if (-not $token.StartsWith('--')) { exit 2 }
     if ($index + 1 -ge $items.Count) { exit 2 }
-    $values[$token.Substring(2)] = $items[$index + 1]
+    if ($token -ceq '--pattern') { [void] $patterns.Add([string] $items[$index + 1]) }
+    else { $values[$token.Substring(2)] = $items[$index + 1] }
     $index++
 }
 
@@ -119,6 +129,45 @@ switch ($group) {
     'snapshot' {
         if (-not (Test-FakeSupportOption 'data-root')) { exit 2 }
         Write-Output '{"tables":{},"taxonomy":{}}'
+        exit 0
+    }
+    'native' {
+        if ($action -ne 'lookup') { exit 2 }
+        if (-not (Test-FakeSupportOption 'automation-id')) { exit 2 }
+        if (-not [string]::IsNullOrEmpty($env:TRACEFOLD_FAKE_NATIVE_JSON)) {
+            [Console]::Out.Write($env:TRACEFOLD_FAKE_NATIVE_JSON)
+            exit 0
+        }
+        $available = $true
+        if ($env:TRACEFOLD_FAKE_NATIVE_AVAILABLE -ceq 'false') { $available = $false }
+        if ($env:TRACEFOLD_FAKE_NATIVE_AVAILABLE -ceq 'null') { $available = $null }
+        $outer = 1; $descendant = 1
+        if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_OUTER)) { [void][int]::TryParse($env:TRACEFOLD_FAKE_NATIVE_OUTER, [ref] $outer) }
+        if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_DESCENDANT)) { [void][int]::TryParse($env:TRACEFOLD_FAKE_NATIVE_DESCENDANT, [ref] $descendant) }
+        $className = if ($values.ContainsKey('descendant-class')) { [string] $values['descendant-class'] } else { 'Fake.Container' }
+        if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_CLASS)) { $className = $env:TRACEFOLD_FAKE_NATIVE_CLASS }
+        $name = [string] $values['automation-id']
+        if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_NAME)) { $name = $env:TRACEFOLD_FAKE_NATIVE_NAME }
+        $width = 176
+        if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_WIDTH)) { [void][int]::TryParse($env:TRACEFOLD_FAKE_NATIVE_WIDTH, [ref] $width) }
+        $facts = @()
+        foreach ($pattern in @($patterns)) { $facts += [ordered]@{ name = [string] $pattern; available = $available } }
+        [Console]::Out.Write(([pscustomobject] @{
+            automationId         = [string] $values['automation-id']
+            descendantClass      = if ($values.ContainsKey('descendant-class')) { [string] $values['descendant-class'] } else { $null }
+            descendantName       = if ($values.ContainsKey('descendant-name')) { [string] $values['descendant-name'] } else { $null }
+            outerMatchCount      = $outer
+            descendantMatchCount = $descendant
+            name                 = $name
+            controlType          = 'Group'
+            className            = $className
+            isEnabled            = $true
+            isOffscreen          = $false
+            x = 0; y = 0
+            width                = $width
+            height               = 40
+            patterns             = $facts
+        } | ConvertTo-Json -Depth 6 -Compress))
         exit 0
     }
     default { exit 2 }

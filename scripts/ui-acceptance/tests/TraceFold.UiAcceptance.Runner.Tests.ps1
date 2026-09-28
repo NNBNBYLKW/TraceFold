@@ -6,7 +6,7 @@
 function New-StartupLayoutContract {
     param(
         [Parameter(Mandatory)][string] $Path,
-        [string] $RowSelectorPolicy = 'accessible_name',
+        [string] $RowSelectorPolicy = 'accessible_name_prefix',
         [string] $AssetSha256 = 'B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3',
         [string] $InboxRowPhase = 'inbox-seeded'
     )
@@ -18,6 +18,10 @@ function New-StartupLayoutContract {
         [ordered]@{ file='Pages/InboxPage.xaml'; automationId='InspectorPane'; name='Inbox file inspector'; controlType='Border'; nativeControlType='Border'; requiredPatterns=@(); scope='page_host:inbox'; dynamicSelectorPolicy='static_id' }
         [ordered]@{ file='Shell/ShellPage.xaml'; automationId='TraceFoldShell'; name='TraceFold shell'; controlType='Grid'; nativeControlType='Group'; requiredPatterns=@(); scope='shell'; dynamicSelectorPolicy='static_id' }
         [ordered]@{ file='Pages/InboxPage.xaml'; automationId='InboxPageRoot'; name='Inbox page root'; controlType='Grid'; nativeControlType='Group'; requiredPatterns=@(); scope='pages_inboxpage'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Pages/SettingsPage.xaml'; automationId='SettingsStatusMessage'; name='Settings status message'; controlType='TextBlock'; nativeControlType='Text'; requiredPatterns=@(); scope='pages_settingspage'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Pages/SettingsPage.xaml'; automationId='InboxFolderPath'; name='Inbox folder path'; controlType='TextBox'; nativeControlType='Edit'; requiredPatterns=@('Value'); scope='pages_settingspage'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Pages/SettingsPage.xaml'; automationId='LibraryFolderPath'; name='Library folder path'; controlType='TextBox'; nativeControlType='Edit'; requiredPatterns=@('Value'); scope='pages_settingspage'; dynamicSelectorPolicy='static_id' }
+        [ordered]@{ file='Pages/SettingsPage.xaml'; automationId='WorkFolderPath'; name='Work folder path'; controlType='TextBox'; nativeControlType='Edit'; requiredPatterns=@('Value'); scope='pages_settingspage'; dynamicSelectorPolicy='static_id' }
     )
 
     $contract = [ordered]@{
@@ -26,8 +30,8 @@ function New-StartupLayoutContract {
         # The inbox row only exists after the scenario materialises the fixture; the library row
         # belongs to a later phase and must never be required by this scenario.
         dynamicRows    = @(
-            [ordered]@{ file='Pages/InboxPage.xaml'; controlType='Grid'; selector=$RowSelectorPolicy; fixedAccessibleName='Inbox row paired.mp4'; fixedFilename='paired.mp4'; forbidGuidSelectors=$true; phase=$InboxRowPhase }
-            [ordered]@{ file='Pages/LibraryPage.xaml'; controlType='Grid'; selector='accessible_name'; fixedAccessibleName='Library row photo.jpg'; fixedFilename='photo.jpg'; forbidGuidSelectors=$true; phase='post-ingest' }
+            [ordered]@{ file='Pages/InboxPage.xaml'; controlType='Grid'; nativeControlType='ListItem'; selector=$RowSelectorPolicy; fixedAccessibleName='Inbox row paired.mp4'; fixedFilename='paired.mp4'; stateSuffixVaries=$true; forbidGuidSelectors=$true; phase=$InboxRowPhase }
+            [ordered]@{ file='Pages/LibraryPage.xaml'; controlType='Grid'; nativeControlType='ListItem'; selector='accessible_name_prefix'; fixedAccessibleName='Library row photo.jpg'; fixedFilename='photo.jpg'; forbidGuidSelectors=$true; phase='post-ingest' }
         )
         fixtureAssets  = @(
             [ordered]@{ fixedFilename='paired.mp4'; repositoryPath='apps/media-api/tests/fixtures/media/paired.mp4'; sha256=$AssetSha256; sizeBytes=2405; seedDirectory='inbox' },
@@ -36,6 +40,8 @@ function New-StartupLayoutContract {
         sessionPreparation = [ordered]@{
             materializedRowPhase           = 'inbox-seeded'
             seedFilenames                  = @('paired.mp4','paired.m4a')
+            savedStatusText                = 'Folder settings saved.'
+            savedStatusAutomationId        = 'SettingsStatusMessage'
             settingsNavigationAutomationId = 'NavSettings'
             inboxNavigationAutomationId    = 'NavInbox'
             saveFolderSettingsAutomationId = 'SaveFolderSettings'
@@ -47,16 +53,26 @@ function New-StartupLayoutContract {
             )
         }
         startupScopes  = @('window', 'shell', 'pages_inboxpage', 'page_host:inbox')
+        phaseRequiredIds = [ordered]@{
+            startupSettings = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','SettingsStatusMessage','InboxFolderPath','LibraryFolderPath','WorkFolderPath')
+            inboxReady      = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
+            rowReady        = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
+            rowSelected     = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
+            drawerOpen      = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton','InspectorPane')
+            drawerClosed    = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
+        }
         layoutProbe    = [ordered]@{
             navigationItemAutomationId      = 'NavInbox'
+            navigationPaneAutomationId      = 'PaneRoot'
+            navigationPaneClassName         = 'SplitViewPane'
             inlineInspectorAutomationId     = 'InspectorPane'
             inspectorOpenButtonAutomationId = 'InboxInspectorOpenButton'
             pixelTolerance                  = 2
         }
         layoutViewports = @(
-            [ordered]@{ widthDip=1024; heightDip=720; navigationItemWidthDip=48; inlineInspector=$false }
-            [ordered]@{ widthDip=1280; heightDip=800; navigationItemWidthDip=176; inlineInspector=$true }
-            [ordered]@{ widthDip=1600; heightDip=900; navigationItemWidthDip=176; inlineInspector=$true }
+            [ordered]@{ widthDip=1024; heightDip=720; navigationPaneWidthDip=48; inlineInspector=$false }
+            [ordered]@{ widthDip=1280; heightDip=800; navigationPaneWidthDip=176; inlineInspector=$true }
+            [ordered]@{ widthDip=1600; heightDip=900; navigationPaneWidthDip=176; inlineInspector=$true }
         )
     }
 
@@ -139,7 +155,8 @@ function New-StartupLayoutTree {
         [int] $InspectorX = 900,
         [switch] $IncludeInboxRow,
         [switch] $OmitInspectorNode,
-        [switch] $DuplicateNavigationId
+        [switch] $DuplicateNavigationId,
+        [switch] $SettingsPage
     )
 
     $inspector = @()
@@ -156,26 +173,48 @@ function New-StartupLayoutTree {
 
     $row = @()
     if ($IncludeInboxRow) {
-        # Its runtime id is a generated value, so any attempt to address the row by id fails.
-        $row = @(New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'Grid' -Name 'Inbox row paired.mp4' -X 100 -Y 100 -Width 200 -Height 60)
+        # Its runtime id is a generated value, so any attempt to address the row by id fails. The
+        # accessible name keeps the manifest's fixed prefix and gains the product's state suffix.
+        $row = @(New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'ListItem' -Name 'Inbox row paired.mp4, state pending' -X 100 -Y 100 -Width 200 -Height 60)
     }
 
     # The window scope wraps the shell scope, which wraps the page scopes: the fake response has
     # real nesting so the scenario's recursive adapter is genuinely exercised.
+    if ($SettingsPage) {
+        $settingsChildren = @(
+            New-StartupLayoutNode -Id 'InboxFolderPath' -ControlType 'Edit' -Name 'Inbox folder path' -X 825 -Y 424 -Width 633 -Height 32
+            New-StartupLayoutNode -Id 'LibraryFolderPath' -ControlType 'Edit' -Name 'Library folder path' -X 825 -Y 496 -Width 633 -Height 32
+            New-StartupLayoutNode -Id 'WorkFolderPath' -ControlType 'Edit' -Name 'Work folder path' -X 825 -Y 568 -Width 633 -Height 32
+        )
+        $shellChildren = @(
+            New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
+        ) + $settingsChildren
+        if ($DuplicateNavigationId) {
+            $shellChildren += New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
+        }
+        $root = New-StartupLayoutNode -Id 'TraceFoldMainWindow' -ControlType 'Group' -Name 'TraceFold main window' -Width 1024 -Height 720 -Children @(
+            New-StartupLayoutNode -Id 'TraceFoldShell' -ControlType 'Group' -Name 'TraceFold shell' -Width 1024 -Height 720 -Children @(
+                $shellChildren
+                New-StartupLayoutNode -Id 'SettingsStatusMessage' -ControlType 'Text' -Name 'Settings status message' -Enabled $InspectorOpenButtonEnabled -Width 112 -Height 19
+            )
+        )
+        return ,(New-StartupLayoutWindowPayload -Elements @($root))
+    }
+
     $pageChildren = @(
         New-StartupLayoutNode -Id 'InboxInspectorOpenButton' -ControlType 'Button' -Name 'Open inbox file panel' -Enabled $InspectorOpenButtonEnabled -X 700 -Y 60 -Width 32 -Height 32
     ) + $row + $inspector
 
-    $shellChildren = @(
+    $inboxChildren = @(
         New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
         New-StartupLayoutNode -Id 'InboxPageRoot' -ControlType 'Group' -Name 'Inbox page root' -Width $NavigationWidth -Height 40 -Children $pageChildren
     )
     if ($DuplicateNavigationId) {
-        $shellChildren += New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
+        $inboxChildren += New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
     }
 
     $root = New-StartupLayoutNode -Id 'TraceFoldMainWindow' -ControlType 'Group' -Name 'TraceFold main window' -Width 1024 -Height 720 -Children @(
-        New-StartupLayoutNode -Id 'TraceFoldShell' -ControlType 'Group' -Name 'TraceFold shell' -Width 1024 -Height 720 -Children $shellChildren
+        New-StartupLayoutNode -Id 'TraceFoldShell' -ControlType 'Group' -Name 'TraceFold shell' -Width 1024 -Height 720 -Children $inboxChildren
     )
 
     return ,(New-StartupLayoutWindowPayload -Elements @($root))
@@ -197,21 +236,28 @@ function New-StartupLayoutTreeSequence {
         [switch] $OmitMaterializedRow
     )
 
+    $settings = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -SettingsPage -OmitInspectorNode:$OmitInspectorNode
+    $settingsConfigured = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -InspectorOpenButtonEnabled $true -SettingsPage -OmitInspectorNode:$OmitInspectorNode
+
     $rowSwitch = -not $OmitMaterializedRow
-    $startupCompact = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -OmitInspectorNode:$OmitInspectorNode
-    $startupWide1280 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
-    $startupWide1600 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
+    $inboxEmpty = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
     $rowPresent = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
     $rowSelected = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
+    $viewport1024 = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
+    $viewport1280 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -InspectorX 900 -OmitInspectorNode:$OmitInspectorNode
+    $viewport1600 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -InspectorX 1200 -OmitInspectorNode:$OmitInspectorNode
     $drawerOpen = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $true -InspectorOpenButtonEnabled $true -InspectorX 720 -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
     $drawerClosed = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
 
     $payloads = @(
-        ($startupCompact | ConvertTo-Json -Depth 12 -Compress)
-        ($startupWide1280 | ConvertTo-Json -Depth 12 -Compress)
-        ($startupWide1600 | ConvertTo-Json -Depth 12 -Compress)
+        ($settings | ConvertTo-Json -Depth 12 -Compress)
+        ($settingsConfigured | ConvertTo-Json -Depth 12 -Compress)
+        ($inboxEmpty | ConvertTo-Json -Depth 12 -Compress)
         ($rowPresent | ConvertTo-Json -Depth 12 -Compress)
         ($rowSelected | ConvertTo-Json -Depth 12 -Compress)
+        ($viewport1024 | ConvertTo-Json -Depth 12 -Compress)
+        ($viewport1280 | ConvertTo-Json -Depth 12 -Compress)
+        ($viewport1600 | ConvertTo-Json -Depth 12 -Compress)
         ($drawerOpen | ConvertTo-Json -Depth 12 -Compress)
         ($drawerClosed | ConvertTo-Json -Depth 12 -Compress)
     )
