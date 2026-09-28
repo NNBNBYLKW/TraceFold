@@ -9,7 +9,7 @@ using System;
 using System.Runtime.InteropServices;
 public static class TraceFoldUiDesktopProbe {
     [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
-    [DllImport("user32.dll", SetLastError=true)] public static extern bool GetUserObjectInformation(IntPtr handle, int index, IntPtr buffer, int length, out int required);
+    [DllImport("user32.dll", EntryPoint="GetUserObjectInformationW", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool GetUserObjectInformation(IntPtr handle, int index, IntPtr buffer, int length, out int required);
     [DllImport("user32.dll", SetLastError=true)] public static extern bool CloseDesktop(IntPtr handle);
 }
 '@

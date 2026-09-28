@@ -139,8 +139,12 @@ public sealed class UiAutomationContractTests
             Assert.Contains(file, new[] { "Pages/InboxPage.xaml", "Pages/LibraryPage.xaml" });
             Assert.False(string.IsNullOrWhiteSpace(fixedName));
             Assert.DoesNotContain("guid", fixedName, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal("accessible_name", row.GetProperty("selector").GetString());
+            Assert.Equal("accessible_name_prefix", row.GetProperty("selector").GetString());
             Assert.True(row.GetProperty("forbidGuidSelectors").GetBoolean());
+            if (file == "Pages/InboxPage.xaml")
+            {
+                Assert.True(row.GetProperty("stateSuffixVaries").GetBoolean());
+            }
             Assert.Contains(row.GetProperty("fixedFilename").GetString()!, fixedName);
             Assert.Equal("{x:Bind AccessibleName, Mode=OneWay}",
                 LoadProductXaml(file).Descendants().Single(element =>
@@ -509,7 +513,14 @@ public sealed class UiAutomationContractTests
         string fixedName = rows[0].GetProperty("fixedAccessibleName").GetString()!;
         Assert.Equal("待入库文件 paired.mp4", fixedName);
         Assert.Contains("paired.mp4", fixedName);
-        Assert.Equal("Group", rows[0].GetProperty("nativeControlType").GetString());
+        Assert.Equal("ListItem", rows[0].GetProperty("nativeControlType").GetString());
+        Assert.Equal("accessible_name_prefix", rows[0].GetProperty("selector").GetString());
+        Assert.True(rows[0].GetProperty("stateSuffixVaries").GetBoolean());
+        Assert.True(rows[0].GetProperty("forbidGuidSelectors").GetBoolean());
+        Assert.Equal("SettingsStatusMessage",
+            preparation.GetProperty("savedStatusAutomationId").GetString());
+        Assert.Equal("设置已保存。",
+            preparation.GetProperty("savedStatusText").GetString());
 
         string[] seedKeys = [.. folderInputs.EnumerateArray()
             .Select(input => input.GetProperty("key").GetString()!)];
@@ -617,6 +628,8 @@ public sealed class UiAutomationContractTests
         {
             JsonElement[] required = [.. phase.Value.EnumerateArray()];
             Assert.NotEmpty(required);
+            Assert.Equal(required.Length, required.Select(id => id.GetString()!)
+                .Distinct(StringComparer.Ordinal).Count());
             foreach (JsonElement id in required)
             {
                 string value = id.GetString()!;
@@ -632,16 +645,30 @@ public sealed class UiAutomationContractTests
             .EnumerateArray().Select(id => id.GetString()!));
         Assert.Contains("InboxGrid", phases.GetProperty("rowReady")
             .EnumerateArray().Select(id => id.GetString()!));
+        foreach (string phaseName in new[] { "inboxReady", "rowReady", "rowSelected" })
+        {
+            Assert.DoesNotContain("InboxInspectorOpenButton", phases.GetProperty(phaseName)
+                .EnumerateArray().Select(id => id.GetString()!));
+        }
+        Assert.Contains("InboxInspectorOpenButton", phases.GetProperty("drawerOpen")
+            .EnumerateArray().Select(id => id.GetString()!));
 
-        JsonElement searchBox = entries["InboxSearchBox"];
-        Assert.Equal("Group", searchBox.GetProperty("nativeControlType").GetString());
-        Assert.Empty(searchBox.GetProperty("requiredPatterns").EnumerateArray());
-        JsonElement descendant = searchBox.GetProperty("nativeDescendant");
-        Assert.Equal("TextBox", descendant.GetProperty("className").GetString());
-        Assert.Equal("搜索待入库文件", descendant.GetProperty("name").GetString());
-        Assert.Equal(["Value"],
-            [.. descendant.GetProperty("requiredPatterns").EnumerateArray()
-                .Select(pattern => pattern.GetString()!)]);
+        foreach (string id in new[]
+        {
+            "InboxSearchBox", "InboxAuthorInput", "InboxSeriesInput", "InboxTagInput"
+        })
+        {
+            JsonElement outer = entries[id];
+            Assert.Equal("Group", outer.GetProperty("nativeControlType").GetString());
+            Assert.Empty(outer.GetProperty("requiredPatterns").EnumerateArray());
+            JsonElement descendant = outer.GetProperty("nativeDescendant");
+            Assert.Equal("TextBox", descendant.GetProperty("className").GetString());
+            Assert.Equal("Edit", descendant.GetProperty("nativeControlType").GetString());
+            Assert.Equal(outer.GetProperty("name").GetString(), descendant.GetProperty("name").GetString());
+            Assert.Equal(["Value"],
+                [.. descendant.GetProperty("requiredPatterns").EnumerateArray()
+                    .Select(pattern => pattern.GetString()!)]);
+        }
 
         JsonElement probe = root.GetProperty("layoutProbe");
         string paneId = probe.GetProperty("navigationPaneAutomationId").GetString()!;

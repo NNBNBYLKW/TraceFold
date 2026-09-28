@@ -141,6 +141,14 @@ else {
         $blockedReason = 'pinned_driver_archive_mismatch'
     }
 }
+if ([string]::IsNullOrWhiteSpace($blockedReason)) {
+    if (-not (Test-UiInteractiveDesktop)) {
+        $blockedReason = 'interactive_desktop_unavailable'
+    }
+    elseif (@(Get-Process -Name 'TraceFold.Media' -ErrorAction SilentlyContinue).Count -gt 0) {
+        $blockedReason = 'ordinary_product_process_running'
+    }
+}
 
 if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
     foreach ($name in $requested) {

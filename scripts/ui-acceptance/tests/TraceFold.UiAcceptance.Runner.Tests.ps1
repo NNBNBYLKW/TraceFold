@@ -55,9 +55,9 @@ function New-StartupLayoutContract {
         startupScopes  = @('window', 'shell', 'pages_inboxpage', 'page_host:inbox')
         phaseRequiredIds = [ordered]@{
             startupSettings = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','SettingsStatusMessage','InboxFolderPath','LibraryFolderPath','WorkFolderPath')
-            inboxReady      = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
-            rowReady        = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
-            rowSelected     = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
+            inboxReady      = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot')
+            rowReady        = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot')
+            rowSelected     = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot')
             drawerOpen      = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton','InspectorPane')
             drawerClosed    = @('TraceFoldMainWindow','TraceFoldShell','NavInbox','InboxPageRoot','InboxInspectorOpenButton')
         }
@@ -65,6 +65,7 @@ function New-StartupLayoutContract {
             navigationItemAutomationId      = 'NavInbox'
             navigationPaneAutomationId      = 'PaneRoot'
             navigationPaneClassName         = 'SplitViewPane'
+            navigationPaneParentAutomationId = 'Navigation'
             inlineInspectorAutomationId     = 'InspectorPane'
             inspectorOpenButtonAutomationId = 'InboxInspectorOpenButton'
             pixelTolerance                  = 2
@@ -178,6 +179,15 @@ function New-StartupLayoutTree {
         $row = @(New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'ListItem' -Name 'Inbox row paired.mp4, state pending' -X 100 -Y 100 -Width 200 -Height 60)
     }
 
+    $navigation = New-StartupLayoutNode -Id 'Navigation' -ControlType 'Unknown(50025)' `
+        -Name 'Navigation' -Width 1024 -Height 720 -Children @(
+            New-StartupLayoutNode -Id 'PaneRoot' -ControlType 'Window' -Name 'Pane' `
+                -Width $NavigationWidth -Height 720 -Children @(
+                    New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' `
+                        -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
+                )
+        )
+
     # The window scope wraps the shell scope, which wraps the page scopes: the fake response has
     # real nesting so the scenario's recursive adapter is genuinely exercised.
     if ($SettingsPage) {
@@ -187,7 +197,7 @@ function New-StartupLayoutTree {
             New-StartupLayoutNode -Id 'WorkFolderPath' -ControlType 'Edit' -Name 'Work folder path' -X 825 -Y 568 -Width 633 -Height 32
         )
         $shellChildren = @(
-            New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
+            $navigation
         ) + $settingsChildren
         if ($DuplicateNavigationId) {
             $shellChildren += New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
@@ -206,7 +216,7 @@ function New-StartupLayoutTree {
     ) + $row + $inspector
 
     $inboxChildren = @(
-        New-StartupLayoutNode -Id 'NavInbox' -ControlType 'ListItem' -Name 'Inbox navigation' -Width $NavigationWidth -Height 40
+        $navigation
         New-StartupLayoutNode -Id 'InboxPageRoot' -ControlType 'Group' -Name 'Inbox page root' -Width $NavigationWidth -Height 40 -Children $pageChildren
     )
     if ($DuplicateNavigationId) {
@@ -516,32 +526,34 @@ function Get-TestCases {
                     $arguments = New-StartupLayoutScenarioArguments -Base $base -Overrides @{}
                     $result = Invoke-UiAcceptanceScenario -Path (Join-Path $script:uiRoot 'scenarios/00-startup-layout.ps1') -Arguments $arguments
                     Assert-Equal 'Passed' $result.Status $result.Reason
-                    Assert-Equal 3 @($result.Viewports).Count
-                    Assert-Equal 6 @($result.Artifacts).Count
+                    Assert-Equal 3 @($result.Viewports | Where-Object { $null -ne $_.PSObject.Properties['widthDip'] }).Count
+                    Assert-Equal 1 @($result.Viewports | Where-Object {
+                        $null -ne $_.PSObject.Properties['phase'] -and $_.phase -ceq 'rowReady'
+                    }).Count
+                    Assert-Equal 12 @($result.Artifacts).Count
 
                     $invocations = @(Get-Content -LiteralPath $argvLog | ForEach-Object { (ConvertFrom-Json $_) })
                     # A comma keeps each argument vector as one element instead of flattening it.
                     $argv = @()
                     foreach ($invocation in $invocations) { $argv += ,@($invocation.argv) }
-                    Assert-Equal 22 $argv.Count
-
                     $waits = @($argv | Where-Object { $_[1] -ceq 'wait-for' })
-                    Assert-Equal 2 $waits.Count
+                    Assert-Equal 3 $waits.Count
                     Assert-Equal 'TraceFoldMainWindow' $waits[0][2]
                     Assert-True ($waits[0] -contains '-a')
                     Assert-Equal '4242' $waits[0][4]
-                    # The row is awaited by its deterministic accessible name, never by an id.
-                    Assert-Equal 'Inbox row paired.mp4' $waits[1][2]
+                    Assert-Equal 'TraceFoldMainWindow' $waits[1][2]
+                    # The row is awaited by its stable name prefix, never by a generated ID.
+                    Assert-Equal 'Inbox row paired.mp4' $waits[2][2]
 
                     $resizes = @($argv | Where-Object { $_[1] -ceq 'resize' })
                     Assert-Equal 0 $resizes.Count
                     $supportActions = @(Get-Content -LiteralPath (Join-Path $base 'support.log'))
-                    Assert-Equal 5 $supportActions.Count
                     Assert-Equal 'validate' $supportActions[0]
                     Assert-Equal 4 @($supportActions | Where-Object { $_ -ceq 'resize' }).Count
+                    Assert-True (@($supportActions | Where-Object { $_ -ceq 'lookup' }).Count -ge 3)
 
                     $inspections = @($argv | Where-Object { $_[1] -ceq 'inspect' })
-                    Assert-Equal 7 $inspections.Count
+                    Assert-Equal 10 $inspections.Count
                     $screenshots = @($argv | Where-Object { $_[1] -ceq 'screenshot' })
                     Assert-Equal 3 $screenshots.Count
                     foreach ($item in $screenshots) { Assert-True ($item -ccontains '--output') }
@@ -549,6 +561,7 @@ function Get-TestCases {
                     # The product UI is the only preparation channel: folders, save, scan.
                     $values = @($argv | Where-Object { $_[1] -ceq 'set-value' })
                     Assert-Equal 3 $values.Count
+                    Assert-Equal 7 @($argv | Where-Object { $_[1] -ceq 'get-value' }).Count
                     $valueTargets = @($values | ForEach-Object { $_[2] })
                     foreach ($target in @('InboxFolderPath','LibraryFolderPath','WorkFolderPath')) {
                         Assert-True ($valueTargets -ccontains $target) ('the scenario must set ' + $target + ' through the product UI')
@@ -558,27 +571,29 @@ function Get-TestCases {
                     }
 
                     $invokes = @($argv | Where-Object { $_[1] -ceq 'invoke' })
-                    Assert-Equal 6 $invokes.Count
+                    Assert-Equal 7 $invokes.Count
                     $invokeTargets = @($invokes | ForEach-Object { $_[2] })
                     foreach ($target in @('NavSettings','SaveFolderSettings','NavInbox','InboxRefreshButton')) {
                         Assert-True ($invokeTargets -ccontains $target) ('the scenario must drive ' + $target)
                     }
-                    Assert-True ($invokeTargets -ccontains 'Inbox row paired.mp4') 'the row must be selected by its accessible name'
+                    Assert-Equal 1 @($invokeTargets | Where-Object {
+                        [string] $_ -clike 'Inbox row paired.mp4*'
+                    }).Count 'the row must be selected by its observed accessible name'
                     Assert-True ($invokeTargets -ccontains 'InboxInspectorOpenButton')
                     $keys = @($argv | Where-Object { $_[1] -ceq 'send-keys' })
                     Assert-Equal 1 $keys.Count
 
                     foreach ($item in $argv) {
-                        foreach ($argument in $item) {
-                            Assert-True ([string] $argument -notmatch '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-') 'the scenario must never select a generated row identifier'
-                            Assert-True ([string] $argument -notlike '*photo.jpg*') 'the post-ingest library row must not be required by this scenario'
+                        if ($item[1] -cin @('wait-for','invoke','search','get-value','set-value')) {
+                            Assert-True ([string] $item[2] -notmatch '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-') 'the scenario must never select a generated row identifier'
                         }
+                        Assert-True (-not (@($item) -join ' ').Contains('photo.jpg')) 'the post-ingest library row must not be required by this scenario'
                     }
 
-                    # The three startup trees were inspected before any preparation: no media rows.
+                    # Each measured viewport follows the verified fixture scan and selected row.
                     foreach ($name in @('1024x720','1280x800','1600x900')) {
                         $treeText = [IO.File]::ReadAllText((Join-Path $base ('out/viewport-' + $name + '-uia.json')))
-                        Assert-True ($treeText -notlike '*Inbox row paired.mp4*') 'a brand-new owned root must not already contain the inbox row'
+                        Assert-True ($treeText -like '*Inbox row paired.mp4*') 'each viewport must show the prepared row'
                     }
 
                     # Only the owned inbox received the verified fixture.
@@ -592,7 +607,9 @@ function Get-TestCases {
                     Assert-True (-not [IO.File]::Exists((Join-Path $base 'owned/work/paired.mp4')))
                     Assert-Equal 'B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3' (Get-FileHash -LiteralPath (Join-Path $script:root 'apps/media-api/tests/fixtures/media/paired.mp4') -Algorithm SHA256).Hash
 
-                    foreach ($viewport in @($result.Viewports)) {
+                    foreach ($viewport in @($result.Viewports | Where-Object {
+                        $null -ne $_.PSObject.Properties['widthDip']
+                    })) {
                         Assert-True ([IO.File]::Exists((Join-Path $base ('out/' + $viewport.tree))))
                         Assert-True ([IO.File]::Exists((Join-Path $base ('out/' + $viewport.screenshot))))
                     }

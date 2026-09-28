@@ -124,6 +124,41 @@ function Get-FakeOption {
     return ''
 }
 
+function Get-FakeValuesPath {
+    if (-not [string]::IsNullOrEmpty($env:TRACEFOLD_FAKE_VALUES)) {
+        return $env:TRACEFOLD_FAKE_VALUES
+    }
+    if (-not [string]::IsNullOrEmpty($env:TRACEFOLD_FAKE_UIA_STATE)) {
+        return ($env:TRACEFOLD_FAKE_UIA_STATE + '.values.json')
+    }
+    return ''
+}
+
+function Read-FakeValues {
+    $values = @{}
+    $path = Get-FakeValuesPath
+    if (-not [string]::IsNullOrEmpty($path) -and (Test-Path -LiteralPath $path)) {
+        $raw = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $parsed = $raw | ConvertFrom-Json
+            foreach ($property in $parsed.PSObject.Properties) {
+                $values[$property.Name] = [string] $property.Value
+            }
+        }
+    }
+    return $values
+}
+
+function Write-FakeValue {
+    param([string] $Name, [string] $Value)
+    $path = Get-FakeValuesPath
+    if ([string]::IsNullOrEmpty($path)) { return }
+    $values = Read-FakeValues
+    $values[$Name] = $Value
+    [IO.File]::WriteAllText($path, (ConvertTo-Json -InputObject $values -Compress -Depth 6),
+        [Text.UTF8Encoding]::new($false))
+}
+
 if ($command -ne 'ui') {
     Write-FakeFailure -ExitCode 2 -Message ('unsupported command group: ' + $command)
 }
@@ -196,15 +231,7 @@ switch ($sub) {
     'get-value' {
         # Values set through 'set-value' are read back, so the scenario's read-back assertions are
         # exercised rather than assumed. The initial map comes from a file the test writes.
-        $values = @{}
-        $valuesPath = $env:TRACEFOLD_FAKE_VALUES
-        if (-not [string]::IsNullOrEmpty($valuesPath) -and (Test-Path -LiteralPath $valuesPath)) {
-            $raw = Get-Content -LiteralPath $valuesPath -Raw -ErrorAction SilentlyContinue
-            if (-not [string]::IsNullOrWhiteSpace($raw)) {
-                $parsed = $raw | ConvertFrom-Json
-                foreach ($property in $parsed.PSObject.Properties) { $values[$property.Name] = [string] $property.Value }
-            }
-        }
+        $values = Read-FakeValues
         $target = if ($Arguments.Count -ge 3) { [string] $Arguments[2] } else { '' }
         $text = ''
         if ($values.ContainsKey($target)) { $text = $values[$target] }
@@ -212,25 +239,16 @@ switch ($sub) {
         exit 0
     }
     'invoke' {
+        if ($Arguments.Count -ge 3 -and [string] $Arguments[2] -ceq 'SaveFolderSettings') {
+            Write-FakeValue -Name 'SettingsStatusMessage' -Value 'Folder settings saved.'
+        }
         [Console]::Out.Write('{"result":"invoked"}')
         exit 0
     }
     'set-value' {
         $target = if ($Arguments.Count -ge 3) { [string] $Arguments[2] } else { '' }
         $value = if ($Arguments.Count -ge 4) { [string] $Arguments[3] } else { '' }
-        $valuesPath = $env:TRACEFOLD_FAKE_VALUES
-        if (-not [string]::IsNullOrEmpty($valuesPath)) {
-            $values = @{}
-            if (Test-Path -LiteralPath $valuesPath) {
-                $raw = Get-Content -LiteralPath $valuesPath -Raw -ErrorAction SilentlyContinue
-                if (-not [string]::IsNullOrWhiteSpace($raw)) {
-                    $parsed = $raw | ConvertFrom-Json
-                    foreach ($property in $parsed.PSObject.Properties) { $values[$property.Name] = [string] $property.Value }
-                }
-            }
-            $values[$target] = $value
-            [IO.File]::WriteAllText($valuesPath, ((ConvertTo-Json -InputObject $values -Compress -Depth 6)), [Text.UTF8Encoding]::new($false))
-        }
+        Write-FakeValue -Name $target -Value $value
         [Console]::Out.Write('{"result":"set"}')
         exit 0
     }

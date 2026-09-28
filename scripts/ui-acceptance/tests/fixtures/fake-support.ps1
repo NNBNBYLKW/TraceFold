@@ -79,6 +79,11 @@ function Get-FakeClientDelta {
     return $delta
 }
 
+function Get-FakeViewportPath {
+    if ([string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_UIA_STATE)) { return '' }
+    return ($env:TRACEFOLD_FAKE_UIA_STATE + '.viewport')
+}
+
 switch ($group) {
     'root' {
         if (-not (Test-FakeSupportOption 'root') -and $action -ne 'create') { exit 2 }
@@ -117,6 +122,11 @@ switch ($group) {
         [void][int]::TryParse($values['height-dip'], [ref] $heightDip)
         $widthPixels = [int][Math]::Round($widthDip * $scale, [MidpointRounding]::AwayFromZero)
         $heightPixels = [int][Math]::Round($heightDip * $scale, [MidpointRounding]::AwayFromZero)
+        $viewportPath = Get-FakeViewportPath
+        if (-not [string]::IsNullOrEmpty($viewportPath)) {
+            [IO.File]::WriteAllText($viewportPath, [string] $widthDip,
+                [Text.UTF8Encoding]::new($false))
+        }
         Write-Output ([pscustomobject]@{
             processId = [int] $values['process-id']
             widthPixels = $widthPixels
@@ -135,7 +145,7 @@ switch ($group) {
         if ($action -ne 'lookup') { exit 2 }
         if (-not (Test-FakeSupportOption 'automation-id')) { exit 2 }
         if (-not [string]::IsNullOrEmpty($env:TRACEFOLD_FAKE_NATIVE_JSON)) {
-            [Console]::Out.Write($env:TRACEFOLD_FAKE_NATIVE_JSON)
+            Write-Output $env:TRACEFOLD_FAKE_NATIVE_JSON
             exit 0
         }
         $available = $true
@@ -145,21 +155,35 @@ switch ($group) {
         if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_OUTER)) { [void][int]::TryParse($env:TRACEFOLD_FAKE_NATIVE_OUTER, [ref] $outer) }
         if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_DESCENDANT)) { [void][int]::TryParse($env:TRACEFOLD_FAKE_NATIVE_DESCENDANT, [ref] $descendant) }
         $className = if ($values.ContainsKey('descendant-class')) { [string] $values['descendant-class'] } else { 'Fake.Container' }
+        if ([string] $values['automation-id'] -ceq 'PaneRoot') { $className = 'SplitViewPane' }
         if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_CLASS)) { $className = $env:TRACEFOLD_FAKE_NATIVE_CLASS }
-        $name = [string] $values['automation-id']
+        $name = if ($values.ContainsKey('descendant-name')) {
+            [string] $values['descendant-name']
+        } else { [string] $values['automation-id'] }
         if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_NAME)) { $name = $env:TRACEFOLD_FAKE_NATIVE_NAME }
         $width = 176
+        $viewportPath = Get-FakeViewportPath
+        if ([string] $values['automation-id'] -ceq 'PaneRoot' -and
+            -not [string]::IsNullOrEmpty($viewportPath) -and
+            [IO.File]::Exists($viewportPath)) {
+            $currentDip = 0
+            if ([int]::TryParse([IO.File]::ReadAllText($viewportPath), [ref] $currentDip)) {
+                $paneDip = if ($currentDip -lt 1280) { 48 } else { 176 }
+                $width = [int][Math]::Round($paneDip * (Get-FakeScale),
+                    [MidpointRounding]::AwayFromZero)
+            }
+        }
         if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_NATIVE_WIDTH)) { [void][int]::TryParse($env:TRACEFOLD_FAKE_NATIVE_WIDTH, [ref] $width) }
         $facts = @()
         foreach ($pattern in @($patterns)) { $facts += [ordered]@{ name = [string] $pattern; available = $available } }
-        [Console]::Out.Write(([pscustomobject] @{
+        Write-Output ([pscustomobject] @{
             automationId         = [string] $values['automation-id']
             descendantClass      = if ($values.ContainsKey('descendant-class')) { [string] $values['descendant-class'] } else { $null }
             descendantName       = if ($values.ContainsKey('descendant-name')) { [string] $values['descendant-name'] } else { $null }
             outerMatchCount      = $outer
             descendantMatchCount = $descendant
             name                 = $name
-            controlType          = 'Group'
+            controlType          = if ($values.ContainsKey('descendant-class')) { 'Edit' } else { 'Group' }
             className            = $className
             isEnabled            = $true
             isOffscreen          = $false
@@ -167,7 +191,7 @@ switch ($group) {
             width                = $width
             height               = 40
             patterns             = $facts
-        } | ConvertTo-Json -Depth 6 -Compress))
+        } | ConvertTo-Json -Depth 6 -Compress)
         exit 0
     }
     default { exit 2 }

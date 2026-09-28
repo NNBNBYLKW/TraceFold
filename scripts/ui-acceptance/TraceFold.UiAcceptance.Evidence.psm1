@@ -209,6 +209,9 @@ function Write-UiRedactedTreeEvidence {
         if ($node.enabled -isnot [bool] -or $node.offscreen -isnot [bool]) { throw 'Invalid UIA tree state.' }
         $redacted += [ordered]@{
             automationId = Protect-UiAcceptanceText -Value ([string]$node.automationId) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            parentAutomationId = Protect-UiAcceptanceText -Value $(if ($null -ne $node.PSObject.Properties['parentAutomationId']) {
+                [string]$node.parentAutomationId
+            } else { '' }) -RunToken $RunToken -OwnedRoot $OwnedRoot
             controlType = Protect-UiAcceptanceText -Value ([string]$node.controlType) -RunToken $RunToken -OwnedRoot $OwnedRoot
             name = Protect-UiAcceptanceText -Value ([string]$node.name) -RunToken $RunToken -OwnedRoot $OwnedRoot
             enabled = [bool]$node.enabled
