@@ -443,6 +443,13 @@ function Get-TestCases {
                 Assert-True ($names.Count -ge 7)
                 Assert-Equal 'StartupLayout' $names[0]
                 Assert-Equal '00-startup-layout.ps1' (Get-UiAcceptanceScenarioFile -Name 'StartupLayout')
+                # The main-chain entry is the intake chain, numbered after the startup gate; it was
+                # previously registered as 01-main-chain.ps1, which the plan never creates.
+                Assert-Equal '10-main-chain.ps1' (Get-UiAcceptanceScenarioFile -Name 'MainChain')
+                foreach ($name in $names) {
+                    $file = Get-UiAcceptanceScenarioFile -Name $name
+                    Assert-True ($file -cmatch '^[0-9]{2}-[a-z0-9-]+\.ps1$')
+                }
                 $resolved = @(Resolve-UiAcceptanceScenarioRequest -Requested @('All'))
                 Assert-Equal $names.Count $resolved.Count
                 $deduped = @(Resolve-UiAcceptanceScenarioRequest -Requested @('StartupLayout','StartupLayout','MainChain'))

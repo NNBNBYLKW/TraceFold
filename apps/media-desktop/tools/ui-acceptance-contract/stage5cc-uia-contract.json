@@ -226,7 +226,8 @@
   ],
   "fixtureAssets": [
     {"fixedFilename":"paired.mp4","repositoryPath":"apps/media-api/tests/fixtures/media/paired.mp4","sha256":"B5B85F2CA95EA5EB781B42D202D1C3DB361BF37F5BF4B3107A79469FC716A1A3","sizeBytes":2405,"seedDirectory":"inbox"},
-    {"fixedFilename":"paired.m4a","repositoryPath":"apps/media-api/tests/fixtures/media/paired.m4a","sha256":"187F3BE0AB2C07C6A967840BEBFA0EB1646227B52179387F74AB4D8BBC64AAC1","sizeBytes":9988,"seedDirectory":"inbox"}
+    {"fixedFilename":"paired.m4a","repositoryPath":"apps/media-api/tests/fixtures/media/paired.m4a","sha256":"187F3BE0AB2C07C6A967840BEBFA0EB1646227B52179387F74AB4D8BBC64AAC1","sizeBytes":9988,"seedDirectory":"inbox"},
+    {"fixedFilename":"photo.jpg","repositoryPath":"apps/media-api/tests/fixtures/media/photo.jpg","sha256":"7D1BD6791F1D40FFAFE6C7704FB2E71B6FBF6CBD26B71F9A45E62460D61312A6","sizeBytes":693,"seedDirectory":"inbox"}
   ],
   "sessionPreparation": {
     "materializedRowPhase": "inbox-seeded",

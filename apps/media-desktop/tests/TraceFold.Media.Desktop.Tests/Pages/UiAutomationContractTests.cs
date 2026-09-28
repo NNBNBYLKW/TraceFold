@@ -507,6 +507,17 @@ public sealed class UiAutomationContractTests
         Assert.Equal(["paired.mp4", "paired.m4a"], seedFilenames);
         Assert.All(seedFilenames, name => Assert.Contains(name, seededNames));
         Assert.All(materializedNames, name => Assert.Contains(name, seedFilenames));
+        // The image fixture is declared for the main-chain intake step, which copies it into the
+        // owned inbox only after the video is ingested; the startup gate must not seed it.
+        JsonElement photo = assets.EnumerateArray().Single(asset =>
+            asset.GetProperty("fixedFilename").GetString() == "photo.jpg");
+        Assert.Equal("apps/media-api/tests/fixtures/media/photo.jpg",
+            photo.GetProperty("repositoryPath").GetString());
+        Assert.Equal(693, photo.GetProperty("sizeBytes").GetInt64());
+        Assert.Equal("7D1BD6791F1D40FFAFE6C7704FB2E71B6FBF6CBD26B71F9A45E62460D61312A6",
+            photo.GetProperty("sha256").GetString());
+        Assert.Equal("inbox", photo.GetProperty("seedDirectory").GetString());
+        Assert.DoesNotContain("photo.jpg", seedFilenames);
         // The live accessible name appends a status suffix that changes as the item progresses
         // (measured 等待文件稳定, then 待入库), so the manifest fixes only the stable prefix and the
         // gate addresses the row by its fixed file name.

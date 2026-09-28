@@ -8,7 +8,7 @@ Import-Module (Join-Path $PSScriptRoot 'TraceFold.UiAcceptance.Processes.psm1') 
 # fixed: it is the execution order an 'All' request produces.
 $script:uiAcceptanceScenarios = [ordered] @{
     StartupLayout = '00-startup-layout.ps1'
-    MainChain     = '01-main-chain.ps1'
+    MainChain     = '10-main-chain.ps1'
     Conflict      = '02-conflict.ps1'
     Library       = '03-library.ps1'
     Taxonomy      = '04-taxonomy.ps1'
