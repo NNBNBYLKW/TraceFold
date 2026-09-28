@@ -12,7 +12,7 @@ $script:uiAcceptanceScenarios = [ordered] @{
     Conflict      = '02-conflict.ps1'
     Library       = '03-library.ps1'
     Taxonomy      = '04-taxonomy.ps1'
-    Diagnostics   = '05-diagnostics.ps1'
+    Diagnostics   = '60-diagnostics-read-only.ps1'
     Visual        = '06-visual.ps1'
 }
 
