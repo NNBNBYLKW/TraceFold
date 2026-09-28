@@ -91,6 +91,7 @@
     {"file":"Pages/LibraryPage.xaml","automationId":"LibraryTagInput","name":"输入正式文件库资料的内容标签","controlType":"AutoSuggestBox","requiredPatterns":["Value"],"scope":"pages_librarypage","dynamicSelectorPolicy":"static_id"},
     {"file":"Pages/LibraryPage.xaml","automationId":"LibraryTagInputTerms","name":"已添加的正式文件库资料内容标签","controlType":"ItemsControl","requiredPatterns":[],"scope":"pages_librarypage","dynamicSelectorPolicy":"static_id"},
     {"file":"Pages/LibraryPage.xaml","automationId":"LibraryStatusMessage","name":"正式文件库状态消息","controlType":"TextBlock","requiredPatterns":[],"scope":"pages_librarypage","dynamicSelectorPolicy":"static_id"},
+    {"file":"Pages/LibraryPage.xaml","automationId":"LibraryBatchStatusMessage","name":"正式文件批量操作状态消息","controlType":"TextBlock","requiredPatterns":[],"scope":"pages_librarypage","dynamicSelectorPolicy":"static_id"},
     {"file":"Pages/LibraryPage.xaml","automationId":"RevealAssetButton","name":"在资源管理器中打开所选正式文件","controlType":"Button","requiredPatterns":["Invoke"],"scope":"pages_librarypage","dynamicSelectorPolicy":"static_id"},
     {"file":"Pages/LibraryPage.xaml","automationId":"LibrarySelectionSummary","name":"正式文件多选摘要","controlType":"StackPanel","requiredPatterns":[],"scope":"pages_librarypage","dynamicSelectorPolicy":"static_id"},
     {"file":"Pages/LibraryPage.xaml","automationId":"LibrarySummaryClearSelectionButton","name":"取消正式文件多选","controlType":"Button","requiredPatterns":["Invoke"],"scope":"pages_librarypage","dynamicSelectorPolicy":"static_id"},

@@ -141,6 +141,23 @@ else {
         $blockedReason = 'pinned_driver_archive_mismatch'
     }
 }
+if ([string]::IsNullOrWhiteSpace($blockedReason) -and $requested -contains 'MainChain') {
+    $mediaManifestPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ffmpeg/win-x64/manifest.json'
+    $mediaManifest = [IO.File]::ReadAllText($mediaManifestPath) | ConvertFrom-Json
+    foreach ($fileName in @('ffmpeg.exe','ffprobe.exe')) {
+        $toolPath = Join-Path $product ('tools/ffmpeg/' + $fileName)
+        if (-not [IO.File]::Exists($toolPath)) {
+            $blockedReason = 'pinned_media_tools_unavailable'
+            break
+        }
+        $expected = $mediaManifest.files.PSObject.Properties[$fileName].Value
+        if ((Get-Item -LiteralPath $toolPath).Length -ne [long]$expected.size -or
+            (Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash -cne [string]$expected.sha256) {
+            $blockedReason = 'pinned_media_tools_mismatch'
+            break
+        }
+    }
+}
 if ([string]::IsNullOrWhiteSpace($blockedReason)) {
     if (-not (Test-UiInteractiveDesktop)) {
         $blockedReason = 'interactive_desktop_unavailable'

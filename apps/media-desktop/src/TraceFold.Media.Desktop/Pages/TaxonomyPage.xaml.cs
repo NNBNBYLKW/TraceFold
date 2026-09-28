@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using TraceFold.Media.Desktop.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -365,6 +366,8 @@ public sealed partial class TaxonomyPage : Page
             PlaceholderText = "词条名称",
             MinWidth = 320
         };
+        AutomationProperties.SetAutomationId(input, "TaxonomyNameInput");
+        AutomationProperties.SetName(input, "输入词条名称");
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
@@ -374,6 +377,8 @@ public sealed partial class TaxonomyPage : Page
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Primary
         };
+        AutomationProperties.SetAutomationId(dialog, "TaxonomyNameDialog");
+        AutomationProperties.SetName(dialog, "词条名称编辑对话框");
         return await dialog.ShowAsync() == ContentDialogResult.Primary
             ? input.Text
             : null;

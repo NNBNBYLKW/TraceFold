@@ -166,7 +166,8 @@ function Get-TestCases {
                     -ResolveSelector $resolve -FailureCode 'row.select' -MaxAttempts 3 -DeadlineSeconds 20
                 Assert-Equal 'Passed' $result.Status
                 Assert-Equal 2 $script:resolvedCalls
-                $log = @(Get-Content -LiteralPath $env:TRACEFOLD_FAKE_ARGV_LOG | ForEach-Object { ConvertFrom-Json $_ })
+                $log = @([IO.File]::ReadAllLines($env:TRACEFOLD_FAKE_ARGV_LOG, [Text.Encoding]::UTF8) |
+                    ForEach-Object { ConvertFrom-Json $_ })
                 $invoked = @($log | Where-Object { $_.argv[1] -ceq 'invoke' })
                 Assert-Equal 2 $invoked.Count
                 # The selector is re-resolved, so the second dispatch uses the newer selector.
@@ -195,7 +196,7 @@ function Get-TestCases {
                     -MaxAttempts 3 -DeadlineSeconds 20 -TimeoutMs 1000
                 Assert-True ([bool] $result.TimedOut)
                 Assert-True ($result.Status -cne 'Passed')
-                $log = @(Get-Content -LiteralPath $env:TRACEFOLD_FAKE_ARGV_LOG | ForEach-Object { ConvertFrom-Json $_ })
+                $log = @([IO.File]::ReadAllLines($env:TRACEFOLD_FAKE_ARGV_LOG, [Text.Encoding]::UTF8) | ForEach-Object { ConvertFrom-Json $_ })
                 Assert-Equal 1 @($log | Where-Object { $_.argv[1] -ceq 'invoke' }).Count
             }
             finally {
@@ -222,7 +223,7 @@ function Get-TestCases {
                     -WinAppPath $driver -RunToken 't' -OwnedRoot $base -Verb 'invoke' `
                     -ResolveSelector { 'itm-pairedmp4-0001' } -FailureCode 'row.select' -MaxAttempts 3 -DeadlineSeconds 20
                 Assert-Equal 'Failed' $result.Status
-                $log = @(Get-Content -LiteralPath $env:TRACEFOLD_FAKE_ARGV_LOG | ForEach-Object { ConvertFrom-Json $_ })
+                $log = @([IO.File]::ReadAllLines($env:TRACEFOLD_FAKE_ARGV_LOG, [Text.Encoding]::UTF8) | ForEach-Object { ConvertFrom-Json $_ })
                 Assert-Equal 1 @($log | Where-Object { $_.argv[1] -ceq 'invoke' }).Count
             }
             finally {
@@ -249,7 +250,7 @@ function Get-TestCases {
                         -ResolveSelector { 'itm-pairedmp4-0001' } -FailureCode 'row.select' `
                         -MaxAttempts 2 -DeadlineSeconds 20
                 }
-                $log = @(Get-Content -LiteralPath $env:TRACEFOLD_FAKE_ARGV_LOG | ForEach-Object { ConvertFrom-Json $_ })
+                $log = @([IO.File]::ReadAllLines($env:TRACEFOLD_FAKE_ARGV_LOG, [Text.Encoding]::UTF8) | ForEach-Object { ConvertFrom-Json $_ })
                 Assert-Equal 2 @($log | Where-Object { $_.argv[1] -ceq 'invoke' }).Count
             }
             finally {
@@ -281,6 +282,37 @@ function Get-TestCases {
                 }
             }
             finally { Remove-UiTestTree -Path $base }
+        }
+    },
+    @{
+        Name = 'taxonomy token commits through the observed inner Edit exactly once'
+        Body = {
+            $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-wf-' + [guid]::NewGuid().ToString('N'))
+            [void][IO.Directory]::CreateDirectory($base)
+            try {
+                Reset-UiAcceptanceMutationSteps
+                $env:TRACEFOLD_FAKE_ARGV_LOG = Join-Path $base 'argv.jsonl'
+                $driver = Join-Path $script:uiRoot 'tests/fixtures/fake-winapp.ps1'
+                $term = [string][char]0x4F5C + [char]0x8005 + [char]0x7532
+                $result = Set-UiAcceptanceTaxonomyTerm -StepId 'author-one' `
+                    -InnerSelector 'txt-author-inner-1234' -Term $term -ProcessId 4242 `
+                    -WinAppPath $driver -RunToken 't' -OwnedRoot $base -FailureCode 'author.commit' `
+                    -ForegroundCheck { param($id) $true } -DesktopCheck { $true }
+                Assert-Equal 'Passed' $result.Status
+                $log = @([IO.File]::ReadAllLines($env:TRACEFOLD_FAKE_ARGV_LOG, [Text.Encoding]::UTF8) | ForEach-Object { ConvertFrom-Json $_ })
+                Assert-Equal 2 $log.Count
+                Assert-Equal 'set-value' $log[0].argv[1]
+                Assert-Equal 'txt-author-inner-1234' $log[0].argv[2]
+                Assert-Equal $term $log[0].argv[3]
+                Assert-Equal 'send-keys' $log[1].argv[1]
+                Assert-Equal 'enter' $log[1].argv[2]
+                Assert-Equal 'txt-author-inner-1234' $log[1].argv[4]
+                Assert-Equal 1 @($log | Where-Object { $_.argv[1] -ceq 'send-keys' }).Count
+            }
+            finally {
+                Remove-Item Env:TRACEFOLD_FAKE_ARGV_LOG -ErrorAction SilentlyContinue
+                Remove-UiTestTree -Path $base
+            }
         }
     },
     @{

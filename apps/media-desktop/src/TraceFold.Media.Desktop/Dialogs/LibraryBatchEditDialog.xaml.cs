@@ -10,11 +10,13 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
 {
     private CancellationToken _operationToken;
     private bool _synchronizingRuleEditor;
+    private bool _initialized;
 
     public LibraryBatchEditDialog(LibraryBatchEditDialogViewModel viewModel)
     {
         ViewModel = viewModel;
         InitializeComponent();
+        _initialized = true;
         SizeChanged += OnViewportSizeChanged;
     }
 
@@ -61,6 +63,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         ViewModel.SelectedTab = EditorTabs.SelectedIndex == 1
             ? LibraryBatchEditTab.Naming
             : LibraryBatchEditTab.Metadata;
@@ -72,6 +75,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         int selected = Math.Max(0, MetadataModeList.SelectedIndex);
         ViewModel.Metadata.Mode = selected switch
         {
@@ -177,6 +181,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         ViewModel.Naming.Source = NamingSourceSelector.SelectedIndex == 1
             ? NamingSource.CurrentDisplayName
             : NamingSource.ActualFilename;
@@ -188,6 +193,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (PresetList.SelectedItem is NamingPresetDto preset)
         {
             ViewModel.Naming.LoadPreset(preset);
@@ -244,6 +250,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         ViewModel.Naming.SelectedRule =
             RuleList.SelectedItem as NamingRuleRowViewModel;
         SynchronizeRuleEditor();
@@ -285,6 +292,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (!_synchronizingRuleEditor
             && ViewModel.Naming.SelectedRule is { IsBracketRule: true } row
             && BracketPairSelector.SelectedIndex >= 0)
@@ -300,6 +308,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (!_synchronizingRuleEditor
             && ViewModel.Naming.SelectedRule is { IsCaseRule: true } row
             && CaseModeSelector.SelectedIndex >= 0)
@@ -314,6 +323,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (!_synchronizingRuleEditor
             && ViewModel.Naming.SelectedRule is { IsSequenceRule: true } row
             && SequencePlacementSelector.SelectedIndex >= 0)
@@ -437,7 +447,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
         ContentDialogClosingEventArgs args)
     {
         _ = sender;
-        if (ViewModel.IsSubmitting && !_operationToken.IsCancellationRequested)
+        if (ViewModel.IsSubmitting && !Result.Applied && !_operationToken.IsCancellationRequested)
         {
             args.Cancel = true;
         }

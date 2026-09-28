@@ -567,6 +567,12 @@
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Text="使用上方“批量编辑”统一修改资料与显示名称；提交前会逐项预览。"
                             TextWrapping="Wrap" />
+                        <TextBlock
+                            AutomationProperties.AutomationId="LibraryBatchStatusMessage"
+                            AutomationProperties.Name="正式文件批量操作状态消息"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+                            TextWrapping="Wrap" />
                         <Button
                             AutomationProperties.AutomationId="LibrarySummaryClearSelectionButton"
                             AutomationProperties.Name="取消正式文件多选"

@@ -300,7 +300,6 @@ function Set-UiAcceptanceTaxonomyTerm {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $StepId,
-        [Parameter(Mandatory)][string] $OuterSelector,
         [Parameter(Mandatory)][string] $InnerSelector,
         [Parameter(Mandatory)][string] $Term,
         [Parameter(Mandatory)][int] $ProcessId,
@@ -320,7 +319,7 @@ function Set-UiAcceptanceTaxonomyTerm {
 
     # A single Enter commits the current query; it is never re-sent.
     return (Invoke-WinAppKeyboard -StepId ($StepId + '.commit') `
-            -Arguments @('ui','send-keys','enter','--target',$OuterSelector) -ProcessId $ProcessId `
+            -Arguments @('ui','send-keys','enter','--target',$InnerSelector) -ProcessId $ProcessId `
             -WinAppPath $WinAppPath -ForegroundCheck $ForegroundCheck -DesktopCheck $DesktopCheck `
             -TimeoutMs $TimeoutMs -RunToken $RunToken -OwnedRoot $OwnedRoot)
 }

@@ -53,6 +53,7 @@ public static class AcceptanceSnapshotReader
                 Mode = SqliteOpenMode.ReadOnly,
                 Cache = SqliteCacheMode.Private,
                 Pooling = false,
+                DefaultTimeout = 2,
             }.ToString();
             using var connection = new SqliteConnection(connectionString);
             connection.Open();
@@ -93,6 +94,7 @@ public static class AcceptanceSnapshotReader
             WriteArray(writer, "ingestStates", Distinct(connection, "ingest_operations", ["stage"]), token);
             WriteArray(writer, "formalFilenames", FormalFilenames(connection), token);
             WriteArray(writer, "displayNames", Distinct(connection, "media_assets", ["display_name"]), token);
+            WriteFormalAssets(writer, connection, token);
 
             writer.WriteStartObject("taxonomy");
             foreach (string kind in new[] { "author", "series", "tag" })
@@ -161,7 +163,7 @@ public static class AcceptanceSnapshotReader
         var values = new List<string>();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
-            "SELECT DISTINCT \"name\" FROM \"taxonomy_terms\" WHERE lower(\"kind\") = $kind ORDER BY 1";
+            "SELECT DISTINCT \"display_name\" FROM \"taxonomy_terms\" WHERE lower(\"kind\") = $kind ORDER BY 1";
         command.Parameters.AddWithValue("$kind", kind);
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
@@ -189,6 +191,69 @@ public static class AcceptanceSnapshotReader
         }
 
         return [.. values.Order(StringComparer.Ordinal)];
+    }
+
+    // Emit only public library fields. IDs are used as join keys inside the read-only connection
+    // and never leave it; paths, hashes, run tokens and profile text are not serialized.
+    private static void WriteFormalAssets(Utf8JsonWriter writer, SqliteConnection connection, string token)
+    {
+        writer.WriteStartArray("formalAssets");
+        if (TableExists(connection, "media_assets"))
+        {
+            var assets = new List<(string Id, string Filename, string? Display, string? Kind, string? Series)>();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id, actual_filename, display_name, media_kind, series_id
+                FROM media_assets ORDER BY actual_filename, id
+                """;
+            using (SqliteDataReader reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    assets.Add((reader.GetString(0), reader.GetString(1),
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        reader.IsDBNull(4) ? null : reader.GetString(4)));
+                }
+            }
+            foreach (var asset in assets)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("actualFilename", Redact(asset.Filename, token));
+                writer.WriteString("displayName", asset.Display is null ? null : Redact(asset.Display, token));
+                writer.WriteString("mediaKind", asset.Kind is null ? null : Redact(asset.Kind, token));
+                WriteAssetTerms(writer, connection, "authors", "media_asset_authors", "author_id", asset.Id, token);
+                writer.WriteString("series", asset.Series is null ? null : ReadSeries(connection, asset.Series, token));
+                WriteAssetTerms(writer, connection, "tags", "media_asset_tags", "tag_id", asset.Id, token);
+                writer.WriteEndObject();
+            }
+        }
+        writer.WriteEndArray();
+    }
+
+    private static void WriteAssetTerms(Utf8JsonWriter writer, SqliteConnection connection,
+        string outputName, string joinTable, string termColumn, string assetId, string token)
+    {
+        writer.WriteStartArray(outputName);
+        if (TableExists(connection, joinTable))
+        {
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT t.normalized_name FROM \"" + joinTable +
+                "\" j JOIN taxonomy_terms t ON t.id = j.\"" + termColumn +
+                "\" WHERE j.media_asset_id = $asset ORDER BY t.normalized_name";
+            command.Parameters.AddWithValue("$asset", assetId);
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read()) { writer.WriteStringValue(Redact(reader.GetString(0), token)); }
+        }
+        writer.WriteEndArray();
+    }
+
+    private static string? ReadSeries(SqliteConnection connection, string seriesId, string token)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT normalized_name FROM taxonomy_terms WHERE id = $series";
+        command.Parameters.AddWithValue("$series", seriesId);
+        return command.ExecuteScalar() is string value ? Redact(value, token) : null;
     }
 
     private static string? ResolveColumn(

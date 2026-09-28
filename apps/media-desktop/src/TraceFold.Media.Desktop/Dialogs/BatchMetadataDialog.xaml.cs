@@ -212,7 +212,8 @@ public sealed partial class BatchMetadataDialog : ContentDialog
         ContentDialogClosingEventArgs args)
     {
         _ = sender;
-        if (ViewModel.IsSubmitting && !_operationToken.IsCancellationRequested)
+        if (ViewModel.IsSubmitting && !Result.Applied
+            && !_operationToken.IsCancellationRequested)
         {
             args.Cancel = true;
         }

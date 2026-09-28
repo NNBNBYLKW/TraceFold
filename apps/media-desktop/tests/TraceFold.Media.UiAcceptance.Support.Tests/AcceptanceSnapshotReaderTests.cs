@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 using TraceFold.Media.UiAcceptance.Support;
 using Xunit;
 
@@ -26,6 +27,15 @@ public sealed class AcceptanceSnapshotReaderTests
         Assert.Contains("\"image.jpg\"", json, StringComparison.Ordinal);
         Assert.Contains("\"作者甲\"", json, StringComparison.Ordinal);
         Assert.Contains("Succeeded", json, StringComparison.Ordinal);
+        using (JsonDocument document = JsonDocument.Parse(json))
+        {
+            JsonElement asset = Assert.Single(document.RootElement.GetProperty("formalAssets").EnumerateArray());
+            Assert.Equal("image.jpg", asset.GetProperty("actualFilename").GetString());
+            Assert.Equal("image", asset.GetProperty("mediaKind").GetString());
+            Assert.Equal("作者甲", Assert.Single(asset.GetProperty("authors").EnumerateArray()).GetString());
+            Assert.Equal("系列甲", asset.GetProperty("series").GetString());
+            Assert.Equal("风景", Assert.Single(asset.GetProperty("tags").EnumerateArray()).GetString());
+        }
         Assert.Equal(before, File.ReadAllBytes(database));
         Assert.Equal(beforeWrite, File.GetLastWriteTimeUtc(database));
         Assert.False(File.Exists(database + "-wal"));
@@ -83,9 +93,11 @@ public sealed class AcceptanceSnapshotReaderTests
         connection.Open();
         Execute(connection, """
             CREATE TABLE inbox_items(id TEXT PRIMARY KEY, state TEXT);
-            CREATE TABLE media_assets(id TEXT PRIMARY KEY, actual_filename TEXT, display_name TEXT);
+            CREATE TABLE media_assets(id TEXT PRIMARY KEY, actual_filename TEXT, display_name TEXT, media_kind TEXT, series_id TEXT);
             CREATE TABLE source_files(media_asset_id TEXT, formal_filename TEXT);
-            CREATE TABLE taxonomy_terms(id TEXT PRIMARY KEY, kind TEXT, name TEXT);
+            CREATE TABLE taxonomy_terms(id TEXT PRIMARY KEY, kind TEXT, display_name TEXT, normalized_name TEXT);
+            CREATE TABLE media_asset_authors(media_asset_id TEXT, author_id TEXT);
+            CREATE TABLE media_asset_tags(media_asset_id TEXT, tag_id TEXT);
             CREATE TABLE processing_jobs(id TEXT PRIMARY KEY, status TEXT);
             CREATE TABLE ingest_operations(id TEXT PRIMARY KEY, stage TEXT);
             """);
@@ -94,11 +106,20 @@ public sealed class AcceptanceSnapshotReaderTests
             INSERT INTO inbox_items VALUES('11111111-1111-1111-1111-111111111111','ReadyToTag');
             INSERT INTO inbox_items VALUES('22222222-2222-2222-2222-222222222222','RequiresProcessing');
             INSERT INTO media_assets VALUES(
-                '33333333-3333-3333-3333-333333333333','image.jpg','{profile}-private');
+                '33333333-3333-3333-3333-333333333333','image.jpg','{profile}-private','image',
+                '77777777-7777-7777-7777-777777777777');
             INSERT INTO source_files VALUES(
                 '33333333-3333-3333-3333-333333333333','image.jpg');
             INSERT INTO taxonomy_terms VALUES(
-                '44444444-4444-4444-4444-444444444444','Author','作者甲');
+                '44444444-4444-4444-4444-444444444444','Author','作者甲','作者甲');
+            INSERT INTO taxonomy_terms VALUES(
+                '77777777-7777-7777-7777-777777777777','Series','系列甲','系列甲');
+            INSERT INTO taxonomy_terms VALUES(
+                '88888888-8888-8888-8888-888888888888','Tag','风景','风景');
+            INSERT INTO media_asset_authors VALUES(
+                '33333333-3333-3333-3333-333333333333','44444444-4444-4444-4444-444444444444');
+            INSERT INTO media_asset_tags VALUES(
+                '33333333-3333-3333-3333-333333333333','88888888-8888-8888-8888-888888888888');
             INSERT INTO processing_jobs VALUES(
                 '55555555-5555-5555-5555-555555555555','Succeeded');
             INSERT INTO ingest_operations VALUES(

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using TraceFold.Media.Application.Intake;
 using TraceFold.Media.Application.Library;
@@ -20,6 +21,7 @@ public sealed partial class LibraryViewModel : ObservableObject
     private readonly ILibraryBatchEditDialogService _batchDialog;
     private readonly ILibraryBatchEditorService _batchEditor;
     private readonly ILibraryActivityNotifier _activityNotifier;
+    private readonly ILogger<LibraryViewModel>? _logger;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private bool _settingSelection;
     private bool _settingSearch;
@@ -38,7 +40,8 @@ public sealed partial class LibraryViewModel : ObservableObject
         IMediaPreviewResolver previewResolver,
         ILibraryBatchEditDialogService batchDialog,
         ILibraryBatchEditorService batchEditor,
-        ILibraryActivityNotifier activityNotifier)
+        ILibraryActivityNotifier activityNotifier,
+        ILogger<LibraryViewModel>? logger = null)
     {
         _library = library;
         _sortPreferences = sortPreferences;
@@ -50,6 +53,7 @@ public sealed partial class LibraryViewModel : ObservableObject
         _batchDialog = batchDialog;
         _batchEditor = batchEditor;
         _activityNotifier = activityNotifier;
+        _logger = logger;
         Inspector.Metadata.Saved += OnMetadataSaved;
         Selection.PropertyChanged += OnSelectionPropertyChanged;
         _batchEditor.UndoStateChanged += OnUndoStateChanged;
@@ -309,8 +313,9 @@ public sealed partial class LibraryViewModel : ObservableObject
         {
             StatusMessage = "批量修改已取消，当前选择已保留。";
         }
-        catch (Exception)
+        catch (Exception error)
         {
+            _logger?.LogError(error, "LibraryBatchEditFailed");
             StatusMessage = "无法打开或提交批量编辑，当前选择已保留。";
         }
         finally

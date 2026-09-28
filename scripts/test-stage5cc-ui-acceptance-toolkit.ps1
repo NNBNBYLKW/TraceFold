@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows')]
+    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario')]
     [string] $Suite = 'All'
 )
 
@@ -38,6 +38,9 @@ $script:suites = [ordered] @{
     )
     Workflows = @(
         'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Workflows.Tests.ps1'
+    )
+    IntakeScenario = @(
+        'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.IntakeScenario.Tests.ps1'
     )
 }
 
