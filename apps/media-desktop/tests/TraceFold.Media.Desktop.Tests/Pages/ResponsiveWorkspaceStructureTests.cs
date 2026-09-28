@@ -74,6 +74,18 @@ public sealed class ResponsiveWorkspaceStructureTests
     }
 
     [Fact]
+    public void Host_uses_client_viewport_width_for_the_shared_breakpoint()
+    {
+        string code = File.ReadAllText(
+            DesktopSource("Controls", "ResponsiveInspectorHost.xaml.cs"));
+
+        Assert.Contains("XamlRoot?.Size.Width ?? ActualWidth", code, StringComparison.Ordinal);
+        Assert.Contains("observedXamlRoot.Changed += OnXamlRootChanged", code, StringComparison.Ordinal);
+        Assert.Contains("observedXamlRoot.Changed -= OnXamlRootChanged", code, StringComparison.Ordinal);
+        Assert.Contains("UpdateLayoutForWidth(ClientWidthDip())", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Shell_uses_approved_navigation_widths()
     {
         XDocument shell = XDocument.Load(DesktopSource("Shell", "ShellPage.xaml"));

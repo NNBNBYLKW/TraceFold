@@ -14,11 +14,13 @@ public sealed partial class ResponsiveInspectorHost : UserControl
 {
     private const double FallbackInspectorWidthDip = 360d;
     private bool applying;
+    private XamlRoot? observedXamlRoot;
 
     public ResponsiveInspectorHost()
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
     }
 
@@ -124,11 +126,50 @@ public sealed partial class ResponsiveInspectorHost : UserControl
             ? dip
             : FallbackInspectorWidthDip;
 
-    private void OnLoaded(object sender, RoutedEventArgs e) =>
-        UpdateLayoutForWidth(ActualWidth);
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        ObserveXamlRoot();
+        UpdateLayoutForWidth(ClientWidthDip());
+    }
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e) =>
-        UpdateLayoutForWidth(e.NewSize.Width);
+        UpdateLayoutForWidth(ClientWidthDip());
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (observedXamlRoot is not null)
+        {
+            observedXamlRoot.Changed -= OnXamlRootChanged;
+            observedXamlRoot = null;
+        }
+    }
+
+    private void ObserveXamlRoot()
+    {
+        XamlRoot? root = XamlRoot;
+        if (ReferenceEquals(root, observedXamlRoot))
+        {
+            return;
+        }
+
+        if (observedXamlRoot is not null)
+        {
+            observedXamlRoot.Changed -= OnXamlRootChanged;
+        }
+
+        observedXamlRoot = root;
+        if (observedXamlRoot is not null)
+        {
+            observedXamlRoot.Changed += OnXamlRootChanged;
+        }
+    }
+
+    private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) =>
+        UpdateLayoutForWidth(ClientWidthDip());
+
+    // Shell's navigation pane consumes part of this control's ActualWidth. The breakpoint is
+    // defined for the complete client viewport, so use the window's XamlRoot width instead.
+    private double ClientWidthDip() => XamlRoot?.Size.Width ?? ActualWidth;
 
     private static void OnInspectorContentChanged(
         DependencyObject sender,
