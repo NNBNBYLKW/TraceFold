@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner')]
+    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows')]
     [string] $Suite = 'All'
 )
 
@@ -35,6 +35,9 @@ $script:suites = [ordered] @{
     )
     Runner = @(
         'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Runner.Tests.ps1'
+    )
+    Workflows = @(
+        'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Workflows.Tests.ps1'
     )
 }
 
@@ -107,7 +110,7 @@ function Get-UiTestPngBytes {
 }
 
 # Make the toolkit modules available to the test files.
-foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner')) {
+foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows')) {
     $path = Join-Path $script:uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')
     if (Test-Path -LiteralPath $path) {
         Import-Module -Name $path -Force -DisableNameChecking

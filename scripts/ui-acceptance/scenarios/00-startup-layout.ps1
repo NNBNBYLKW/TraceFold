@@ -59,6 +59,7 @@ Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Contracts.psm1
 Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Processes.psm1') -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Driver.psm1') -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Evidence.psm1') -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot '../TraceFold.UiAcceptance.Workflows.psm1') -DisableNameChecking
 
 # This file lives in scripts/ui-acceptance/scenarios, so the repository root is three levels up.
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
@@ -428,17 +429,6 @@ function Assert-StartupLayoutDynamicRow {
     return $matches[0]
 }
 
-function Get-StartupLayoutRowSelector {
-    param([Parameter(Mandatory)][object[]] $Nodes, [Parameter(Mandatory)] $Row)
-
-    $prefix = [string] $Row.fixedAccessibleName
-    $type = [string] $Row.nativeControlType
-    $names = @($Nodes | Where-Object {
-        [string] $_.controlType -ceq $type -and ([string] $_.name) -like ($prefix + '*') } |
-        ForEach-Object { [string] $_.name } | Select-Object -Unique)
-    if ($names.Count -ne 1) { throw 'startup_layout.dynamic_row' }
-    return $names[0]
-}
 
 <#
 .SYNOPSIS
@@ -719,9 +709,29 @@ try {
     $viewports += [pscustomobject] @{ phase = 'rowReady'; rowName = [string] $rowNode.name; tree = $rowArtifact }
 
     # --- phase: rowSelected ---
-    $rowSelector = Get-StartupLayoutRowSelector -Nodes $rowReady.Nodes -Row $materializedRows[0]
-    Invoke-StartupLayoutMutation -StepId 'startup.select-row' -Arguments @('ui','invoke',$rowSelector) `
-        -ProcessId $productProcessId -FailureCode 'startup_layout.row_selection'
+    # The row's accessible name embeds a status that changes as the item progresses, so the name
+    # observed during the rowReady inspection can be stale by the time the row is invoked. The
+    # selector is therefore resolved from a fresh inspection of its own, and a driver report that
+    # the lookup failed is the only outcome that may be resolved again.
+    $rowRow = $materializedRows[0]
+    $rowResolver = {
+        # Resolved against the driver's raw response, which is where the semantic selector and the
+        # native type live; the normalized projection is only for the phase assertions.
+        $current = Read-StartupLayoutTree -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
+        $raw = ConvertTo-UiAcceptanceFlatNodes -Tree $current -FailureCode 'startup_layout.driver_schema_incompatible'
+        $found = Find-UiAcceptanceUniqueNode -Nodes $raw `
+            -NativeType ([string] $rowRow.nativeControlType) `
+            -NamePrefix ([string] $rowRow.fixedAccessibleName) `
+            -NameContains ([string] $rowRow.fixedFilename) `
+            -FailureCode 'startup_layout.dynamic_row'
+        if ($null -eq $found) { throw 'startup_layout.dynamic_row' }
+        return (Get-UiAcceptanceNodeSelector -Node $found -FailureCode 'startup_layout.dynamic_row')
+    }
+    $selection = Invoke-UiAcceptanceResolvedMutation -StepId 'startup.select-row' `
+        -ProcessId $productProcessId -WinAppPath $WinAppPath -RunToken $RunToken -OwnedRoot $OwnedRoot `
+        -Verb 'invoke' -ResolveSelector $rowResolver -FailureCode 'startup_layout.row_selection' `
+        -TimeoutMs $MutationTimeoutMs
+    if ($selection.Status -cne 'Passed') { throw 'startup_layout.row_selection' }
     $selected = Read-StartupLayoutNodes -ProcessId $productProcessId -FailureCode 'startup_layout.inspect_unavailable'
     Assert-StartupLayoutPhase -Index $selected.Index -PhaseIds $phaseSets['rowSelected'] -Entries $entryIndex -Phase 'rowSelected'
     $selectedArtifact = Write-UiRedactedTreeEvidence -OutputDirectory $OutputDirectory `

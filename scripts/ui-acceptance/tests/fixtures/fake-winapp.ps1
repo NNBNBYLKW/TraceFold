@@ -239,6 +239,19 @@ switch ($sub) {
         exit 0
     }
     'invoke' {
+        # Simulates the driver's lookup-stage miss: the action is never dispatched, and the answer
+        # carries the driver's own element_not_found code. The marker file makes this happen exactly
+        # once, independently of the shared invocation counter.
+        if ($env:TRACEFOLD_FAKE_MISS_ALWAYS -ceq '1') {
+            [Console]::Out.Write('{"error":{"code":"element_not_found","message":"No element found matching the selector"}}')
+            exit 4
+        }
+        $missMarker = $env:TRACEFOLD_FAKE_MISS_MARKER
+        if (-not [string]::IsNullOrEmpty($missMarker) -and -not (Test-Path -LiteralPath $missMarker)) {
+            Set-Content -LiteralPath $missMarker -Value 'used' -Encoding ASCII
+            [Console]::Out.Write('{"error":{"code":"element_not_found","message":"No element found matching the selector"}}')
+            exit 4
+        }
         if ($Arguments.Count -ge 3 -and [string] $Arguments[2] -ceq 'SaveFolderSettings') {
             Write-FakeValue -Name 'SettingsStatusMessage' -Value 'Folder settings saved.'
         }

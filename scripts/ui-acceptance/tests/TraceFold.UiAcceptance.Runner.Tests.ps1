@@ -82,7 +82,9 @@ function New-StartupLayoutContract {
 
 function New-StartupLayoutNode {
     param(
-        [Parameter(Mandatory)][string] $Id,
+        # Not Mandatory: a real inbox row exposes no AutomationId at all, and a Mandatory
+        # parameter would block the run by prompting instead of accepting its absence.
+        [string] $Id = '',
         [Parameter(Mandatory)][string] $ControlType,
         [Parameter(Mandatory)][string] $Name,
         [bool] $Enabled = $true,
@@ -91,6 +93,7 @@ function New-StartupLayoutNode {
         [int] $Y = 0,
         [int] $Width = 0,
         [int] $Height = 0,
+        [string] $GradientSelector = '',
         [object[]] $Children = @()
     )
 
@@ -108,7 +111,7 @@ function New-StartupLayoutNode {
         y            = $Y
         width        = $Width
         height       = $Height
-        selector     = 'sel-' + $Id
+        selector     = $(if ([string]::IsNullOrEmpty($GradientSelector)) { 'sel-' + $Id } else { $GradientSelector })
         isInvokable  = $false
     }
     if (@($Children).Count -gt 0) { $node['children'] = @($Children) }
@@ -176,7 +179,11 @@ function New-StartupLayoutTree {
     if ($IncludeInboxRow) {
         # Its runtime id is a generated value, so any attempt to address the row by id fails. The
         # accessible name keeps the manifest's fixed prefix and gains the product's state suffix.
-        $row = @(New-StartupLayoutNode -Id '3f2504e0-4f89-11d3-9a0c-0305e82c3301' -ControlType 'ListItem' -Name 'Inbox row paired.mp4, state pending' -X 100 -Y 100 -Width 200 -Height 60)
+        $rowName = 'Inbox row paired.mp4, state pending'
+        $row = @(
+            New-StartupLayoutNode -ControlType 'ListItem' -Name $rowName -GradientSelector 'itm-pairedmp4-0001' -X 100 -Y 100 -Width 200 -Height 60
+            New-StartupLayoutNode -Id 'InboxCard_3f2504e04f8911d39a0c0305e82c3301' -ControlType 'Group' -Name $rowName -X 100 -Y 100 -Width 200 -Height 60
+        )
     }
 
     $navigation = New-StartupLayoutNode -Id 'Navigation' -ControlType 'Unknown(50025)' `
@@ -263,6 +270,9 @@ function New-StartupLayoutTreeSequence {
         ($settings | ConvertTo-Json -Depth 12 -Compress)
         ($settingsConfigured | ConvertTo-Json -Depth 12 -Compress)
         ($inboxEmpty | ConvertTo-Json -Depth 12 -Compress)
+        ($rowPresent | ConvertTo-Json -Depth 12 -Compress)
+        # The row is invoked through a selector resolved from its own fresh inspection, because the
+        # accessible name carries a status that changes, so the row-ready tree is observed twice.
         ($rowPresent | ConvertTo-Json -Depth 12 -Compress)
         ($rowSelected | ConvertTo-Json -Depth 12 -Compress)
         ($viewport1024 | ConvertTo-Json -Depth 12 -Compress)
@@ -560,7 +570,9 @@ function Get-TestCases {
                     Assert-True (@($supportActions | Where-Object { $_ -ceq 'lookup' }).Count -ge 3)
 
                     $inspections = @($argv | Where-Object { $_[1] -ceq 'inspect' })
-                    Assert-Equal 10 $inspections.Count
+                    # One per phase tree plus the fresh observation the row selector is resolved
+                    # from, so a stale accessible name can never be invoked.
+                    Assert-Equal 11 $inspections.Count
                     $screenshots = @($argv | Where-Object { $_[1] -ceq 'screenshot' })
                     Assert-Equal 3 $screenshots.Count
                     foreach ($item in $screenshots) { Assert-True ($item -ccontains '--output') }
@@ -583,9 +595,19 @@ function Get-TestCases {
                     foreach ($target in @('NavSettings','SaveFolderSettings','NavInbox','InboxRefreshButton')) {
                         Assert-True ($invokeTargets -ccontains $target) ('the scenario must drive ' + $target)
                     }
+                    # The row is addressed through the semantic selector the driver returned in the
+                    # inspection that observed it, resolved immediately before the invocation. Its
+                    # accessible name embeds a status that changes, so the name observed earlier is
+                    # not a safe selector, and the generated row id must never be used.
                     Assert-Equal 1 @($invokeTargets | Where-Object {
+                        [string] $_ -ceq 'itm-pairedmp4-0001'
+                    }).Count 'the row must be selected by the selector from its own inspection'
+                    Assert-Equal 0 @($invokeTargets | Where-Object {
                         [string] $_ -clike 'Inbox row paired.mp4*'
-                    }).Count 'the row must be selected by its observed accessible name'
+                    }).Count 'a stale accessible name must never be used as the row selector'
+                    Assert-Equal 0 @($invokeTargets | Where-Object {
+                        [string] $_ -clike 'InboxCard_*'
+                    }).Count 'the generated row container id must never be used as a selector'
                     Assert-True ($invokeTargets -ccontains 'InboxInspectorOpenButton')
                     $keys = @($argv | Where-Object { $_[1] -ceq 'send-keys' })
                     Assert-Equal 1 $keys.Count
