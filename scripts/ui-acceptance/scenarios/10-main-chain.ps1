@@ -165,6 +165,35 @@ function Get-MainDescendantText {
     return $names.ToArray()
 }
 
+function Assert-MainVideoReadable {
+    param([string] $VideoPath)
+    $probePath = Join-Path ([IO.Path]::GetDirectoryName($ExecutablePath)) 'tools/ffmpeg/ffprobe.exe'
+    if (-not [IO.File]::Exists($probePath)) { throw 'main.formal_video' }
+    $start = [Diagnostics.ProcessStartInfo]::new($probePath)
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    # Double quotes cannot occur in a Windows filename. The checked path ends in .mp4,
+    # so the closing quote cannot be escaped by a trailing backslash on PS 5.1.
+    $start.Arguments = '-v quiet -count_frames -select_streams v:0 ' +
+        '-show_entries stream=nb_read_frames -of default=noprint_wrappers=1:nokey=1 ' +
+        '"' + $VideoPath + '"'
+    $probe = [Diagnostics.Process]::Start($start)
+    try {
+        if (-not $probe.WaitForExit(20000)) { throw 'main.formal_video' }
+        $frames = $probe.StandardOutput.ReadToEnd().Trim()
+        $count = 0
+        if ($probe.ExitCode -ne 0 -or
+            -not [int]::TryParse($frames, [ref] $count) -or $count -lt 1) {
+            throw 'main.formal_video'
+        }
+    }
+    finally {
+        if (-not $probe.HasExited) { $probe.Kill() }
+        $probe.Dispose()
+    }
+}
+
 function Wait-MainDiagnostics {
     param([string] $Code)
     $deadline = [Diagnostics.Stopwatch]::StartNew()
@@ -401,6 +430,7 @@ try {
     if ([Text.Encoding]::ASCII.GetString($header, 4, 4) -cne 'ftyp') {
         throw 'main.formal_video'
     }
+    Assert-MainVideoReadable -VideoPath $formalVideo[0]
 
     $null = Invoke-MainAction -Step 'library.open' -Arguments @('ui','invoke','NavLibrary') `
         -Code 'main.library_navigation'
