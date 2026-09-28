@@ -9,6 +9,9 @@ Import-Module (Join-Path $PSScriptRoot 'TraceFold.UiAcceptance.Processes.psm1') 
 $script:uiAcceptanceScenarios = [ordered] @{
     StartupLayout = '00-startup-layout.ps1'
     MainChain     = '10-main-chain.ps1'
+    # Each conflict decision is its own scenario. The aggregate 'Conflict' entry still points at a
+    # script no task creates, so it must never be read as covering all three decisions.
+    ConflictKeepBoth = '20-conflict-keep-both.ps1'
     Conflict      = '02-conflict.ps1'
     Library       = '03-library.ps1'
     Taxonomy      = '04-taxonomy.ps1'

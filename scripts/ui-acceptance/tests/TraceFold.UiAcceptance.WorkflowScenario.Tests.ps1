@@ -24,6 +24,12 @@ function Get-ScenarioParameterNames {
     return $names
 }
 
+function Read-ConflictScenarioSource {
+    $path = Join-Path $script:uiRoot 'scenarios/20-conflict-keep-both.ps1'
+    if (-not [IO.File]::Exists($path)) { throw 'Conflict keep-both scenario is missing.' }
+    return [IO.File]::ReadAllText($path)
+}
+
 function Get-TestCases {
     return @(
         @{
@@ -159,6 +165,116 @@ function Get-TestCases {
                     if ($byte -gt 0x7F) { $isAscii = $false; break }
                 }
                 # Non-ASCII text must carry a UTF-8 BOM, otherwise 5.1 reads the file as ANSI.
+                Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the conflict keep-both scenario exists, parses and reports Passed'
+            Body = {
+                $source = Read-ConflictScenarioSource
+                $tokens = $null
+                $errors = $null
+                $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+                Assert-Equal 0 @($errors).Count
+                Assert-True ($source -cmatch "Status\s*=\s*'Passed'") 'the scenario must report a pass result'
+                $parameters = Get-ScenarioParameterNames -Source $source
+                foreach ($required in @('ScenarioId','ExecutablePath','OwnedRoot','RunToken','OutputDirectory','SupportPath','WinAppPath')) {
+                    Assert-True ($parameters -ccontains $required) ('the scenario must accept ' + $required)
+                }
+                Assert-True ($parameters -ccontains 'LaunchProcess') 'the scenario must accept the launch seam'
+            }
+        },
+        @{
+            Name = 'the runner registers the conflict keep-both scenario without claiming the others'
+            Body = {
+                Assert-Equal '20-conflict-keep-both.ps1' (Get-UiAcceptanceScenarioFile -Name 'ConflictKeepBoth')
+                $names = @(Get-UiAcceptanceScenarioName)
+                Assert-True ($names -ccontains 'ConflictKeepBoth')
+                # The three decisions are separate scenarios. The aggregate entry must not be read as
+                # covering replace or skip, neither of which is implemented by this slice.
+                Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
+                Assert-True ($names -cnotcontains 'ConflictReplace')
+                Assert-True ($names -cnotcontains 'ConflictSkip')
+                foreach ($name in $names) {
+                    Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
+                }
+            }
+        },
+        @{
+            Name = 'the conflict scenario opens the dialog, captures the preview and decides exactly once'
+            Body = {
+                $source = Read-ConflictScenarioSource
+                Assert-Contains $source 'ResolveInboxConflictButton'
+                Assert-Contains $source 'ConflictComparisonDialog'
+                Assert-Contains $source 'ConflictIncomingPreview'
+                Assert-Contains $source 'ConflictKeepBothButton'
+                Assert-Contains $source 'IngestButton'
+                # The preview is captured before the decision, and the decision is dispatched once.
+                $previewAt = $source.IndexOf('ConflictIncomingPreview')
+                $decideAt = $source.IndexOf("-Step 'keep-both'")
+                Assert-True ($previewAt -gt 0 -and $decideAt -gt $previewAt) 'the preview must be captured before the decision'
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'keep-both'").Count)
+                # A conflict observed to change between observation and decision must fail, not re-decide.
+                Assert-Contains $source 'conflict.decision_state_changed'
+            }
+        },
+        @{
+            Name = 'the conflict scenario proves the outcome with read-only facts'
+            Body = {
+                $source = Read-ConflictScenarioSource
+                Assert-Contains $source 'snapshot --data-root'
+                Assert-True ([regex]::Matches($source, 'Read-ConflictSnapshot -EvidenceId').Count -ge 2) 'a before/after snapshot pair is required'
+                Assert-Contains $source 'Get-FileHash'
+                Assert-Contains $source 'Assert-UiPngBytes'
+                Assert-Contains $source 'Write-UiRedactedTreeEvidence'
+                # Both copies must be accounted for by hash and no stray artefact may remain.
+                Assert-Contains $source 'conflict.original_missing'
+                Assert-Contains $source 'conflict.copy_missing'
+                Assert-Contains $source 'conflict.extra_files'
+                Assert-Contains $source 'conflict.hash_mismatch'
+                Assert-Contains $source 'Test-UiAcceptanceFixtureAsset'
+            }
+        },
+        @{
+            Name = 'the conflict scenario is read-only after the decision and free of unsafe shortcuts'
+            Body = {
+                $source = Read-ConflictScenarioSource
+                Assert-NotContains $source 'Stop-Process -Name'
+                Assert-NotContains $source 'taskkill'
+                Assert-NotContains $source 'ui click'
+                Assert-NotContains $source 'Start-Sleep'
+                Assert-NotContains $source 'PickInboxFolder'
+                Assert-NotContains $source 'FolderPicker'
+                Assert-NotContains $source 'Microsoft.Data.Sqlite'
+                Assert-NotContains $source 'DirectorySettingsService'
+                Assert-NotContains $source 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT ='
+                # From the conflict phase on, nothing is written: the decision is the last mutation.
+                $marker = '# --- conflict phase ---'
+                Assert-Contains $source $marker
+                $conflictPhase = $source.Substring($source.IndexOf($marker))
+                Assert-NotContains $conflictPhase "'set-value'"
+            }
+        },
+        @{
+            Name = 'the conflict scenario addresses the dynamic row through its own inspection'
+            Body = {
+                $source = Read-ConflictScenarioSource
+                Assert-Contains $source 'Find-UiAcceptanceUniqueNode'
+                Assert-Contains $source 'Get-UiAcceptanceNodeSelector'
+                # The row is never invoked by a pre-built prefix nor by a generated identifier.
+                Assert-NotContains $source 'InboxCard_'
+                Assert-NotContains $source "invoke',`$photoRowPrefix"
+            }
+        },
+        @{
+            Name = 'the conflict scenario is readable by Windows PowerShell 5.1'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/20-conflict-keep-both.ps1'
+                if (-not [IO.File]::Exists($path)) { throw 'Conflict keep-both scenario is missing.' }
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+                $isAscii = $true
+                foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
                 Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
             }
         }
