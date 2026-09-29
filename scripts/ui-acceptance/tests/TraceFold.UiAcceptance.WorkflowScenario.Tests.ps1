@@ -36,6 +36,12 @@ function Read-SkipScenarioSource {
     return [IO.File]::ReadAllText($path)
 }
 
+function Read-ReplaceScenarioSource {
+    $path = Join-Path $script:uiRoot 'scenarios/21-conflict-replace.ps1'
+    if (-not [IO.File]::Exists($path)) { throw 'Conflict replace scenario is missing.' }
+    return [IO.File]::ReadAllText($path)
+}
+
 function Get-TestCases {
     return @(
         @{
@@ -196,10 +202,10 @@ function Get-TestCases {
                 Assert-Equal '20-conflict-keep-both.ps1' (Get-UiAcceptanceScenarioFile -Name 'ConflictKeepBoth')
                 $names = @(Get-UiAcceptanceScenarioName)
                 Assert-True ($names -ccontains 'ConflictKeepBoth')
-                # The three decisions are separate scenarios. The aggregate entry must not be read as
-                # covering replace or skip, neither of which this slice implements.
+                # The three decisions are separate scenarios; the aggregate entry must not be read
+                # as standing in for any of them.
                 Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
-                Assert-True ($names -cnotcontains 'ConflictReplace')
+                Assert-True ($names -ccontains 'ConflictKeepBoth')
                 foreach ($name in $names) {
                     Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
                 }
@@ -317,9 +323,9 @@ function Get-TestCases {
                 $names = @(Get-UiAcceptanceScenarioName)
                 Assert-True ($names -ccontains 'ConflictSkip')
                 Assert-Equal '20-conflict-keep-both.ps1' (Get-UiAcceptanceScenarioFile -Name 'ConflictKeepBoth')
-                # Replace is still unimplemented, and the aggregate entry must not stand in for it.
+                # Each decision is its own scenario; the aggregate entry must not stand in for any.
                 Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
-                Assert-True ($names -cnotcontains 'ConflictReplace')
+                Assert-Equal '21-conflict-replace.ps1' (Get-UiAcceptanceScenarioFile -Name 'ConflictReplace')
                 foreach ($name in $names) {
                     Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
                 }
@@ -416,6 +422,142 @@ function Get-TestCases {
             Body = {
                 $path = Join-Path $script:uiRoot 'scenarios/22-conflict-skip.ps1'
                 if (-not [IO.File]::Exists($path)) { throw 'Conflict skip scenario is missing.' }
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+                $isAscii = $true
+                foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
+                Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the conflict replace scenario exists, parses and reports Passed'
+            Body = {
+                $source = Read-ReplaceScenarioSource
+                $tokens = $null
+                $errors = $null
+                $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+                Assert-Equal 0 @($errors).Count
+                Assert-True ($source -cmatch "Status\s*=\s*'Passed'") 'the scenario must report a pass result'
+                $parameters = Get-ScenarioParameterNames -Source $source
+                foreach ($required in @('ScenarioId','ExecutablePath','OwnedRoot','RunToken','OutputDirectory','SupportPath','WinAppPath')) {
+                    Assert-True ($parameters -ccontains $required) ('the scenario must accept ' + $required)
+                }
+                Assert-True ($parameters -ccontains 'LaunchProcess') 'the scenario must accept the launch seam'
+            }
+        },
+        @{
+            Name = 'the runner registers all three conflict decisions separately'
+            Body = {
+                Assert-Equal '21-conflict-replace.ps1' (Get-UiAcceptanceScenarioFile -Name 'ConflictReplace')
+                $names = @(Get-UiAcceptanceScenarioName)
+                foreach ($name in @('ConflictKeepBoth','ConflictReplace','ConflictSkip')) {
+                    Assert-True ($names -ccontains $name) ('the registry must offer ' + $name)
+                }
+                # Replace, skip and keep-both are three scenarios: the aggregate entry must not be
+                # presented as covering them.
+                Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
+                foreach ($name in $names) {
+                    Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
+                }
+            }
+        },
+        @{
+            Name = 'the replace scenario captures both previews and decides exactly once'
+            Body = {
+                $source = Read-ReplaceScenarioSource
+                Assert-Contains $source 'ConflictComparisonDialog'
+                Assert-Contains $source 'ConflictIncomingPreview'
+                Assert-Contains $source 'ConflictReplaceButton'
+                Assert-Contains $source 'IngestButton'
+                $previewAt = $source.IndexOf('ConflictIncomingPreview')
+                $decideAt = $source.IndexOf("-Step 'replace'")
+                Assert-True ($previewAt -gt 0 -and $decideAt -gt $previewAt) 'the previews must be captured before the decision'
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'replace'").Count)
+                Assert-Contains $source 'conflict.decision_state_changed'
+                # A replace never decides the other way, and a failure never re-issues the decision.
+                Assert-NotContains $source "'ConflictSkipButton'"
+                Assert-NotContains $source "'ConflictKeepBothButton'"
+            }
+        },
+        @{
+            Name = 'the replace scenario waits for the pending row to leave the live UI'
+            Body = {
+                $source = Read-ReplaceScenarioSource
+                Assert-Contains $source "'ConflictComparisonDialog','--gone'"
+                # A replace consumes the incoming item, so the row leaving the live UI is the
+                # completion signal; the dialog closing alone only proves the overlay vanished.
+                Assert-Contains $source "wait-for',`$photoRowPrefix,'--gone'"
+                Assert-Contains $source 'conflict.resolution_incomplete'
+                $decideAt = $source.IndexOf("-Step 'replace'")
+                $rowGoneAt = $source.IndexOf("wait-for',`$photoRowPrefix,'--gone'")
+                Assert-True ($rowGoneAt -gt $decideAt) 'the row must be awaited after the decision'
+            }
+        },
+        @{
+            Name = 'the replace scenario proves replacement with read-only facts and a stable record key'
+            Body = {
+                $source = Read-ReplaceScenarioSource
+                Assert-Contains $source 'snapshot --data-root'
+                Assert-True ([regex]::Matches($source, 'Read-ConflictSnapshot -EvidenceId').Count -ge 2) 'a before/after snapshot pair is required'
+                # The record identity must come from the read-only projection, never from the database.
+                Assert-Contains $source 'assetKey'
+                Assert-Contains $source 'conflict.record_identity'
+                # Both keys must be present: comparing two absent values would pass vacuously.
+                Assert-Contains $source 'IsNullOrWhiteSpace($beforeKey)'
+                Assert-Contains $source 'conflict.hash_unchanged'
+                Assert-Contains $source 'conflict.extra_records'
+                Assert-Contains $source 'conflict.inbox_not_cleared'
+                Assert-Contains $source 'conflict.extra_files'
+                Assert-Contains $source 'Get-FileHash'
+                Assert-Contains $source 'Assert-UiPngBytes'
+                Assert-Contains $source 'Write-UiRedactedTreeEvidence'
+            }
+        },
+        @{
+            Name = 'the replace scenario uses a distinct verified fixture, never a byte copy'
+            Body = {
+                $source = Read-ReplaceScenarioSource
+                Assert-Contains $source 'photo-replacement.jpg'
+                Assert-Contains $source 'Test-UiAcceptanceFixtureAsset'
+                Assert-Contains $source 'conflict.fixture_identical'
+                # Both the original and the replacement must be verified before either is used.
+                Assert-True ([regex]::Matches($source, 'Test-UiAcceptanceFixtureAsset').Count -ge 2) 'both fixtures must be verified'
+            }
+        },
+        @{
+            Name = 'the replace scenario is read-only after the decision and free of unsafe shortcuts'
+            Body = {
+                $source = Read-ReplaceScenarioSource
+                Assert-NotContains $source 'Stop-Process -Name'
+                Assert-NotContains $source 'taskkill'
+                Assert-NotContains $source 'ui click'
+                Assert-NotContains $source 'Start-Sleep'
+                Assert-NotContains $source 'PickInboxFolder'
+                Assert-NotContains $source 'FolderPicker'
+                Assert-NotContains $source 'Microsoft.Data.Sqlite'
+                Assert-NotContains $source 'DirectorySettingsService'
+                Assert-NotContains $source 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT ='
+                $marker = '# --- conflict phase ---'
+                Assert-Contains $source $marker
+                $conflictPhase = $source.Substring($source.IndexOf($marker))
+                Assert-NotContains $conflictPhase "'set-value'"
+            }
+        },
+        @{
+            Name = 'the replace scenario addresses the dynamic row through its own inspection'
+            Body = {
+                $source = Read-ReplaceScenarioSource
+                Assert-Contains $source 'Find-UiAcceptanceUniqueNode'
+                Assert-Contains $source 'Get-UiAcceptanceNodeSelector'
+                Assert-NotContains $source 'InboxCard_'
+                Assert-NotContains $source "invoke',`$photoRowPrefix"
+            }
+        },
+        @{
+            Name = 'the replace scenario is readable by Windows PowerShell 5.1'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/21-conflict-replace.ps1'
+                if (-not [IO.File]::Exists($path)) { throw 'Conflict replace scenario is missing.' }
                 $bytes = [IO.File]::ReadAllBytes($path)
                 $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
                 $isAscii = $true

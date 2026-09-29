@@ -12,6 +12,7 @@ $script:uiAcceptanceScenarios = [ordered] @{
     # Each conflict decision is its own scenario. The aggregate 'Conflict' entry still points at a
     # script no task creates, so it must never be read as covering all three decisions.
     ConflictKeepBoth = '20-conflict-keep-both.ps1'
+    ConflictReplace = '21-conflict-replace.ps1'
     ConflictSkip  = '22-conflict-skip.ps1'
     Conflict      = '02-conflict.ps1'
     Library       = '03-library.ps1'

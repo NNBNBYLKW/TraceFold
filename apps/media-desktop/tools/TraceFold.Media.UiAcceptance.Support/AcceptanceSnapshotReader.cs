@@ -219,6 +219,10 @@ public static class AcceptanceSnapshotReader
             foreach (var asset in assets)
             {
                 writer.WriteStartObject();
+                // A derived, stable correlation key. The product id never leaves this connection:
+                // the key is a truncated digest of it, so two observations of the same record can be
+                // recognised as the same record without the database identifier leaving the tool.
+                writer.WriteString("assetKey", DeriveAssetKey(asset.Id));
                 writer.WriteString("actualFilename", Redact(asset.Filename, token));
                 writer.WriteString("displayName", asset.Display is null ? null : Redact(asset.Display, token));
                 writer.WriteString("mediaKind", asset.Kind is null ? null : Redact(asset.Kind, token));
@@ -306,6 +310,23 @@ public static class AcceptanceSnapshotReader
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// A stable, non-reversible correlation key for one formal record. Two read-only observations
+    /// of the same record produce the same key, and the key cannot be turned back into the product
+    /// identifier, so it is safe to carry into durable evidence.
+    /// </summary>
+    internal static string DeriveAssetKey(string productId)
+    {
+        if (string.IsNullOrEmpty(productId))
+        {
+            return string.Empty;
+        }
+
+        byte[] digest = System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(productId));
+        return Convert.ToHexString(digest)[..16].ToLowerInvariant();
     }
 
     internal static string Redact(string value, string token)

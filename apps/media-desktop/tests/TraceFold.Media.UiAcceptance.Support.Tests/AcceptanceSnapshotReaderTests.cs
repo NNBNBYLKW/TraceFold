@@ -38,6 +38,41 @@ public sealed class AcceptanceSnapshotReaderTests
         }
         Assert.Equal(before, File.ReadAllBytes(database));
         Assert.Equal(beforeWrite, File.GetLastWriteTimeUtc(database));
+    }
+
+    [Fact]
+    public void Formal_records_carry_a_stable_key_that_is_not_the_database_identifier()
+    {
+        using TempTree tree = TempTree.Create();
+        string dataRoot = Path.Combine(tree.Sandbox, "owned-data");
+        Directory.CreateDirectory(dataRoot);
+        string database = Path.Combine(dataRoot, "media-desktop.db");
+        CreateProductSchema(database);
+
+        SnapshotResult first = AcceptanceSnapshotReader.Read(dataRoot, tree.Token);
+        SnapshotResult second = AcceptanceSnapshotReader.Read(dataRoot, tree.Token);
+        Assert.Equal(SnapshotStatus.Available, first.Status);
+        Assert.Equal(SnapshotStatus.Available, second.Status);
+
+        string keyOf(string json)
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement asset = Assert.Single(
+                document.RootElement.GetProperty("formalAssets").EnumerateArray());
+            JsonElement key = asset.GetProperty("assetKey");
+            Assert.Equal(JsonValueKind.String, key.ValueKind);
+            return key.GetString()!;
+        }
+
+        string key = keyOf(first.Json!);
+        // The key is stable across observations, so a record can be recognised as the same record.
+        Assert.Equal(key, keyOf(second.Json!));
+        // It is a derived digest, not the identifier itself and not a GUID shape.
+        Assert.Equal(16, key.Length);
+        Assert.All(key, character => Assert.Contains(character, "0123456789abcdef"));
+        Assert.DoesNotContain("33333333", key, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(first.Json!, "33333333-3333", StringComparison.OrdinalIgnoreCase);
+
         Assert.False(File.Exists(database + "-wal"));
         Assert.False(File.Exists(database + "-shm"));
     }
