@@ -42,6 +42,12 @@ function Read-ReplaceScenarioSource {
     return [IO.File]::ReadAllText($path)
 }
 
+function Read-RetryScenarioSource {
+    $path = Join-Path $script:uiRoot 'scenarios/23-processing-failure-retry.ps1'
+    if (-not [IO.File]::Exists($path)) { throw 'Processing failure retry scenario is missing.' }
+    return [IO.File]::ReadAllText($path)
+}
+
 function Get-TestCases {
     return @(
         @{
@@ -558,6 +564,126 @@ function Get-TestCases {
             Body = {
                 $path = Join-Path $script:uiRoot 'scenarios/21-conflict-replace.ps1'
                 if (-not [IO.File]::Exists($path)) { throw 'Conflict replace scenario is missing.' }
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+                $isAscii = $true
+                foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
+                Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the processing failure retry scenario exists, parses and reports Passed'
+            Body = {
+                $source = Read-RetryScenarioSource
+                $tokens = $null
+                $errors = $null
+                $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+                Assert-Equal 0 @($errors).Count
+                Assert-True ($source -cmatch "Status\s*=\s*'Passed'") 'the scenario must report a pass result'
+                $parameters = Get-ScenarioParameterNames -Source $source
+                foreach ($required in @('ScenarioId','ExecutablePath','OwnedRoot','RunToken','OutputDirectory','SupportPath','WinAppPath')) {
+                    Assert-True ($parameters -ccontains $required) ('the scenario must accept ' + $required)
+                }
+                Assert-True ($parameters -ccontains 'LaunchProcess') 'the scenario must accept the launch seam'
+            }
+        },
+        @{
+            Name = 'the runner registers the retry scenario alongside the three conflict decisions'
+            Body = {
+                Assert-Equal '23-processing-failure-retry.ps1' (Get-UiAcceptanceScenarioFile -Name 'ProcessingFailureRetry')
+                $names = @(Get-UiAcceptanceScenarioName)
+                Assert-True ($names -ccontains 'ProcessingFailureRetry')
+                foreach ($name in @('ConflictKeepBoth','ConflictReplace','ConflictSkip')) {
+                    Assert-True ($names -ccontains $name) ('the registry must still offer ' + $name)
+                }
+                # The aggregate conflict entry still points at a script no task creates, so it must
+                # never be read as covering the conflict scenarios.
+                Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
+                foreach ($name in $names) {
+                    Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
+                }
+            }
+        },
+        @{
+            Name = 'the retry scenario starts processing and retries exactly once'
+            Body = {
+                $source = Read-RetryScenarioSource
+                Assert-Contains $source 'InboxStartProcessingButton'
+                Assert-Contains $source 'InboxRetryProcessingButton'
+                Assert-Contains $source 'InboxProcessingStep'
+                Assert-Contains $source 'InboxProcessingProgress'
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'retry'").Count)
+                # A dispatched action is never resent.
+                Assert-NotContains $source 'Start-Sleep'
+                Assert-NotContains $source "ConflictSkipButton"
+            }
+        },
+        @{
+            Name = 'changed sources reject retry and recover only after rescan and start'
+            Body = {
+                $source = Read-RetryScenarioSource
+                $retry = $source.IndexOf("-Step 'retry'", [StringComparison]::Ordinal)
+                $rescan = $source.IndexOf("-Step 'rescan'", [StringComparison]::Ordinal)
+                $restart = $source.IndexOf("-Step 'start-recovered'", [StringComparison]::Ordinal)
+                Assert-True ($retry -ge 0 -and $rescan -gt $retry -and $restart -gt $rescan)
+                Assert-Contains $source 'processing.changed_source_requires_rescan'
+                Assert-True ($source -cmatch "retryOutcome\s*=\s*'SourceChanged'")
+                Assert-True ($source -cmatch "recoveryAction\s*=\s*'RescanThenStart'")
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'retry'").Count)
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'start-recovered'").Count)
+            }
+        },
+        @{
+            Name = 'the retry scenario proves the failure with retained sources and unchanged hashes'
+            Body = {
+                $source = Read-RetryScenarioSource
+                Assert-Contains $source 'broken.mp4'
+                Assert-Contains $source 'broken.m4a'
+                Assert-Contains $source 'Test-UiAcceptanceFixtureAsset'
+                Assert-Contains $source 'processing.sources_missing'
+                Assert-Contains $source 'processing.sources_changed'
+                Assert-Contains $source 'sourceHashes'
+                Assert-Contains $source 'processing.failure_not_observed'
+                # The invalid pair is declared and verified like every other fixture, and the valid
+                # recovery pair comes from the manifest rather than from generated bytes.
+                Assert-Contains $source 'paired.mp4'
+                Assert-Contains $source 'paired.m4a'
+            }
+        },
+        @{
+            Name = 'the retry scenario records the observed states and reports what it could not see'
+            Body = {
+                $source = Read-RetryScenarioSource
+                # Brief states must be reported honestly rather than asserted from a fixed delay.
+                Assert-Contains $source 'processing-states.json'
+                Assert-Contains $source 'observed'
+                Assert-Contains $source 'unobserved'
+                Assert-Contains $source 'processing.recovered_not_observed'
+                # Every conclusion is paired with a read-only snapshot or a file hash.
+                Assert-Contains $source 'snapshot --data-root'
+                Assert-Contains $source 'Get-FileHash'
+            }
+        },
+        @{
+            Name = 'the retry scenario injects no fault and touches no product tool'
+            Body = {
+                $source = Read-RetryScenarioSource
+                Assert-NotContains $source 'ffmpeg.exe'
+                Assert-NotContains $source 'ffprobe.exe'
+                Assert-NotContains $source 'Microsoft.Data.Sqlite'
+                Assert-NotContains $source 'Stop-Process -Name'
+                Assert-NotContains $source 'taskkill'
+                Assert-NotContains $source 'ui click'
+                Assert-NotContains $source 'PickInboxFolder'
+                Assert-NotContains $source 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT ='
+                Assert-NotContains $source 'InboxCard_'
+            }
+        },
+        @{
+            Name = 'the retry scenario is readable by Windows PowerShell 5.1'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/23-processing-failure-retry.ps1'
+                if (-not [IO.File]::Exists($path)) { throw 'Processing failure retry scenario is missing.' }
                 $bytes = [IO.File]::ReadAllBytes($path)
                 $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
                 $isAscii = $true

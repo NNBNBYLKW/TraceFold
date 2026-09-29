@@ -14,6 +14,7 @@ $script:uiAcceptanceScenarios = [ordered] @{
     ConflictKeepBoth = '20-conflict-keep-both.ps1'
     ConflictReplace = '21-conflict-replace.ps1'
     ConflictSkip  = '22-conflict-skip.ps1'
+    ProcessingFailureRetry = '23-processing-failure-retry.ps1'
     Conflict      = '02-conflict.ps1'
     Library       = '03-library.ps1'
     Taxonomy      = '04-taxonomy.ps1'
