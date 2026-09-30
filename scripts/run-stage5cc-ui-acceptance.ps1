@@ -21,7 +21,7 @@ param(
     [Parameter(Mandatory)][string] $ProductDirectory,
     [Parameter(Mandatory)][string] $WinAppCliArchivePath,
     [string] $OutputDirectory,
-    [ValidateSet('All','StartupLayout','MainChain','Conflict','ConflictKeepBoth','ConflictReplace','ConflictSkip','ProcessingFailureRetry','Library','Taxonomy','Diagnostics','Visual')]
+    [ValidateSet('All','StartupLayout','MainChain','Conflict','ConflictKeepBoth','ConflictReplace','ConflictSkip','ProcessingFailureRetry','BatchMetadataUndo','Library','Taxonomy','Diagnostics','Visual')]
     [string[]] $Scenario = @('All')
 )
 

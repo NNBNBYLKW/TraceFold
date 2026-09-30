@@ -48,6 +48,12 @@ function Read-RetryScenarioSource {
     return [IO.File]::ReadAllText($path)
 }
 
+function Read-BatchScenarioSource {
+    $path = Join-Path $script:uiRoot 'scenarios/30-batch-metadata-undo.ps1'
+    if (-not [IO.File]::Exists($path)) { throw 'Batch metadata undo scenario is missing.' }
+    return [IO.File]::ReadAllText($path)
+}
+
 function Get-TestCases {
     return @(
         @{
@@ -684,6 +690,126 @@ function Get-TestCases {
             Body = {
                 $path = Join-Path $script:uiRoot 'scenarios/23-processing-failure-retry.ps1'
                 if (-not [IO.File]::Exists($path)) { throw 'Processing failure retry scenario is missing.' }
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+                $isAscii = $true
+                foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
+                Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the batch metadata scenario exists, parses and reports Passed, per ruling B'
+            Body = {
+                $source = Read-BatchScenarioSource
+                $tokens = $null
+                $errors = $null
+                $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+                Assert-Equal 0 @($errors).Count
+                Assert-True ($source -cmatch "Status\s*=\s*'Passed'") 'the scenario must report a pass result'
+                $parameters = Get-ScenarioParameterNames -Source $source
+                foreach ($required in @('ScenarioId','ExecutablePath','OwnedRoot','RunToken','OutputDirectory','SupportPath','WinAppPath')) {
+                    Assert-True ($parameters -ccontains $required) ('the scenario must accept ' + $required)
+                }
+                Assert-True ($parameters -ccontains 'LaunchProcess') 'the scenario must accept the launch seam'
+            }
+        },
+        @{
+            Name = 'the batch metadata scenario runs on the library editor because inbox metadata has no undo'
+            Body = {
+                $source = Read-BatchScenarioSource
+                # Ruling B must be recorded where the next reader will see it.
+                Assert-True ($source -cmatch 'Ruling B') 'the header must record the ruling'
+                Assert-Contains $source 'LibraryBatchEditDialog'
+                Assert-Contains $source 'LibraryBatchMetadataTab'
+                Assert-Contains $source 'LibraryBatchUndoButton'
+                # The inbox batch metadata operation exposes no undo, so this scenario must not
+                # pretend otherwise: no inbox batch control and no invented undo may appear.
+                Assert-NotContains $source 'BatchMetadataSubmitButton'
+                Assert-NotContains $source 'InboxBatchMetadataButton'
+                Assert-NotContains $source 'InboxBatchUndoButton'
+            }
+        },
+        @{
+            Name = 'the runner registers the batch metadata scenario alongside the other workflows'
+            Body = {
+                Assert-Equal '30-batch-metadata-undo.ps1' (Get-UiAcceptanceScenarioFile -Name 'BatchMetadataUndo')
+                $names = @(Get-UiAcceptanceScenarioName)
+                Assert-True ($names -ccontains 'BatchMetadataUndo')
+                # The aggregate conflict entry must still not stand in for the conflict scenarios.
+                Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
+                foreach ($name in $names) {
+                    Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
+                }
+            }
+        },
+        @{
+            Name = 'the batch metadata scenario appends and replaces authors tags and one series'
+            Body = {
+                $source = Read-BatchScenarioSource
+                Assert-Contains $source 'LibraryBatchAddAuthorInput'
+                Assert-Contains $source 'LibraryBatchAddTagInput'
+                Assert-Contains $source 'LibraryBatchMetadataModeList'
+                Assert-Contains $source 'LibraryBatchReplaceAuthorInput'
+                Assert-Contains $source 'LibraryBatchReplaceSeriesToggle'
+                Assert-Contains $source 'LibraryBatchReplaceTagInput'
+                Assert-Contains $source 'LibraryBatchDialogStatus'
+                Assert-Contains $source 'LibraryBatchApplyButton'
+                Assert-Contains $source 'Assert-LibraryUndoCount'
+                Assert-Contains $source 'LibraryBatchUndoBanner'
+                # Append supports authors and tags only; series is replace-or-clear, so the scenario
+                # must not claim an append of series.
+                Assert-NotContains $source 'LibraryBatchAddSeriesInput'
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'apply-append'").Count)
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'apply-replace'").Count)
+            }
+        },
+        @{
+            Name = 'the batch metadata scenario proves an invalid draft is refused and nothing changed'
+            Body = {
+                $source = Read-BatchScenarioSource
+                Assert-Contains $source 'library.invalid_draft'
+                Assert-Contains $source 'library.draft_changed'
+                # The invalid draft is the unchanged draft, which the product refuses by disabling
+                # apply; the scenario must observe that rather than claim a partial write, because
+                # the product's write is transactional.
+                Assert-Contains $source 'batch.invalid-draft'
+                Assert-Contains $source 'transactional'
+            }
+        },
+        @{
+            Name = 'the batch metadata scenario undoes exactly once and checks prior values and hashes'
+            Body = {
+                $source = Read-BatchScenarioSource
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'undo'").Count)
+                Assert-Contains $source 'library.undo'
+                Assert-Contains $source 'library.prior_values'
+                Assert-Contains $source 'library.file_changed'
+                Assert-Contains $source 'Get-FileHash'
+                Assert-Contains $source 'snapshot --data-root'
+                Assert-True ([regex]::Matches($source, 'Read-LibrarySnapshot -EvidenceId').Count -ge 3) 'before, applied and undone snapshots are required'
+            }
+        },
+        @{
+            Name = 'the batch metadata scenario is safe and independent'
+            Body = {
+                $source = Read-BatchScenarioSource
+                Assert-NotContains $source 'Stop-Process -Name'
+                Assert-NotContains $source 'taskkill'
+                Assert-NotContains $source 'ui click'
+                Assert-NotContains $source 'Start-Sleep'
+                Assert-NotContains $source 'PickInboxFolder'
+                Assert-NotContains $source 'Microsoft.Data.Sqlite'
+                Assert-NotContains $source 'DirectorySettingsService'
+                Assert-NotContains $source 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT ='
+                Assert-NotContains $source 'InboxCard_'
+                Assert-Contains $source 'Test-UiAcceptanceFixtureAsset'
+            }
+        },
+        @{
+            Name = 'the batch metadata scenario is readable by Windows PowerShell 5.1'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/30-batch-metadata-undo.ps1'
+                if (-not [IO.File]::Exists($path)) { throw 'Batch metadata undo scenario is missing.' }
                 $bytes = [IO.File]::ReadAllBytes($path)
                 $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
                 $isAscii = $true
