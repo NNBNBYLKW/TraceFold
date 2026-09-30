@@ -75,6 +75,14 @@ function New-WorkflowCompositeTree {
     return New-WorkflowTree -Elements @($picker, $terms)
 }
 
+function Convert-ToFlat {
+    param([Parameter(Mandatory)][object[]] $Elements)
+
+    $flat = ConvertTo-UiAcceptanceFlatNodes -Tree (New-WorkflowTree -Elements $Elements) `
+        -FailureCode 'ui.driver_schema_incompatible'
+    return ,@($flat)
+}
+
 function Get-TestCases {
     return @(
     @{
@@ -115,6 +123,105 @@ function Get-TestCases {
             Assert-Equal 2 @($nodes).Count
             Assert-Throws { Find-UiAcceptanceUniqueNode -Nodes $nodes -NativeType 'ListItem' `
                     -NamePrefix '待入库文件 paired.mp4' -FailureCode 'row' }
+        }
+    },
+    @{
+        Name = 'list rows come from the named container only, in render order, never from a sibling container'
+        Body = {
+            # The row prefix is shared by every row of the list, so it alone cannot tell a row from a
+            # same-prefixed item that belongs to the header or to the navigation pane.
+            $rowName = '正式文件 photo.jpg，实际文件 photo.jpg，图片'
+            $otherRowName = '正式文件 photo-third.jpg，实际文件 photo-third.jpg，图片'
+            $nestedRow = New-WorkflowNode -Type 'ListItem' -Name $rowName
+            $card = New-WorkflowNode -Type 'Group' -Name $rowName -Children @($nestedRow)
+            $gridRow = New-WorkflowNode -Type 'ListItem' -Name $otherRowName
+            $grid = New-WorkflowNode -Type 'List' -AutomationId 'LibraryGrid' -Name '正式文件列表' `
+                -Children @($card, $gridRow)
+            $headerRow = New-WorkflowNode -Type 'ListItem' -Name '正式文件 photo-replacement.jpg，实际文件 photo-replacement.jpg，图片'
+            $header = New-WorkflowNode -Type 'Group' -AutomationId 'LibraryListHeader' -Children @($headerRow)
+            $navItem = New-WorkflowNode -Type 'ListItem' -Name '正式文件 nav.jpg，实际文件 nav.jpg，图片' `
+                -AutomationId 'NavLibrary'
+            $nodes = ConvertTo-UiAcceptanceFlatNodes `
+                -Tree (New-WorkflowTree -Elements @($header, $navItem, $grid)) `
+                -FailureCode 'ui.driver_schema_incompatible'
+
+            $rows = Get-UiAcceptanceListRowNames -Nodes $nodes -ContainerId 'LibraryGrid' `
+                -NamePrefix '正式文件 ' -FailureCode 'grid'
+            Assert-Equal 2 @($rows).Count
+            Assert-Equal $rowName (@($rows)[0])
+            Assert-Equal $otherRowName (@($rows)[1])
+        }
+    },
+    @{
+        Name = 'a row reported off screen is left out and a repeated row is not collapsed'
+        Body = {
+            $rowName = '正式文件 photo.jpg，实际文件 photo.jpg，图片'
+            $visible = New-WorkflowNode -Type 'ListItem' -Name $rowName
+            $hiddenOther = New-WorkflowNode -Type 'ListItem' `
+                -Name '正式文件 hidden.jpg，实际文件 hidden.jpg，图片' -Offscreen $true
+            $visibleRepeat = New-WorkflowNode -Type 'ListItem' -Name $rowName
+            $hiddenRepeat = New-WorkflowNode -Type 'ListItem' -Name $rowName -Offscreen $true
+            $grid = New-WorkflowNode -Type 'List' -AutomationId 'LibraryGrid' `
+                -Children @($visible, $hiddenOther, $visibleRepeat, $hiddenRepeat)
+            $nodes = ConvertTo-UiAcceptanceFlatNodes `
+                -Tree (New-WorkflowTree -Elements @($grid)) -FailureCode 'ui.driver_schema_incompatible'
+
+            $rows = Get-UiAcceptanceListRowNames -Nodes $nodes -ContainerId 'LibraryGrid' `
+                -NamePrefix '正式文件 ' -FailureCode 'grid'
+            # Two identical rows are two rows, and the off-screen ones are none of them.
+            Assert-Equal 2 @($rows).Count
+            Assert-Equal $rowName (@($rows)[0])
+            Assert-Equal $rowName (@($rows)[1])
+        }
+    },
+    @{
+        Name = 'a missing or ambiguous row container is refused rather than guessed'
+        Body = {
+            $only = New-WorkflowNode -Type 'List' -AutomationId 'LibraryListHeader'
+            $nodes = Convert-ToFlat -Elements @($only)
+            Assert-Throws { Get-UiAcceptanceListRowNames -Nodes $nodes -ContainerId 'LibraryGrid' `
+                    -NamePrefix 'x' -FailureCode 'grid' }
+            $first = New-WorkflowNode -Type 'List' -AutomationId 'LibraryGrid' -GradientSelector 'lst-a'
+            $second = New-WorkflowNode -Type 'List' -AutomationId 'LibraryGrid' -GradientSelector 'lst-b'
+            $ambiguous = Convert-ToFlat -Elements @($first, $second)
+            Assert-Throws { Get-UiAcceptanceListRowNames -Nodes $ambiguous -ContainerId 'LibraryGrid' `
+                    -NamePrefix 'x' -FailureCode 'grid' }
+        }
+    },
+    @{
+        Name = 'a row set comparison ignores order but not repeats, and refuses a wrong set'
+        Body = {
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('b', 'a') -Expected @('a', 'b'))
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @() -Expected @())
+            # An extra row, a missing row and a substituted row are all different sets.
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a') -Expected @('a', 'b')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', 'b') -Expected @('a')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', 'c') -Expected @('a', 'b')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @() -Expected @('a')))
+            # A repeat is not the same as its absence: two identical rows must never equal one.
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', 'a') -Expected @('a')))
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('a', 'a') -Expected @('a', 'a'))
+        }
+    },
+    @{
+        Name = 'a named node query matches only the stated type, the exact name, and on-screen elements'
+        Body = {
+            $chipName = '移除作者筛选条件'
+            $right = New-WorkflowNode -Type 'Button' -Name $chipName -GradientSelector 'btn-chip-0001'
+            $wrongType = New-WorkflowNode -Type 'Text' -Name $chipName -GradientSelector 'txt-chip-0001'
+            $nameContains = New-WorkflowNode -Type 'Button' -Name ($chipName + 'x') -GradientSelector 'btn-other-0001'
+            $hidden = New-WorkflowNode -Type 'Button' -Name $chipName -GradientSelector 'btn-hidden-0001' -Offscreen $true
+            $nodes = ConvertTo-UiAcceptanceFlatNodes `
+                -Tree (New-WorkflowTree -Elements @($right, $wrongType, $nameContains, $hidden)) `
+                -FailureCode 'ui.driver_schema_incompatible'
+
+            $visible = Get-UiAcceptanceNamedNodes -Nodes $nodes -NativeType 'Button' -Name $chipName -VisibleOnly
+            Assert-Equal 1 @($visible).Count
+            Assert-Equal 'btn-chip-0001' (Get-UiAcceptanceNodeSelector -Node @($visible)[0] -FailureCode 'chip')
+            # Without the visibility filter a control inside a collapsed container is returned as well,
+            # which is exactly the false confirmation the callers must not accept.
+            $anywhere = Get-UiAcceptanceNamedNodes -Nodes $nodes -NativeType 'Button' -Name $chipName
+            Assert-Equal 2 @($anywhere).Count
         }
     },
     @{

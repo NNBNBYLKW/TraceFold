@@ -137,6 +137,112 @@ function Read-UiAcceptanceTree {
 
 <#
 .SYNOPSIS
+    Returns every node of a native type whose accessible name is exactly the stated name.
+
+.DESCRIPTION
+    The name is compared whole rather than as a substring, and the native type is part of the match,
+    so a control that merely mentions the name, or a same-named element of another type, is never
+    returned. Elements the product reports off screen can be excluded, which is what a caller needs
+    when a collapsed container keeps the controls it had already realised in the tree: without that
+    filter a term that was deselected still reads as if it were still selected.
+#>
+function Get-UiAcceptanceNamedNodes {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Nodes,
+        [Parameter(Mandatory)][string] $NativeType,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Name,
+        [switch] $VisibleOnly
+    )
+
+    $matches = @($Nodes | Where-Object {
+            $node = $_
+            $ok = ((Get-UiAcceptanceNodeProperty -Node $node -Name 'type') -ceq $NativeType) -and
+                ((Get-UiAcceptanceNodeProperty -Node $node -Name 'name') -ceq $Name)
+            if ($VisibleOnly) {
+                $ok = $ok -and ((Get-UiAcceptanceNodeProperty -Node $node -Name 'isOffscreen') -ceq 'False')
+            }
+            $ok
+        })
+    return ,$matches
+}
+
+<#
+.SYNOPSIS
+    Collects the rows one list container shows, in the order it renders them.
+
+.DESCRIPTION
+    Rows are the list items beneath the named container whose accessible name starts with the prefix
+    the caller states. The container is resolved by its own stable id and the walk stays inside it, so
+    a list item belonging to a header, a navigation pane or another list can never be read as a row of
+    this list. Elements the product reports off screen are left out, because a container whose pop-up
+    has been dismissed keeps what it had already realised in the tree. Repeats are kept: dropping a
+    duplicate name would make two rows look like one, which is exactly what a count is meant to catch.
+#>
+function Get-UiAcceptanceListRowNames {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Nodes,
+        [Parameter(Mandatory)][string] $ContainerId,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $NamePrefix,
+        [Parameter(Mandatory)][string] $FailureCode
+    )
+
+    $container = Find-UiAcceptanceUniqueNode -Nodes $Nodes -AutomationId $ContainerId `
+        -FailureCode $FailureCode
+    if ($null -eq $container) { throw $FailureCode }
+    $names = [System.Collections.Generic.List[string]]::new()
+    $pending = [System.Collections.Generic.Stack[object]]::new()
+    # Children are pushed in reverse so that the walk visits them in the order they are rendered.
+    $children = @(Get-UiAcceptanceNodeChildren -Node $container)
+    for ($index = $children.Count - 1; $index -ge 0; $index--) { $pending.Push($children[$index]) }
+    while ($pending.Count -gt 0) {
+        $node = $pending.Pop()
+        $name = Get-UiAcceptanceNodeProperty -Node $node -Name 'name'
+        if ((Get-UiAcceptanceNodeProperty -Node $node -Name 'type') -ceq 'ListItem' -and
+            (Get-UiAcceptanceNodeProperty -Node $node -Name 'isOffscreen') -ceq 'False' -and
+            $name.StartsWith($NamePrefix, [StringComparison]::Ordinal)) {
+            $names.Add($name)
+        }
+        $childNodes = @(Get-UiAcceptanceNodeChildren -Node $node)
+        for ($index = $childNodes.Count - 1; $index -ge 0; $index--) { $pending.Push($childNodes[$index]) }
+    }
+    return ,@($names.ToArray())
+}
+
+<#
+.SYNOPSIS
+    Compares two row collections as multisets, so order does not matter but repeats do.
+
+.DESCRIPTION
+    A row set is compared without regard to the order the rows were collected in, because the same set
+    may be read in a different order; it is not compared without regard to how many times a row
+    appears, because two identical rows must never compare equal to one. The comparison sorts both
+    sides ordinally, so its answer does not depend on the culture of the machine or on the PowerShell
+    version it runs on.
+#>
+function Test-UiAcceptanceRowSetMatch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Observed,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Expected
+    )
+
+    $observedSorted = [System.Collections.Generic.List[string]]::new()
+    foreach ($value in @($Observed)) { $observedSorted.Add([string] $value) }
+    $expectedSorted = [System.Collections.Generic.List[string]]::new()
+    foreach ($value in @($Expected)) { $expectedSorted.Add([string] $value) }
+    $observedSorted.Sort([System.StringComparer]::Ordinal)
+    $expectedSorted.Sort([System.StringComparer]::Ordinal)
+    if ($observedSorted.Count -ne $expectedSorted.Count) { return $false }
+    for ($index = 0; $index -lt $observedSorted.Count; $index++) {
+        if ($observedSorted[$index] -cne $expectedSorted[$index]) { return $false }
+    }
+    return $true
+}
+
+<#
+.SYNOPSIS
     Finds the one node matching every supplied criterion.
 
 .DESCRIPTION
@@ -366,6 +472,9 @@ Export-ModuleMember -Function @(
     'Get-UiAcceptanceNodeChildren',
     'ConvertTo-UiAcceptanceFlatNodes',
     'Read-UiAcceptanceTree',
+    'Get-UiAcceptanceNamedNodes',
+    'Get-UiAcceptanceListRowNames',
+    'Test-UiAcceptanceRowSetMatch',
     'Find-UiAcceptanceUniqueNode',
     'Get-UiAcceptanceNodeSelector',
     'Get-UiAcceptanceDescendantSelector',

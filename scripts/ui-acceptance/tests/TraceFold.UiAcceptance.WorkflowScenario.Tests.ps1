@@ -952,7 +952,7 @@ function Get-TestCases {
                 # The intersection is claimed from the visible rows and the record facts, never from
                 # a chip count alone: the chip count is asserted as its own separate fact.
                 Assert-Contains $source 'library.intersection_rows'
-                Assert-Contains $source 'library.intersection_asset'
+                Assert-Contains $source 'library.intersection_row_name'
                 Assert-Contains $source 'library.intersection_filters'
                 Assert-Contains $source 'library.intersection_search'
             }
@@ -978,21 +978,42 @@ function Get-TestCases {
                 # found beneath the stable outer id, never through an id of its own.
                 Assert-Contains $source 'Get-LibraryPickerTextBox'
                 Assert-Contains $source '-NativeType ''Edit'''
-                # The proving query has to be emptied again before the final one is typed, and the
-                # empty state cannot be read back, so the clear is asserted by the query being gone
-                # and by the rows the product shows again.
+                # The proving query has to be emptied again before the final one is typed. The box is
+                # emptied by the select-all-then-delete combination the driver supports, and the empty
+                # state is asserted from the placeholder the product shows only while it is empty,
+                # because an emptied text box reports its accessible name rather than a value.
                 Assert-Contains $source 'library.search_clear'
                 Assert-Contains $source 'Clear-LibrarySearchText'
-                Assert-Contains $source 'Wait-LibraryRowCount'
+                Assert-Contains $source "'end'"
+                Assert-Contains $source "'vk=0x08'"
+                Assert-Contains $source 'Test-LibrarySearchEmpty'
+                Assert-Contains $source '$searchPlaceholder'
                 # Each of the other three driven conditions is proven to change the visible rows in
                 # its own stage, so none of the five is merely listed as required.
                 Assert-Contains $source 'library.kind_rows'
                 Assert-Contains $source 'library.series_rows'
                 Assert-Contains $source 'library.filter_chips'
-                # A chip only counts when it is on screen: a collapsed flyout keeps previously
-                # realised controls in the tree, so a deselected term would otherwise still read as
-                # selected and confirm a condition that is not applied.
-                Assert-Contains $source "-Name 'isOffscreen') -ceq 'False'"
+                # Rows are read from the grid's own container only, on screen only, and never folded
+                # together by name, so a header item, a navigation item or a duplicate row can never
+                # stand in for a library row.
+                Assert-Contains $source 'Get-UiAcceptanceListRowNames'
+                Assert-Contains $source "-ContainerId 'LibraryGrid'"
+                # Every "is this element on screen" decision goes through the shared visible-only
+                # match: a collapsed flyout keeps previously realised controls in the tree, so a
+                # deselected term would otherwise still read as selected and confirm a condition that
+                # is not applied. That helper's own test covers the hidden-element case.
+                Assert-Contains $source 'Get-UiAcceptanceNamedNodes'
+                Assert-Contains $source '-VisibleOnly'
+                # Every stage asserts the exact set of named rows it expects and records that set,
+                # which is what stops a stage passing on the right number of the wrong rows.
+                Assert-Contains $source 'Wait-LibraryRowSet'
+                Assert-Contains $source '$firstAndThirdRows'
+                Assert-Contains $source '$thirdRowOnly'
+                Assert-Contains $source 'Save-LibraryStageState'
+                Assert-Contains $source '-RowSet $'
+                # The final state is one observation, asserting both the count and the whole row name.
+                Assert-Contains $source 'library.intersection_row_count'
+                Assert-Contains $source 'library.intersection_row_name'
                 # The five conditions are applied together in one draft and the final state is
                 # asserted as one row, that row's identity, four chips, the search value read back,
                 # and the media kind read back from its own picker.
@@ -1002,6 +1023,14 @@ function Get-TestCases {
                 Assert-Contains $source 'library.intersection_kind'
                 Assert-Contains $source '$finalChips -ne 4'
                 Assert-Contains $source '$finalSearch'
+                # The term families cannot be read back by value: native UIA gives every applied chip
+                # the same fixed accessible name, so exactly one chip per family is asserted and the
+                # labels are captured in a screenshot instead of being claimed as read values.
+                Assert-Contains $source 'Get-LibraryFlyoutChipCount'
+                Assert-Contains $source "'library-intersection-filters'"
+                # No temporary diagnostic may remain in the delivered scenario.
+                Assert-NotContains $source 'DIAGNOSTIC (temporary)'
+                Assert-NotContains $source 'library.diag'
             }
         },
         @{

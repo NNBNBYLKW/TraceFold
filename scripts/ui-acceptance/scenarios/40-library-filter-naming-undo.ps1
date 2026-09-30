@@ -11,15 +11,19 @@
 # inspector is the surface that establishes the metadata.
 #
 # What is proven:
-#   * each of the five conditions is shown to change the visible list on its own, and then all five
-#     are applied together and the list is exactly the one asset that satisfies them all, with the
-#     record identity of every asset unchanged and the sort order stable across repeated reads;
+#   * every stage asserts the exact set of named rows it expects, not a count, and each stage writes
+#     that set to the run's own output, so a stage cannot pass on the right number of the wrong rows;
 #   * media kind is proven by asking for videos, which empties the list, and then for images, which
-#     brings the three rows back, because every fixed asset is an image;
-#   * the search is proven by a query that matches no row, which empties the list, before the final
-#     query is left in place and read back from the product's own search box;
+#     brings the three named rows back, because every fixed asset is an image;
+#   * the search is proven by a query that matches no row, which empties the list, then by the empty
+#     state the product itself shows and the rows it restores, and finally by the query left in place
+#     and read back from the product's own search box;
 #   * the series and the term conditions are proven from their own stages, where adding the condition
-#     narrows the list, and each applied condition is confirmed by the chip the product renders;
+#     narrows the list to a named set, and each applied condition is confirmed by the chip the product
+#     renders;
+#   * all five conditions are then applied together, and one observation of the final state asserts
+#     both that exactly one row is shown and which row it is, with the applied media kind read back
+#     from its picker and every asset's record identity unchanged;
 #   * a rule row can be disabled, which removes its effect from the preview;
 #   * an invalid draft is refused by the product and never applied;
 #   * one naming apply changes display names only - record identity, physical file names and file
@@ -34,10 +38,19 @@
 #     success, and the product's own chip is what confirms the term landed in the draft;
 #   * the search box applies its query as the text changes, so it takes effect while it is typed and
 #     has no query handler to confirm it with;
-#   * an emptied text box reports its accessible name instead of a value, so the search box is
-#     asserted to no longer hold the query and by the visible rows the emptied query restores;
+#   * an emptied text box reports its accessible name instead of a value, and the harness refuses an
+#     argument list whose last element is empty, so an empty query is not assignable and not readable
+#     as a value: the box is emptied by selecting the whole text and deleting it, and the empty state
+#     is asserted from the placeholder the product shows only while the box is empty;
+#   * the applied-filter chips and the flyout's draft chips do not expose their term text: native UIA
+#     renders every one of them as a button whose accessible name is a fixed "remove this condition"
+#     phrase. The terms are therefore fixed by choosing the suggestion the product offers under the
+#     exact term name (a name that is read from the product), each family's chip count is asserted as
+#     exactly one, and the labels are captured in a screenshot rather than claimed to be read back;
 #   * the search is not one of the applied-filter chips, and clearing the filters keeps it, so it is
 #     asserted separately and emptied explicitly;
+#   * a collapsed flyout keeps the controls it had already realised in the tree, off screen, so every
+#     "this element is present" check filters on-screen elements only;
 #   * the naming rule rows are rendered in the reverse order of the rule set, so a rule is addressed
 #     by the label its row renders, never by its index or by its position in the tree.
 #
@@ -114,6 +127,10 @@ $seriesDraftChip = New-LibraryText -CodePoints @(
     0x79FB, 0x9664, 0x7CFB, 0x5217, 0x7B5B, 0x9009, 0x6761, 0x4EF6)
 $appliedChip = New-LibraryText -CodePoints @(
     0x79FB, 0x9664, 0x6B64, 0x7B5B, 0x9009, 0x6761, 0x4EF6)
+# The product shows this placeholder only while the search box is empty, so its presence is what an
+# emptied query is asserted with: an emptied text box reports its accessible name instead of a value.
+$searchPlaceholder = New-LibraryText -CodePoints @(
+    0x641C, 0x7D22, 0x6587, 0x4EF6, 0x540D, 0x6216, 0x663E, 0x793A, 0x540D, 0x79F0)
 # The search is matched against the display name or the actual file name, so a query that keeps the
 # hyphen excludes the first asset while the final query keeps two of the three.
 $searchQuery = 'photo-'
@@ -247,23 +264,110 @@ function Read-LibraryValueBySelector {
 
 <#
 .SYNOPSIS
-    Waits, by repeated observation, until the library shows an expected number of rows.
+    Waits, by repeated observation, until the grid shows exactly the expected rows.
 
 .DESCRIPTION
-    The product reloads the list in response to a condition change, so the count is read until it
-    reaches the expected value. Reads are the only pacing, because a fixed wait would encode one
-    machine's speed, and the count that was actually seen is reported when the wait runs out.
+    The product reloads the list after a condition changes, so the rows are read until the set matches
+    the expected one. That wait is what stops a list which is still reloading from being read: an empty
+    result is only accepted when the expected set is empty, so a transient empty list can never be
+    taken as the answer for a stage that expects rows. Reads are the only pacing, because a fixed delay
+    would encode one machine's speed, and the set that was actually seen is reported when the wait runs
+    out, so a wrong result names the rows the product really showed.
 #>
-function Wait-LibraryRowCount {
-    param([Parameter(Mandatory)][int] $Expected, [Parameter(Mandatory)][string] $Code)
+function Wait-LibraryRowSet {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Expected,
+        [Parameter(Mandatory)][string] $Code
+    )
 
     $deadline = [Diagnostics.Stopwatch]::StartNew()
-    $count = -1
+    $seen = @()
     while ($deadline.Elapsed.TotalSeconds -lt $LibraryWaitSeconds) {
-        $count = (Get-VisibleLibraryRows).Count
-        if ($count -eq $Expected) { return }
+        $seen = Get-VisibleLibraryRows
+        if (Test-UiAcceptanceRowSetMatch -Observed $seen -Expected $Expected) { return ,@($seen) }
     }
-    throw ($Code + '.' + [string] $count)
+    $slug = ConvertTo-UiAcceptanceSlug -Value ((@($seen) | Sort-Object) -join ' | ')
+    if ($slug.Length -gt 110) { $slug = $slug.Substring(0, 110) }
+    throw ($Code + '.n' + [string] @($seen).Count + '.' + $slug)
+}
+
+<#
+.SYNOPSIS
+    Reports whether the search box is showing its placeholder, which is how an empty query is visible.
+
+.DESCRIPTION
+    An emptied text box reports its accessible name instead of a value, so emptiness cannot be read
+    from the value. The product shows the placeholder only while the box is empty, and that element is
+    part of the product's own output, so it is what an empty search is asserted with.
+#>
+function Test-LibrarySearchEmpty {
+    $placeholder = Get-UiAcceptanceNamedNodes -Nodes (Read-LibraryNodes) -NativeType 'Text' `
+        -Name $searchPlaceholder -VisibleOnly
+    return (@($placeholder).Count -ge 1)
+}
+
+<#
+.SYNOPSIS
+    Records one stage's observed state as a run artifact.
+
+.DESCRIPTION
+    Each stage writes the rows the product showed, the number of conditions it reports as applied and
+    what the search box reads back, so every staged claim can be audited from the run's own output. The
+    search is recorded twice on purpose: `searchBoxReadBack` is what the box reported, and
+    `searchQuery` is that value only while the box is not empty. An emptied box reports its accessible
+    name rather than an empty string, so `searchQuery` is derived from the observed empty state instead
+    of pretending the box read back an empty value.
+#>
+function Save-LibraryStageState {
+    param(
+        [Parameter(Mandatory)][string] $Stage,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $RowSet,
+        [AllowEmptyCollection()][string[]] $SelectedTerms = @()
+    )
+
+    $isEmpty = Test-LibrarySearchEmpty
+    $readBack = Get-LibrarySearchValue -OuterId 'LibrarySearchBox' -Code 'library.search_value'
+    $record = [ordered] @{
+        stage              = $Stage
+        rows               = @($RowSet)
+        rowCount           = @($RowSet).Count
+        appliedChips       = Get-LibraryAppliedFilterCount
+        searchEmpty        = $isEmpty
+        searchBoxReadBack  = $readBack
+        searchQuery        = $(if ($isEmpty) { '' } else { $readBack })
+        selectedTerms      = @($SelectedTerms)
+    }
+    $relative = 'library-stage-' + (ConvertTo-UiAcceptanceSlug -Value $Stage) + '.json'
+    [IO.File]::WriteAllText((Join-Path $OutputDirectory $relative),
+        (ConvertTo-Json -InputObject $record -Depth 4), [Text.UTF8Encoding]::new($false))
+    $artifacts.Add($relative)
+    return $relative
+}
+
+<#
+.SYNOPSIS
+    Counts the visible chips of one family inside the filter flyout.
+
+.DESCRIPTION
+    The count is scoped to the flyout's own container and to elements that are on screen, so a chip the
+    flyout kept from an earlier opening cannot be counted as one that is applied now.
+#>
+function Get-LibraryFlyoutChipCount {
+    param([Parameter(Mandatory)][string] $Name)
+
+    $flyout = Find-UiAcceptanceUniqueNode -Nodes (Read-LibraryNodes) -AutomationId 'LibraryFilterFlyout' `
+        -FailureCode 'library.filter_flyout'
+    if ($null -eq $flyout) { throw 'library.filter_flyout' }
+    $count = 0
+    $pending = [System.Collections.Generic.Stack[object]]::new()
+    foreach ($child in @(Get-UiAcceptanceNodeChildren -Node $flyout)) { $pending.Push($child) }
+    while ($pending.Count -gt 0) {
+        $node = $pending.Pop()
+        $matches = Get-UiAcceptanceNamedNodes -Nodes @($node) -NativeType 'Button' -Name $Name -VisibleOnly
+        $count += @($matches).Count
+        foreach ($child in @(Get-UiAcceptanceNodeChildren -Node $node)) { $pending.Push($child) }
+    }
+    return $count
 }
 
 <#
@@ -371,25 +475,26 @@ function Assert-LibrarySearchValue {
 
 <#
 .SYNOPSIS
-    Empties the library search box and asserts that the query is gone.
+    Empties the library search box and asserts the product's own empty state.
 
 .DESCRIPTION
     Clearing cannot be expressed by typing, and the value cannot be assigned an empty string either,
     because the harness refuses to bind an argument list whose last element is empty. The box is
-    therefore emptied with the backspace key, pressed more times than the longest query this scenario
-    types. That is idempotent rather than timed: with the caret already at the start, the extra
-    presses delete nothing, so no assumption about where the caret is or how fast the box reacts is
-    involved.
+    therefore emptied through the keyboard: the caret is first moved to the end of the text, and then
+    the backspace key is pressed more times than the longest query this scenario types. That is
+    idempotent rather than timed, because with the caret already at the start the extra presses delete
+    nothing, so no assumption about how much text is there or how fast the box reacts is involved. The
+    keys are sent as one token list, because the driver takes the keys as a single argument.
 
-    Emptiness itself is not readable: an emptied text box reports its accessible name instead of a
-    value, so the check is that the query that was in the box is no longer there, and the caller
-    asserts the visible rows that the emptied query restores. That is the product's own result rather
-    than a value the driver cannot report.
+    Emptiness is then asserted from the product rather than from the value: an emptied text box reports
+    its accessible name instead of a value, so the check is that the placeholder the product shows only
+    while the box is empty is on screen again. If focus was not in the box, or the caret was not where
+    the deletion started from, this is what fails, so a query cannot be silently left in place. The
+    caller additionally asserts the rows the emptied query restores.
 #>
 function Clear-LibrarySearchText {
     param(
         [Parameter(Mandatory)][string] $OuterId,
-        [Parameter(Mandatory)][AllowEmptyString()][string] $PreviousQuery,
         [Parameter(Mandatory)][string] $Step
     )
 
@@ -398,13 +503,11 @@ function Clear-LibrarySearchText {
         -FailureCode 'library.search_input'
     if ($null -eq $outer) { throw 'library.search_input' }
     $inner = Get-LibraryPickerTextBox -Node $outer -Code 'library.search_input'
-    # The driver takes the keys as one argument of space-separated tokens, so the presses are joined
-    # into a single token list rather than passed as separate arguments.
-    $presses = @()
+    $presses = @('end')
     for ($index = 0; $index -lt 24; $index++) { $presses += 'vk=0x08' }
     $null = Invoke-LibraryKeyboard -Step ('search-' + $Step) -Code 'library.search_input' `
         -Arguments @('ui','send-keys',($presses -join ' '),'--target',$inner)
-    if ((Get-LibrarySearchValue -OuterId $OuterId -Code 'library.search_value') -ceq $PreviousQuery) {
+    if (-not (Test-LibrarySearchEmpty)) {
         $artifacts.Add((Save-LibraryEvidence -EvidenceId ('library-search-' + $Step) -Nodes (Read-LibraryNodes)))
         throw 'library.search_clear'
     }
@@ -470,26 +573,28 @@ function Get-AssetFacts {
 
 <#
 .SYNOPSIS
-    The library rows currently shown, in the order the product renders them.
+    The accessible name the product renders for one fixed asset's row.
 #>
-function Get-LibraryRowPrefix {
+function Get-LibraryRowName {
     param([Parameter(Mandatory)][string] $Filename)
     return $libraryRowDeclaredName.Replace($libraryRowDeclaredFilename, $Filename)
 }
 
+<#
+.SYNOPSIS
+    The library rows the grid is showing, in the order the product renders them.
+
+.DESCRIPTION
+    The rows come from the subtree of the grid's own container, so a list item belonging to the header,
+    the navigation pane or the filter flyout can never be read as a library row; an element the product
+    reports off screen is left out; and repeats are kept, so a duplicated name cannot make two rows look
+    like one. Returned as an array even when it holds one row, so a caller's count never collapses into
+    a scalar and an empty grid is reported as zero rows rather than as a missing property.
+#>
 function Get-VisibleLibraryRows {
-    $nodes = Read-LibraryNodes
-    $rows = @()
-    foreach ($node in $nodes) {
-        $name = Get-UiAcceptanceNodeProperty -Node $node -Name 'name'
-        if ((Get-UiAcceptanceNodeProperty -Node $node -Name 'type') -ceq 'ListItem' -and
-            $name.StartsWith($libraryRowGroupPrefix, [StringComparison]::Ordinal)) {
-            $rows += $name
-        }
-    }
-    # Returned as an array even when it holds one row, so a caller's count never collapses into a
-    # scalar and an empty grid is reported as zero rows rather than as a missing property.
-    return ,@($rows | Select-Object -Unique)
+    $rows = Get-UiAcceptanceListRowNames -Nodes (Read-LibraryNodes) -ContainerId 'LibraryGrid' `
+        -NamePrefix $libraryRowGroupPrefix -FailureCode 'library.grid_missing'
+    return ,@($rows)
 }
 
 <#
@@ -631,12 +736,10 @@ function Wait-LibraryNamedNode {
 
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     while ($deadline.Elapsed.TotalSeconds -lt $Seconds) {
-        $nodes = Read-LibraryNodes
-        $found = @($nodes | Where-Object {
-            (Get-UiAcceptanceNodeProperty -Node $_ -Name 'type') -ceq $NativeType -and
-            (Get-UiAcceptanceNodeProperty -Node $_ -Name 'name') -ceq $Name -and
-            (Get-UiAcceptanceNodeProperty -Node $_ -Name 'isOffscreen') -ceq 'False' })
-        if ($found.Count -ge 1) { return $true }
+        # The match is the shared one, so the visibility rule is the same one the helper tests cover.
+        $found = Get-UiAcceptanceNamedNodes -Nodes (Read-LibraryNodes) -NativeType $NativeType `
+            -Name $Name -VisibleOnly
+        if (@($found).Count -ge 1) { return $true }
     }
     return $false
 }
@@ -646,8 +749,10 @@ function Wait-LibraryNamedNode {
     Counts the filter conditions the page currently reports as applied.
 
 .DESCRIPTION
-    The applied conditions are the chips inside the page's own active-filter container, so the count
-    is taken from that container's subtree rather than from anywhere in the window. The container is
+    The applied conditions are the chips inside the page's own active-filter container, so the count is
+    taken from that container's subtree rather than from anywhere in the window. Only chips that are on
+    screen count: a chip whose condition was removed stays in the tree off screen until the container
+    is rebuilt, and counting it would report a condition that is no longer applied. The container is
     hidden while nothing is applied, which is reported as zero conditions.
 #>
 function Get-LibraryAppliedFilterCount {
@@ -663,9 +768,9 @@ function Get-LibraryAppliedFilterCount {
         $descendants.Add($node)
         foreach ($child in @(Get-UiAcceptanceNodeChildren -Node $node)) { $pending.Push($child) }
     }
-    return @($descendants | Where-Object {
-        (Get-UiAcceptanceNodeProperty -Node $_ -Name 'type') -ceq 'Button' -and
-        (Get-UiAcceptanceNodeProperty -Node $_ -Name 'name') -ceq $appliedChip }).Count
+    $chips = Get-UiAcceptanceNamedNodes -Nodes $descendants.ToArray() -NativeType 'Button' `
+        -Name $appliedChip -VisibleOnly
+    return @($chips).Count
 }
 
 <#
@@ -982,6 +1087,10 @@ try {
     # row name is the declared name with the declared filename replaced.
     $libraryRowGroupPrefix = $libraryRowDeclaredName.Substring(
         0, $libraryRowDeclaredName.IndexOf($libraryRowDeclaredFilename, [StringComparison]::Ordinal))
+    # The row name the product renders for each fixed asset, so a stage can name the rows it expects
+    # instead of only counting them.
+    $rowNames = @{}
+    foreach ($name in $fixtures) { $rowNames[$name] = Get-LibraryRowName -Filename $name }
 
     $assets = @($contract.fixtureAssets)
     $verified = @{}
@@ -1089,7 +1198,7 @@ try {
     foreach ($plan in $metadataPlan) {
         $planIndex++
         Invoke-LibraryRow -Step ('metadata-select-' + $planIndex) `
-            -NamePrefix (Get-LibraryRowPrefix -Filename ([string] $plan.file)) `
+            -NamePrefix (Get-LibraryRowName -Filename ([string] $plan.file)) `
             -NameContains ([string] $plan.file) -Code 'library.row_selection'
         if (-not (Test-LibraryWait -Arguments @('ui','wait-for','LibraryAuthorInput') -Seconds $LibraryWaitSeconds)) {
             throw 'library.inspector_missing'
@@ -1109,7 +1218,7 @@ try {
         }
         # Selecting another row flushes the inspector's metadata, which is how the product persists.
         Invoke-LibraryRow -Step ('metadata-flush-' + $planIndex) `
-            -NamePrefix (Get-LibraryRowPrefix -Filename ([string] $fixtures[0])) `
+            -NamePrefix (Get-LibraryRowName -Filename ([string] $fixtures[0])) `
             -NameContains ([string] $fixtures[0]) -Code 'library.row_selection'
     }
 
@@ -1142,64 +1251,78 @@ try {
     $sortedTwice = Get-VisibleLibraryRows
     if ((@($sortedOnce) -join '|') -cne (@($sortedTwice) -join '|')) { throw 'library.sort_stable' }
 
+    # The rows every stage has to see, named rather than counted, so no stage can pass on the right
+    # number of the wrong rows.
+    $allRows = @($rowNames[$fixtures[0]], $rowNames[$fixtures[1]], $rowNames[$fixtures[2]])
+    $firstAndThirdRows = @($rowNames[$fixtures[0]], $rowNames[$fixtures[2]])
+    $thirdRowOnly = @($rowNames[$fixtures[2]])
+
     # --- 1) media kind. All three assets are images, so this condition cannot narrow this set; what
     #        proves it is applied and effective is that asking for videos empties the list and asking
-    #        for images brings the three rows back. ---
+    #        for images brings the three named rows back. ---
     Open-LibraryFilterFlyout -Step 'kind-video-flyout' -Code 'library.kind_rows'
     Select-LibraryOption -ComboBoxId 'LibraryMediaFilter' -OptionName $videoOption `
         -Step 'kind-video' -Code 'library.kind_rows'
     Invoke-LibraryFilterApply -Step 'kind-video-apply' -Code 'library.kind_rows'
-    Wait-LibraryRowCount -Expected 0 -Code 'library.kind_rows'
+    $videoRows = Wait-LibraryRowSet -Expected @() -Code 'library.kind_rows'
+    $null = Save-LibraryStageState -Stage 'kind-video' -RowSet $videoRows
     Open-LibraryFilterFlyout -Step 'kind-image-flyout' -Code 'library.kind_rows'
     Select-LibraryOption -ComboBoxId 'LibraryMediaFilter' -OptionName $imageOption `
         -Step 'kind-image' -Code 'library.kind_rows'
     Invoke-LibraryFilterApply -Step 'kind-image-apply' -Code 'library.kind_rows'
-    Wait-LibraryRowCount -Expected 3 -Code 'library.kind_rows'
+    $imageRows = Wait-LibraryRowSet -Expected $allRows -Code 'library.kind_rows'
+    $null = Save-LibraryStageState -Stage 'kind-image' -RowSet $imageRows
 
-    # --- 2) author and content tag narrow the three rows in turn: 3 -> 2 -> 1. ---
+    # --- 2) the author and the content tag narrow the three rows in turn: 3 -> 2 -> 1. ---
     Open-LibraryFilterFlyout -Step 'author-flyout' -Code 'library.intersection_author'
     Set-LibraryFilterTerm -OuterId 'LibraryAuthorFilter' -Term $authorOne `
         -DraftChipName $authorDraftChip -Step 'author'
     Invoke-LibraryFilterApply -Step 'author-apply' -Code 'library.intersection_author'
+    $authorRows = Wait-LibraryRowSet -Expected $firstAndThirdRows -Code 'library.intersection_author'
     $authorChips = Get-LibraryAppliedFilterCount
     if ($authorChips -ne 2) { throw ('library.filter_chips.' + [string] $authorChips) }
-    Wait-LibraryRowCount -Expected 2 -Code 'library.intersection_author'
+    $null = Save-LibraryStageState -Stage 'author' -RowSet $authorRows -SelectedTerms @($authorOne)
 
     Open-LibraryFilterFlyout -Step 'tag-flyout' -Code 'library.intersection_tag'
     Set-LibraryFilterTerm -OuterId 'LibraryTagFilter' -Term $tagTwo `
         -DraftChipName $tagDraftChip -Step 'tag'
     Invoke-LibraryFilterApply -Step 'tag-apply' -Code 'library.intersection_tag'
+    $tagRows = Wait-LibraryRowSet -Expected $thirdRowOnly -Code 'library.intersection_tag'
     $tagChips = Get-LibraryAppliedFilterCount
     if ($tagChips -ne 3) { throw ('library.filter_chips.' + [string] $tagChips) }
-    Wait-LibraryRowCount -Expected 1 -Code 'library.intersection_tag'
+    $null = Save-LibraryStageState -Stage 'tag' -RowSet $tagRows -SelectedTerms @($tagTwo)
 
-    # --- 3) the series condition is proven on its own, from a fresh filter set: adding the real
-    #        series term narrows the three rows to the two that carry that series. ---
+    # --- 3) the series condition is proven on its own, from a fresh filter set: adding the real series
+    #        term narrows the three named rows to the two that carry that series. ---
     $null = Invoke-LibraryAction -Step 'clear-before-series' `
         -Arguments @('ui','invoke','LibraryClearFiltersButton') -Code 'library.series_rows'
-    Wait-LibraryRowCount -Expected 3 -Code 'library.filter_clear'
+    $clearedRows = Wait-LibraryRowSet -Expected $allRows -Code 'library.filter_clear'
+    $null = Save-LibraryStageState -Stage 'clear-before-series' -RowSet $clearedRows
     Open-LibraryFilterFlyout -Step 'series-flyout' -Code 'library.series_rows'
     Set-LibraryFilterTerm -OuterId 'LibrarySeriesFilter' -Term $seriesOne `
         -DraftChipName $seriesDraftChip -Step 'series'
     Invoke-LibraryFilterApply -Step 'series-apply' -Code 'library.series_rows'
-    Wait-LibraryRowCount -Expected 2 -Code 'library.series_rows'
+    $seriesRows = Wait-LibraryRowSet -Expected $firstAndThirdRows -Code 'library.series_rows'
+    $null = Save-LibraryStageState -Stage 'series' -RowSet $seriesRows -SelectedTerms @($seriesOne)
 
     # --- 4) the search condition is proven on its own. The box is typed into, so a second query would
-    #        be appended to the first: the proving query is emptied again and the rows are asserted
-    #        back to what the series alone shows before the final query is typed. The row change is
-    #        what proves a query was applied; the box's own value is asserted on top of it. ---
+    #        be appended to the first: the proving query is emptied again, the empty state is asserted
+    #        from the product, and the rows have to come back before the final query is typed. ---
     Set-LibrarySearchText -OuterId 'LibrarySearchBox' -Query $noMatchQuery -Step 'none'
-    Wait-LibraryRowCount -Expected 0 -Code 'library.search_rows'
+    $noMatchRows = Wait-LibraryRowSet -Expected @() -Code 'library.search_rows'
     Assert-LibrarySearchValue -OuterId 'LibrarySearchBox' -Query $noMatchQuery -Step 'none'
-    Clear-LibrarySearchText -OuterId 'LibrarySearchBox' -PreviousQuery $noMatchQuery -Step 'between'
-    Wait-LibraryRowCount -Expected 2 -Code 'library.search_rows'
+    $null = Save-LibraryStageState -Stage 'search-no-match' -RowSet $noMatchRows
+    Clear-LibrarySearchText -OuterId 'LibrarySearchBox' -Step 'between'
+    $restoredRows = Wait-LibraryRowSet -Expected $firstAndThirdRows -Code 'library.search_rows'
+    $null = Save-LibraryStageState -Stage 'search-cleared' -RowSet $restoredRows
     Set-LibrarySearchText -OuterId 'LibrarySearchBox' -Query $searchQuery -Step 'final'
-    Wait-LibraryRowCount -Expected 1 -Code 'library.search_rows'
+    $queryRows = Wait-LibraryRowSet -Expected $thirdRowOnly -Code 'library.search_rows'
     Assert-LibrarySearchValue -OuterId 'LibrarySearchBox' -Query $searchQuery -Step 'final'
+    $null = Save-LibraryStageState -Stage 'search-final' -RowSet $queryRows
 
     # --- 5) all five conditions at once. The draft already carries the applied series and search, so
-    #        this stage adds media kind, author and tag: the list must end up as exactly the one
-    #        asset that satisfies all five. ---
+    #        this stage adds media kind, author and tag: the list must end up as exactly the one asset
+    #        that satisfies all five. ---
     Open-LibraryFilterFlyout -Step 'final-flyout' -Code 'library.intersection_rows'
     Select-LibraryOption -ComboBoxId 'LibraryMediaFilter' -OptionName $imageOption `
         -Step 'final-kind' -Code 'library.intersection_rows'
@@ -1208,12 +1331,19 @@ try {
     Set-LibraryFilterTerm -OuterId 'LibraryTagFilter' -Term $tagTwo `
         -DraftChipName $tagDraftChip -Step 'final-tag'
     Invoke-LibraryFilterApply -Step 'final-apply' -Code 'library.intersection_rows'
-    Wait-LibraryRowCount -Expected 1 -Code 'library.intersection_rows'
-    $intersection = Get-VisibleLibraryRows
-    if ($intersection[0] -notlike ('*' + $fixtures[2] + '*')) {
-        $artifacts.Add((Save-LibraryEvidence -EvidenceId 'library-intersection-asset' -Nodes (Read-LibraryNodes)))
-        throw 'library.intersection_asset'
+    # One observation of the final state, asserting both how many rows it shows and the complete
+    # expected row name, so a stage that shows one row of the wrong asset cannot pass.
+    $finalObserved = Wait-LibraryRowSet -Expected $thirdRowOnly -Code 'library.intersection_rows'
+    if (@($finalObserved).Count -ne 1) {
+        throw ('library.intersection_row_count.' + [string] @($finalObserved).Count)
     }
+    if ([string] @($finalObserved)[0] -cne [string] $rowNames[$fixtures[2]]) {
+        $artifacts.Add((Save-LibraryEvidence -EvidenceId 'library-intersection-row' -Nodes (Read-LibraryNodes)))
+        throw 'library.intersection_row_name'
+    }
+    $null = Save-LibraryStageState -Stage 'intersection' -RowSet $finalObserved `
+        -SelectedTerms @($authorOne, $seriesOne, $tagTwo)
+
     # The search is not one of the applied-filter chips, so the four flyout conditions are asserted as
     # four chips and the search is asserted separately, from the product's own search box.
     $finalChips = Get-LibraryAppliedFilterCount
@@ -1223,25 +1353,32 @@ try {
     }
     $finalSearch = Get-LibrarySearchValue -OuterId 'LibrarySearchBox' -Code 'library.intersection_search'
     if ($finalSearch -cne $searchQuery) { throw 'library.intersection_search' }
-    # A single row is also what a smaller condition set would leave, so each flyout condition is read
-    # back from the product's own control: the picker renders the term it has applied, and the media
-    # picker shows the applied kind. The draft is cancelled afterwards, which changes nothing.
+
+    # One row is also what a smaller condition set would leave, so the applied conditions are read back
+    # from the product. The media kind and the search are readable values. The term filters are not:
+    # native UIA renders every applied term chip as a button whose accessible name is the same generic
+    # "remove this condition", and the term's own text is not exposed anywhere on the page. What is
+    # therefore verified for a term is that exactly one chip of that family is applied, that the term
+    # itself was fixed by choosing the suggestion the product offered under that exact accessible name,
+    # and the labels are captured in the screenshot saved below. No value is claimed to have been read
+    # that was not read.
     Open-LibraryFilterFlyout -Step 'final-verify-flyout' -Code 'library.intersection_filters'
-    foreach ($conditions in @(
-            @{ Name = $authorDraftChip; Code = 'library.intersection_author' },
-            @{ Name = $seriesDraftChip; Code = 'library.intersection_series' },
-            @{ Name = $tagDraftChip; Code = 'library.intersection_tag' })) {
-        if (-not (Wait-LibraryNamedNode -NativeType 'Button' -Name $conditions.Name `
-                    -Seconds $LibraryWaitSeconds)) {
-            $artifacts.Add((Save-LibraryEvidence -EvidenceId 'library-intersection-terms' -Nodes (Read-LibraryNodes)))
-            throw $conditions.Code
-        }
-    }
     $appliedKind = Read-LibraryValue -AutomationId 'LibraryMediaFilter' -Code 'library.intersection_kind'
     if ($appliedKind -cne $imageOption) {
         $artifacts.Add((Save-LibraryEvidence -EvidenceId 'library-intersection-kind' -Nodes (Read-LibraryNodes)))
-        throw ('library.intersection_kind.' + [string] $appliedKind.Length)
+        throw ('library.intersection_kind.' + (ConvertTo-UiAcceptanceSlug -Value $appliedKind))
     }
+    foreach ($family in @(
+            @{ Name = $authorDraftChip; Code = 'library.intersection_author' },
+            @{ Name = $seriesDraftChip; Code = 'library.intersection_series' },
+            @{ Name = $tagDraftChip; Code = 'library.intersection_tag' })) {
+        $familyChips = Get-LibraryFlyoutChipCount -Name $family.Name
+        if ($familyChips -ne 1) {
+            $artifacts.Add((Save-LibraryEvidence -EvidenceId 'library-intersection-terms' -Nodes (Read-LibraryNodes)))
+            throw ($family.Code + '.' + [string] $familyChips)
+        }
+    }
+    $null = Save-LibraryScreenshot -Selector 'LibraryFilterFlyout' -Name 'library-intersection-filters'
     # Narrowing the view must not touch the records behind it: all three assets are still present and
     # still carry the identity they had before any condition was applied.
     $filteredState = Read-LibraryState -EvidenceId 'library-intersection-state'
@@ -1257,10 +1394,11 @@ try {
 
     # The search survives a filter clear, so it is emptied on its own before the naming stages, which
     # operate on all three assets.
-    Clear-LibrarySearchText -OuterId 'LibrarySearchBox' -PreviousQuery $searchQuery -Step 'clear'
+    Clear-LibrarySearchText -OuterId 'LibrarySearchBox' -Step 'clear'
     $null = Invoke-LibraryAction -Step 'clear-filters' `
         -Arguments @('ui','invoke','LibraryClearFiltersButton') -Code 'library.filter'
-    Wait-LibraryRowCount -Expected 3 -Code 'library.filter_clear'
+    $restoredAll = Wait-LibraryRowSet -Expected $allRows -Code 'library.filter_clear'
+    $null = Save-LibraryStageState -Stage 'clear-filters' -RowSet $restoredAll
 
     # --- batch naming: prefix plus sequence, preview first ---
     Select-AllLibraryRows -Step 'select-all' -Expected '3'
@@ -1425,7 +1563,7 @@ try {
         ScenarioId       = $ScenarioId
         Status           = 'Passed'
         Reason           = ''
-        IntersectionRow  = [string] $intersection[0]
+        IntersectionRow  = [string] @($finalObserved)[0]
         ActiveFilters    = [string] $finalChips
         SearchValue      = $finalSearch
         # The conditions the single visible row is the intersection of, with the search named
