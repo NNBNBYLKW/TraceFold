@@ -871,7 +871,9 @@ function Get-TestCases {
                 # every selection goes through the shared helper - expand the box through its own
                 # id, resolve the option as the unique list item whose own name is the label, then
                 # invoke that option's own selector.
-                Assert-Equal 6 ([regex]::Matches($source, 'Select-LibraryOption -ComboBoxId').Count)
+                # Two sort controls, the media-kind condition in its proving and final stages, and
+                # the three naming rule kinds.
+                Assert-Equal 8 ([regex]::Matches($source, 'Select-LibraryOption -ComboBoxId').Count)
                 Assert-True ($source.Contains("ui','invoke',`$ComboBoxId)")) 'the box is expanded before an option is chosen'
                 Assert-True ($source.Contains("-Name 'name') -ceq `$OptionName")) 'an option is matched on its own name'
                 Assert-True ($source.Contains("-Name 'type') -ceq 'ListItem'")) 'an option is matched on its native type'
@@ -900,14 +902,21 @@ function Get-TestCases {
                 # so it must never be used on a filter picker.
                 Assert-NotContains $source "Set-LibraryTerm -OuterId 'LibraryAuthorFilter'"
                 Assert-NotContains $source "Set-LibraryTerm -OuterId 'LibraryTagFilter'"
+                Assert-NotContains $source "Set-LibraryTerm -OuterId 'LibrarySeriesFilter'"
                 # The applied conditions are counted from the page's own chip container, not read
                 # back from a static label.
                 Assert-Contains $source 'Get-LibraryAppliedFilterCount'
-                Assert-Contains $source 'library.intersection_filters'
-                # The driven filter pickers are the kind picker plus exactly two term pickers, so the
-                # scenario never claims a result for a picker it did not drive.
-                Assert-Equal 2 ([regex]::Matches($source, 'Set-LibraryFilterTerm -OuterId').Count)
-                Assert-NotContains $source "Set-LibraryFilterTerm -OuterId 'LibrarySeriesFilter'"
+                # All three term pickers are driven, each confirmed by its own draft chip, so no
+                # picker is listed as required and then never used.
+                Assert-Contains $source "Set-LibraryFilterTerm -OuterId 'LibraryAuthorFilter'"
+                Assert-Contains $source "Set-LibraryFilterTerm -OuterId 'LibraryTagFilter'"
+                Assert-Contains $source "Set-LibraryFilterTerm -OuterId 'LibrarySeriesFilter'"
+                Assert-Contains $source '-DraftChipName $authorDraftChip'
+                Assert-Contains $source '-DraftChipName $tagDraftChip'
+                Assert-Contains $source '-DraftChipName $seriesDraftChip'
+                # The series draft chip is the product's own name for it, given as code points so
+                # the scenario file stays pure ASCII.
+                Assert-Contains $source '$seriesDraftChip = New-LibraryText'
             }
         },
         @{
@@ -940,6 +949,59 @@ function Get-TestCases {
                 Assert-Contains $source 'LibrarySeriesInput'
                 Assert-Contains $source 'LibraryTagInput'
                 Assert-True ([regex]::Matches($source, 'photo-third.jpg').Count -ge 1) 'a third fixed asset is required'
+                # The intersection is claimed from the visible rows and the record facts, never from
+                # a chip count alone: the chip count is asserted as its own separate fact.
+                Assert-Contains $source 'library.intersection_rows'
+                Assert-Contains $source 'library.intersection_asset'
+                Assert-Contains $source 'library.intersection_filters'
+                Assert-Contains $source 'library.intersection_search'
+            }
+        },
+        @{
+            Name = 'the library scenario drives all five filter conditions and proves each changes the visible list'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                # The search box is driven for real: its stable outer id is resolved to the one inner
+                # native Edit, the query is typed through the product UI, the value is read back, and
+                # the visible rows are asserted for that query.
+                Assert-Contains $source "Set-LibrarySearchText -OuterId 'LibrarySearchBox'"
+                Assert-Contains $source 'library.search_input'
+                Assert-Contains $source 'library.search_value'
+                Assert-Contains $source 'library.search_rows'
+                Assert-Contains $source '$noMatchQuery'
+                # A query that matches nothing has to be shown to empty the list, so the search is
+                # proven to drive the visible result before the final query is left in place.
+                Assert-True ($source.Contains('$noMatchQuery')) 'a non-matching query is required to prove the search takes effect'
+                Assert-Contains $source 'Get-LibrarySearchValue'
+                Assert-Contains $source 'LibrarySearchBox'
+                # The box is a composite, so the value is read and typed through the one native Edit
+                # found beneath the stable outer id, never through an id of its own.
+                Assert-Contains $source 'Get-LibraryPickerTextBox'
+                Assert-Contains $source '-NativeType ''Edit'''
+                # The proving query has to be emptied again before the final one is typed, and the
+                # empty state cannot be read back, so the clear is asserted by the query being gone
+                # and by the rows the product shows again.
+                Assert-Contains $source 'library.search_clear'
+                Assert-Contains $source 'Clear-LibrarySearchText'
+                Assert-Contains $source 'Wait-LibraryRowCount'
+                # Each of the other three driven conditions is proven to change the visible rows in
+                # its own stage, so none of the five is merely listed as required.
+                Assert-Contains $source 'library.kind_rows'
+                Assert-Contains $source 'library.series_rows'
+                Assert-Contains $source 'library.filter_chips'
+                # A chip only counts when it is on screen: a collapsed flyout keeps previously
+                # realised controls in the tree, so a deselected term would otherwise still read as
+                # selected and confirm a condition that is not applied.
+                Assert-Contains $source "-Name 'isOffscreen') -ceq 'False'"
+                # The five conditions are applied together in one draft and the final state is
+                # asserted as one row, that row's identity, four chips, the search value read back,
+                # and the media kind read back from its own picker.
+                Assert-Contains $source "'kind'"
+                Assert-Contains $source "'search'"
+                Assert-Contains $source 'library.intersection_rows'
+                Assert-Contains $source 'library.intersection_kind'
+                Assert-Contains $source '$finalChips -ne 4'
+                Assert-Contains $source '$finalSearch'
             }
         },
         @{
