@@ -239,6 +239,14 @@ switch ($sub) {
         exit 0
     }
     'invoke' {
+        # A second lookup-failure shape: a generic code whose message names the missing slug. It is
+        # still a lookup-stage miss, so nothing was dispatched.
+        $slugMarker = $env:TRACEFOLD_FAKE_SLUG_MISS_MARKER
+        if (-not [string]::IsNullOrEmpty($slugMarker) -and -not (Test-Path -LiteralPath $slugMarker)) {
+            Set-Content -LiteralPath $slugMarker -Value 'used' -Encoding ASCII
+            [Console]::Out.Write('{"error":{"code":"internal_error","message":"element with slug ''itm-stale-0001'' not found"}}')
+            exit 1
+        }
         # Simulates the driver's lookup-stage miss: the action is never dispatched, and the answer
         # carries the driver's own element_not_found code. The marker file makes this happen exactly
         # once, independently of the shared invocation counter.

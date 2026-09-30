@@ -18,6 +18,9 @@ $script:uiAcceptanceScenarios = [ordered] @{
     # Ruling B: the batch metadata scenario runs on the library batch editor, because the inbox
     # batch metadata operation exposes no undo at all.
     BatchMetadataUndo = '30-batch-metadata-undo.ps1'
+    # Library filters, sorting and the naming tab only; the metadata tab belongs to the scenario
+    # above, so the two never overlap.
+    LibraryFilterNaming = '40-library-filter-naming-undo.ps1'
     Conflict      = '02-conflict.ps1'
     Library       = '03-library.ps1'
     Taxonomy      = '04-taxonomy.ps1'

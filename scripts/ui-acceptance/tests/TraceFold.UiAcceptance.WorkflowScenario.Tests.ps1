@@ -54,6 +54,12 @@ function Read-BatchScenarioSource {
     return [IO.File]::ReadAllText($path)
 }
 
+function Read-LibraryFilterScenarioSource {
+    $path = Join-Path $script:uiRoot 'scenarios/40-library-filter-naming-undo.ps1'
+    if (-not [IO.File]::Exists($path)) { throw 'Library filter and naming scenario is missing.' }
+    return [IO.File]::ReadAllText($path)
+}
+
 function Get-TestCases {
     return @(
         @{
@@ -810,6 +816,191 @@ function Get-TestCases {
             Body = {
                 $path = Join-Path $script:uiRoot 'scenarios/30-batch-metadata-undo.ps1'
                 if (-not [IO.File]::Exists($path)) { throw 'Batch metadata undo scenario is missing.' }
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+                $isAscii = $true
+                foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
+                Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the library filter and naming scenario exists, parses and reports Passed'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                $tokens = $null
+                $errors = $null
+                $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+                Assert-Equal 0 @($errors).Count
+                Assert-True ($source -cmatch "Status\s*=\s*'Passed'") 'the scenario must report a pass result'
+                $parameters = Get-ScenarioParameterNames -Source $source
+                foreach ($required in @('ScenarioId','ExecutablePath','OwnedRoot','RunToken','OutputDirectory','SupportPath','WinAppPath')) {
+                    Assert-True ($parameters -ccontains $required) ('the scenario must accept ' + $required)
+                }
+                Assert-True ($parameters -ccontains 'LaunchProcess') 'the scenario must accept the launch seam'
+            }
+        },
+        @{
+            Name = 'the library scenario covers filters sorting and naming without the metadata tab'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                Assert-Contains $source 'LibrarySearchBox'
+                Assert-Contains $source 'LibraryMediaFilter'
+                Assert-Contains $source 'LibraryAuthorFilter'
+                Assert-Contains $source 'LibrarySeriesFilter'
+                Assert-Contains $source 'LibraryTagFilter'
+                Assert-Contains $source 'LibraryFilterApplyButton'
+                Assert-Contains $source 'LibrarySortField'
+                Assert-Contains $source 'LibrarySortDirection'
+                Assert-Contains $source 'LibraryBatchNamingTab'
+                Assert-Contains $source 'LibraryNamingAddRuleButton'
+                Assert-Contains $source 'LibraryNamingPreviewList'
+                Assert-Contains $source 'LibraryNamingPresetList'
+                Assert-Contains $source 'LibraryBatchUndoButton'
+                # The batch metadata tab belongs to the other scenario, so this one must not use it.
+                Assert-NotContains $source 'LibraryBatchMetadataTab'
+                Assert-NotContains $source 'LibraryBatchAddAuthorInput'
+                Assert-NotContains $source 'LibraryBatchReplaceAuthorInput'
+            }
+        },
+        @{
+            Name = 'the library scenario expands a combo box and matches an option on its own label'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                # Measured product behaviour: a closed combo box exposes no list items at all, and
+                # the option labels are substrings of other accessible names in the same window, so
+                # every selection goes through the shared helper - expand the box through its own
+                # id, resolve the option as the unique list item whose own name is the label, then
+                # invoke that option's own selector.
+                Assert-Equal 6 ([regex]::Matches($source, 'Select-LibraryOption -ComboBoxId').Count)
+                Assert-True ($source.Contains("ui','invoke',`$ComboBoxId)")) 'the box is expanded before an option is chosen'
+                Assert-True ($source.Contains("-Name 'name') -ceq `$OptionName")) 'an option is matched on its own name'
+                Assert-True ($source.Contains("-Name 'type') -ceq 'ListItem'")) 'an option is matched on its native type'
+                # A rule kind must never be dispatched by its label as free text, because the driver
+                # refuses an ambiguous text selector and would report a false product failure.
+                Assert-True (-not $source.Contains("ui','invoke',`$prefixRuleOption")) 'a rule kind is never invoked as free text'
+                Assert-True (-not $source.Contains("ui','invoke',`$sequenceRuleOption")) 'a rule kind is never invoked as free text'
+                Assert-True (-not $source.Contains("ui','invoke',`$replaceRuleOption")) 'a rule kind is never invoked as free text'
+            }
+        },
+        @{
+            Name = 'the library scenario commits a filter term by choosing a suggestion and confirms its chip'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                # Measured product behaviour: the filter pickers have no query handler, so a typed
+                # term is committed only by choosing a suggestion. Typing therefore goes through the
+                # per-character transport, the suggestion is chosen with the arrow key, and the
+                # product's own draft chip is what confirms the term landed in the draft.
+                Assert-Contains $source 'Set-LibraryFilterTerm'
+                Assert-Contains $source 'send-input'
+                Assert-Contains $source "'down'"
+                Assert-Contains $source 'library.filter_suggestion'
+                Assert-Contains $source 'library.filter_chip'
+                Assert-Contains $source "'--verbatim'"
+                # The inspector helper confirms a term with Enter, which the filter pickers ignore,
+                # so it must never be used on a filter picker.
+                Assert-NotContains $source "Set-LibraryTerm -OuterId 'LibraryAuthorFilter'"
+                Assert-NotContains $source "Set-LibraryTerm -OuterId 'LibraryTagFilter'"
+                # The applied conditions are counted from the page's own chip container, not read
+                # back from a static label.
+                Assert-Contains $source 'Get-LibraryAppliedFilterCount'
+                Assert-Contains $source 'library.intersection_filters'
+                # The driven filter pickers are the kind picker plus exactly two term pickers, so the
+                # scenario never claims a result for a picker it did not drive.
+                Assert-Equal 2 ([regex]::Matches($source, 'Set-LibraryFilterTerm -OuterId').Count)
+                Assert-NotContains $source "Set-LibraryFilterTerm -OuterId 'LibrarySeriesFilter'"
+            }
+        },
+        @{
+            Name = 'the runner registers the library scenario without disturbing the conflict placeholder'
+            Body = {
+                Assert-Equal '40-library-filter-naming-undo.ps1' (Get-UiAcceptanceScenarioFile -Name 'LibraryFilterNaming')
+                $names = @(Get-UiAcceptanceScenarioName)
+                Assert-True ($names -ccontains 'LibraryFilterNaming')
+                # The aggregate conflict entry stays exactly as it was, so a passing slice can never
+                # be read as the whole suite passing.
+                Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
+                foreach ($name in $names) {
+                    Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
+                }
+            }
+        },
+        @{
+            Name = 'the library scenario proves a strict filter intersection and sort stability'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                Assert-Contains $source 'library.intersection'
+                Assert-Contains $source 'library.sort_stable'
+                Assert-Contains $source 'LibraryClearFiltersButton'
+                Assert-Contains $source 'LibraryActiveFilters'
+                # Three assets with distinguishable metadata are required for a meaningful
+                # intersection, and the metadata is set through the single-item inspector, not the
+                # batch metadata tab.
+                Assert-Contains $source 'LibraryInspectorOpenButton'
+                Assert-Contains $source 'LibraryAuthorInput'
+                Assert-Contains $source 'LibrarySeriesInput'
+                Assert-Contains $source 'LibraryTagInput'
+                Assert-True ([regex]::Matches($source, 'photo-third.jpg').Count -ge 1) 'a third fixed asset is required'
+            }
+        },
+        @{
+            Name = 'the library scenario exercises a disabled rule and an invalid draft without applying it'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                Assert-Contains $source 'library.rule_disabled'
+                Assert-Contains $source 'library.invalid_draft'
+                Assert-Contains $source 'LibraryNamingRuleKindSelector'
+                Assert-Contains $source 'LibraryNamingSequenceStartParameter'
+                # The rows are rendered in the reverse order of the rule set, so a rule is addressed
+                # by the label its row renders and never by its position in the tree.
+                Assert-Contains $source 'Get-LibraryRuleElementId'
+                Assert-Contains $source "-Suffix 'Enabled'"
+                Assert-Contains $source "-Suffix 'Delete'"
+                Assert-NotContains $source '$ruleRowsAfter'
+                Assert-NotContains $source '$enableIds'
+                # An invalid draft must be refused by the product, never applied.
+                Assert-Contains $source 'batch.invalid-draft'
+            }
+        },
+        @{
+            Name = 'the library scenario applies naming once and undoes once with fact checks'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'naming-apply'").Count)
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'undo'").Count)
+                Assert-Contains $source 'library.display_name'
+                Assert-Contains $source 'library.file_changed'
+                Assert-Contains $source 'library.record_identity'
+                Assert-Contains $source 'library.preset_changed'
+                Assert-Contains $source 'Get-FileHash'
+                Assert-Contains $source 'snapshot --data-root'
+                Assert-True ([regex]::Matches($source, 'Read-LibraryState -EvidenceId').Count -ge 3) 'before, named and undone snapshots are required'
+            }
+        },
+        @{
+            Name = 'the library scenario is safe and independent'
+            Body = {
+                $source = Read-LibraryFilterScenarioSource
+                Assert-NotContains $source 'Stop-Process -Name'
+                Assert-NotContains $source 'taskkill'
+                Assert-NotContains $source 'ui click'
+                Assert-NotContains $source 'Start-Sleep'
+                Assert-NotContains $source 'PickInboxFolder'
+                Assert-NotContains $source 'Microsoft.Data.Sqlite'
+                Assert-NotContains $source 'DirectorySettingsService'
+                Assert-NotContains $source 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT ='
+                Assert-NotContains $source 'InboxCard_'
+                Assert-Contains $source 'Test-UiAcceptanceFixtureAsset'
+                # A dispatch the harness refused never reached the product, so the declared blocked
+                # environment condition is what it must be reported as.
+                Assert-Contains $source 'library.desktop_unavailable'
+                Assert-True ($source.Contains("return 'library.desktop_unavailable'")) 'a refused dispatch must report the blocked condition'
+            }
+        },
+        @{
+            Name = 'the library scenario is readable by Windows PowerShell 5.1'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/40-library-filter-naming-undo.ps1'
+                if (-not [IO.File]::Exists($path)) { throw 'Library filter and naming scenario is missing.' }
                 $bytes = [IO.File]::ReadAllBytes($path)
                 $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
                 $isAscii = $true

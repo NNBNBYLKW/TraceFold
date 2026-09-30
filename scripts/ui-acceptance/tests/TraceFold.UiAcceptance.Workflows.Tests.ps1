@@ -87,6 +87,37 @@ function Get-TestCases {
         }
     },
     @{
+        Name = 'an element the driver reports twice while a pop-up is open collapses to one node'
+        Body = {
+            # Measured product behaviour: with a combo box drop-down open the pinned driver returns
+            # the same elements more than once, each copy carrying the identical slug and bounds.
+            $row = New-WorkflowNode -Type 'ListItem' -Name '待入库文件 paired.mp4，状态 需要前置处理' `
+                -GradientSelector 'itm-pairedmp4-0001'
+            $nodes = ConvertTo-UiAcceptanceFlatNodes -Tree (New-WorkflowTree -Elements @($row, $row)) `
+                -FailureCode 'ui.driver_schema_incompatible'
+            # A single node comes back as a scalar in Windows PowerShell, so the count is taken
+            # after re-wrapping rather than from the returned value.
+            Assert-Equal 1 @($nodes).Count
+            Assert-Equal 'itm-pairedmp4-0001' (Get-UiAcceptanceNodeSelector -Node @($nodes)[0] -FailureCode 'row')
+        }
+    },
+    @{
+        Name = 'nodes that share a slug but differ in an observed field are both kept'
+        Body = {
+            # The collapse must key on the whole observed identity, never on the slug alone, so a
+            # genuine pair of elements still reaches the uniqueness rule and is refused there.
+            $first = New-WorkflowNode -Type 'ListItem' -Name '待入库文件 paired.mp4，状态 需要前置处理' `
+                -GradientSelector 'itm-shared-0001'
+            $second = New-WorkflowNode -Type 'ListItem' -Name '待入库文件 paired.mp4，状态 待入库' `
+                -GradientSelector 'itm-shared-0001'
+            $nodes = ConvertTo-UiAcceptanceFlatNodes -Tree (New-WorkflowTree -Elements @($first, $second)) `
+                -FailureCode 'ui.driver_schema_incompatible'
+            Assert-Equal 2 @($nodes).Count
+            Assert-Throws { Find-UiAcceptanceUniqueNode -Nodes $nodes -NativeType 'ListItem' `
+                    -NamePrefix '待入库文件 paired.mp4' -FailureCode 'row' }
+        }
+    },
+    @{
         Name = 'the dynamic row is addressed by its ListItem type and name prefix, never by a sibling'
         Body = {
             $nodes = ConvertTo-UiAcceptanceFlatNodes -Tree (New-WorkflowRowTree) -FailureCode 'ui.driver_schema_incompatible'
@@ -181,7 +212,38 @@ function Get-TestCases {
         }
     },
     @{
-        Name = 'a timeout is reported and the mutation is never resent'
+        Name = 'a lookup miss reported as a generic slug error is also re-resolved'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-wf-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    Reset-UiAcceptanceMutationSteps
+                    $env:TRACEFOLD_FAKE_ARGV_LOG = Join-Path $base 'argv.jsonl'
+                    $env:TRACEFOLD_FAKE_SLUG_MISS_MARKER = Join-Path $base 'slug-miss-once'
+                    $script:slugResolves = 0
+                    $driver = Join-Path $script:uiRoot 'tests/fixtures/fake-winapp.ps1'
+                    $result = Invoke-UiAcceptanceResolvedMutation -StepId 'row.select' -ProcessId 4242 `
+                        -WinAppPath $driver -RunToken 't' -OwnedRoot $base -Verb 'invoke' `
+                        -ResolveSelector {
+                            $script:slugResolves = $script:slugResolves + 1
+                            return 'itm-photojpg-000' + $script:slugResolves
+                        } -FailureCode 'row.select' -MaxAttempts 3 -DeadlineSeconds 20
+                    Assert-Equal 'Passed' $result.Status
+                    # The grid re-renders, so the selector observed first is stale; re-resolving is
+                    # the only safe response because nothing was dispatched.
+                    Assert-Equal 2 $script:slugResolves
+                    $log = @(Get-Content -LiteralPath $env:TRACEFOLD_FAKE_ARGV_LOG | ForEach-Object { ConvertFrom-Json $_ })
+                    Assert-Equal 2 @($log | Where-Object { $_.argv[1] -ceq 'invoke' }).Count
+                }
+                finally {
+                    Remove-Item Env:TRACEFOLD_FAKE_ARGV_LOG -ErrorAction SilentlyContinue
+                    Remove-Item Env:TRACEFOLD_FAKE_SLUG_MISS_MARKER -ErrorAction SilentlyContinue
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'a timeout is reported and the mutation is never resent'
         Body = {
             $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-wf-' + [guid]::NewGuid().ToString('N'))
             [void][IO.Directory]::CreateDirectory($base)

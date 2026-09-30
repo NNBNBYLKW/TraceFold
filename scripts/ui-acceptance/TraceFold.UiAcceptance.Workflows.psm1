@@ -22,6 +22,9 @@ Import-Module (Join-Path $PSScriptRoot 'TraceFold.UiAcceptance.Driver.psm1') -Di
 
 # A lookup-stage miss means the driver never dispatched the action, so a re-resolve is safe.
 $script:uiAcceptanceLookupMissCode = 'element_not_found'
+# Some lookup paths answer with a generic code whose message names the missing slug instead. That is
+# still a lookup-stage miss, and matching it keeps the retry rule precise to lookup failures.
+$script:uiAcceptanceLookupMissMessage = '(?i)element with slug'
 
 <#
 .SYNOPSIS
@@ -54,11 +57,37 @@ function Get-UiAcceptanceNodeChildren {
 
 <#
 .SYNOPSIS
+    Builds the fully observed identity of one node, for collapsing repeated reports.
+
+.DESCRIPTION
+    Identity covers every field the driver reports for an element, so it answers one question only:
+    is this report indistinguishable from one already seen. A field the driver omits reads as empty,
+    which is correct here because two nodes that merely both omit it are still told apart by the
+    fields they do carry.
+#>
+function Get-UiAcceptanceNodeIdentity {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowNull()] $Node)
+
+    $fields = @('selector','type','automationId','className','name','isEnabled','isOffscreen',
+        'x','y','width','height')
+    $parts = foreach ($field in $fields) { Get-UiAcceptanceNodeProperty -Node $Node -Name $field }
+    return ($parts -join [string] [char] 31)
+}
+
+<#
+.SYNOPSIS
     Flattens one driver inspection response into a depth-first list of nodes.
 
 .DESCRIPTION
     The pinned driver answers with windows[].elements[] carrying nested children. A response that
     is not that shape fails with the caller's schema code rather than being coerced.
+
+    While a pop-up is open the driver reports some of the same elements more than once, always with
+    an identical slug and identical bounds. A repeat is one element seen twice, so the flat list
+    carries it once. The collapse is by full observed identity rather than by slug alone, so two
+    elements that happen to share a slug but differ anywhere the driver reports are both kept and
+    still fail the callers that require a unique match.
 #>
 function ConvertTo-UiAcceptanceFlatNodes {
     [CmdletBinding()]
@@ -69,6 +98,7 @@ function ConvertTo-UiAcceptanceFlatNodes {
 
     if ($null -eq $Tree -or $null -eq $Tree.PSObject.Properties['windows']) { throw $FailureCode }
     $nodes = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new()
     $pending = [System.Collections.Generic.Stack[object]]::new()
     foreach ($window in @($Tree.windows)) {
         if ($null -eq $window.PSObject.Properties['elements']) { throw $FailureCode }
@@ -76,7 +106,7 @@ function ConvertTo-UiAcceptanceFlatNodes {
     }
     while ($pending.Count -gt 0) {
         $node = $pending.Pop()
-        $nodes.Add($node)
+        if ($seen.Add((Get-UiAcceptanceNodeIdentity -Node $node))) { $nodes.Add($node) }
         foreach ($child in (Get-UiAcceptanceNodeChildren -Node $node)) { $pending.Push($child) }
     }
     return $nodes.ToArray()
@@ -242,15 +272,22 @@ function Invoke-UiAcceptanceResolvedMutation {
         if ($result.Status -ceq 'Passed') { return $result }
         if ($result.TimedOut) { return $result }
         # The driver reports a lookup-stage miss with a distinct error code and may classify it as
-        # Blocked or Failed; either way nothing was dispatched, so resolving again is safe. The code
-        # is the criterion, never the status, so a genuinely failed dispatch is never mistaken for a
-        # miss and never resent. A response with no parsed payload at all carries no code and is
-        # therefore returned to the caller.
+        # Blocked or Failed; either way nothing was dispatched, so resolving again is safe. Some
+        # lookup paths surface it as a generic internal error whose message names the missing slug,
+        # which is still a lookup-stage miss and not a dispatched action. The code or that message is
+        # the criterion, never the status, so a genuinely failed dispatch is never mistaken for a
+        # miss and never resent. A response with no parsed payload carries no code and is returned.
         $missCode = ''
+        $missMessage = ''
         if ($null -ne $result.Data -and $null -ne $result.Data.PSObject.Properties['error']) {
             $missCode = Get-UiAcceptanceNodeProperty -Node $result.Data.error -Name 'code'
+            $missMessage = Get-UiAcceptanceNodeProperty -Node $result.Data.error -Name 'message'
         }
-        if ($missCode -ceq $script:uiAcceptanceLookupMissCode) {
+        elseif (-not [string]::IsNullOrWhiteSpace([string] $result.Error)) {
+            $missMessage = [string] $result.Error
+        }
+        if ($missCode -ceq $script:uiAcceptanceLookupMissCode -or
+            $missMessage -match $script:uiAcceptanceLookupMissMessage) {
             continue
         }
         return $result
