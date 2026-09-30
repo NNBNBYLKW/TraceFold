@@ -10,6 +10,74 @@ namespace TraceFold.Media.Infrastructure.Tests.Persistence;
 public sealed class LibraryBatchEditPersistenceTests
 {
     [Fact]
+    public async Task New_series_is_persisted_before_the_batch_updates_formal_assets()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        LibraryBatchFixture fixture = await database.SeedLibraryBatchFixtureAsync(2);
+        BatchMetadataDraft metadata = BatchMetadataDraft.Create(
+            BatchMetadataMode.Replace,
+            BatchMetadataSetEdit.Unchanged,
+            new(
+                BatchMetadataFieldOperation.Replace,
+                BatchTaxonomyReference.New(TaxonomyKind.Series, "New series")),
+            BatchMetadataSetEdit.Unchanged);
+        EfLibraryBatchEditStore store = CreateStore(database);
+
+        LibraryBatchStoreResult applied = await store.ApplyAsync(
+            fixture.Selection,
+            Draft(metadata, null),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(applied.Succeeded, applied.ErrorCode);
+        Assert.NotNull(applied.UndoReceipt);
+        IReadOnlyList<PersistedLibraryAssetSnapshot> updated =
+            await database.ReadFormalAssetsAsync(fixture.AssetIds);
+        Guid seriesId = Assert.IsType<Guid>(updated[0].SeriesId);
+        Assert.All(updated, row => Assert.Equal(seriesId, row.SeriesId));
+        Assert.Equal(1, await database.CountTaxonomyTermsAsync(
+            TaxonomyKind.Series, "New series"));
+
+        LibraryBatchUndoResult undone = await store.UndoAsync(
+            applied.UndoReceipt,
+            TestContext.Current.CancellationToken);
+        Assert.True(undone.Succeeded, undone.ErrorCode);
+        Assert.All(await database.ReadFormalAssetsAsync(fixture.AssetIds),
+            row => Assert.Null(row.SeriesId));
+    }
+
+    [Fact]
+    public async Task Failed_batch_rolls_back_a_new_series_and_every_asset_update()
+    {
+        await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
+        await database.MigrateAsync();
+        LibraryBatchFixture fixture = await database.SeedLibraryBatchFixtureAsync(2);
+        await database.CreateFormalAssetUpdateFailureTriggerAsync(fixture.AssetIds[1]);
+        BatchMetadataDraft metadata = BatchMetadataDraft.Create(
+            BatchMetadataMode.Replace,
+            BatchMetadataSetEdit.Unchanged,
+            new(
+                BatchMetadataFieldOperation.Replace,
+                BatchTaxonomyReference.New(TaxonomyKind.Series, "Rolled back series")),
+            BatchMetadataSetEdit.Unchanged);
+
+        LibraryBatchStoreResult result = await CreateStore(database).ApplyAsync(
+            fixture.Selection,
+            Draft(metadata, null),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("library.batch.persistence_failed", result.ErrorCode);
+        Assert.Equal(0, await database.CountTaxonomyTermsAsync(
+            TaxonomyKind.Series, "Rolled back series"));
+        Assert.All(await database.ReadFormalAssetsAsync(fixture.AssetIds), row =>
+        {
+            Assert.Null(row.SeriesId);
+            Assert.Equal(0, row.MetadataVersion);
+        });
+    }
+
+    [Fact]
     public async Task Metadata_and_names_commit_together_once()
     {
         await using TestMediaDatabase database = await TestMediaDatabase.CreateAsync();
