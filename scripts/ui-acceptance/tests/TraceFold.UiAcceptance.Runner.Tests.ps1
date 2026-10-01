@@ -993,7 +993,7 @@ function Get-TestCases {
             }
         },
         @{
-            Name = 'a named request for an unimplemented scenario is refused without dispatch'
+            Name = 'a request whose only entry is missing is blocked before dispatch with zero dispatch'
             Body = {
                 $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
                 try {
@@ -1012,15 +1012,20 @@ function Get-TestCases {
                     Assert-Equal '' $entry.reportPath
                     Assert-Equal $false $entry.complete
 
-                    # Refused before any product, driver or process question was asked: those are
-                    # unmet here too, and the answer is still only about the missing entry.
+                    # Nothing survived the precheck, so the precheck is what stopped the batch:
+                    # the flag says exactly that, and it must not be reserved for the 'All' case.
                     Assert-Equal 'request' $summary.checks.scope
                     Assert-Equal 1 $summary.checks.missingCount
                     Assert-Equal 'Visual' @($summary.checks.missing)[0].id
                     Assert-Equal 0 $summary.checks.dispatchedCount
+                    Assert-Equal $true $summary.checks.blockedBeforeDispatch
+
+                    # Refused before any product, driver or process question was asked: those are
+                    # unmet here too, and the answer is still only about the missing entry.
                     $children = @([IO.Directory]::GetFileSystemEntries($out) | ForEach-Object { [IO.Path]::GetFileName($_) })
                     Assert-Equal 1 $children.Count
                     Assert-Equal 'summary.json' $children[0]
+                    Assert-True (-not [IO.Directory]::Exists((Join-Path $repo 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/bin/stage5cc-bootstrap')))
                 }
                 finally { Remove-UiTestTree -Path $base }
             }
@@ -1044,6 +1049,7 @@ function Get-TestCases {
                     Assert-Equal 0 $summary.checks.missingCount
                     Assert-Equal 0 @($summary.checks.missing).Count
                     Assert-Equal $false $summary.checks.blockedBeforeDispatch
+                    Assert-Equal 0 $summary.checks.dispatchedCount
                 }
                 finally { Remove-UiTestTree -Path $base }
             }
@@ -1127,6 +1133,55 @@ function Get-TestCases {
                     }
                     Assert-NotContains $first.Text $base
                     Assert-NotContains $second.Text $base
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a preparation failure never counts as a dispatched scenario'
+            Body = {
+                $ledger = New-Object 'System.Collections.Generic.List[string]'
+                $probe = @{ Invoked = 0 }
+                try {
+                    # Everything before the scenario lives in -Prepare: a root that was refused,
+                    # a driver that did not unpack, an output directory that already exists.
+                    Assert-Throws {
+                        Invoke-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger `
+                            -Prepare { throw 'owned_root_create_refused' } `
+                            -Invoke { $probe.Invoked = $probe.Invoked + 1; return ([pscustomobject]@{ Status = 'Passed' }) }
+                    }
+                    Assert-Equal 0 $ledger.Count
+                    Assert-Equal 0 $probe.Invoked
+                }
+                finally { $ledger.Clear() }
+            }
+        },
+        @{
+            Name = 'one real scenario invocation counts exactly one dispatch'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    $entry = Join-Path $base 'entry.ps1'
+                    [IO.File]::WriteAllText($entry, "param([string] `$ScenarioId)`nreturn [pscustomobject]@{ Status = 'Passed' }`n", [Text.UTF8Encoding]::new($false))
+                    $ledger = New-Object 'System.Collections.Generic.List[string]'
+                    $probe = @{ Invoked = 0 }
+                    $outcome = Invoke-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger `
+                        -Prepare { return @{ Marker = 'prepared' } } `
+                        -Invoke {
+                            param($prepared)
+                            $probe.Invoked = $probe.Invoked + 1
+                            Assert-Equal 'prepared' $prepared.Marker
+                            return (Invoke-UiAcceptanceScenario -Path $entry -Arguments @{ ScenarioId = 'visual' })
+                        }
+                    Assert-Equal 1 $ledger.Count
+                    Assert-Equal 'Visual' $ledger[0]
+                    Assert-Equal 1 $probe.Invoked
+                    Assert-Equal 'Passed' $outcome.Status
+
+                    # The same scenario is never counted twice, even if the walk asks again.
+                    Assert-Throws { Invoke-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger -Prepare { } -Invoke { } }
+                    Assert-Equal 1 $ledger.Count
                 }
                 finally { Remove-UiTestTree -Path $base }
             }

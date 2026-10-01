@@ -90,6 +90,12 @@ function Get-Stage5CCOverallStatus {
     stopped dispatch, so a reader can verify the gate from disk. It never carries a path:
     summaries are shared artifacts and must stay free of machine specific locations. The
     observation time comes from the check itself, not from the moment the summary is written.
+
+    'blockedBeforeDispatch' has exactly one meaning: the completeness precheck stopped this
+    batch, so no scenario was dispatched at all. A later stage refusing to run (the product,
+    the pinned driver, the interactive desktop) is not this case and must stay false.
+    'dispatchedCount' counts scenarios that really reached their invocation, so a root or
+    driver that never came up is never counted.
 #>
 function New-Stage5CCCompletenessNode {
     param(
@@ -297,8 +303,9 @@ if ($pending.Count -gt 0) {
 }
 
 if ($pending.Count -eq 0) {
-    # Every requested entry was refused above, so there is nothing left to publish, own or run.
-    $checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $false -DispatchedCount 0
+    # Every requested entry was refused above, so there is nothing left to publish, own or run:
+    # the precheck is what stopped this batch, and that is what the flag reports.
+    $checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $true -DispatchedCount 0
     $refusedStatus = Get-Stage5CCOverallStatus -Index $index
     $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $refusedStatus -Reason 'scenario_entry_missing' -Checks $checks)
     [Console]::Out.WriteLine(('Stage 5CC: ' + $refusedStatus + ' (scenario_entry_missing)'))
@@ -373,53 +380,63 @@ foreach ($name in $pending) {
         }
         continue
     }
-    [void] $dispatched.Add($name)
 
     try {
-        $runRoot = New-UiAcceptanceRunRoot -SupportPath $supportExecutable `
-            -ParentDirectory ([IO.Path]::GetTempPath()) -RunId $runId -RunToken $runToken
-        $runSupport = Join-Path $runRoot 'support'
-        $runDriver = Join-Path $runRoot 'winapp'
-        Copy-Item -LiteralPath $supportRoot -Destination $runSupport -Recurse -Force
-        [void][IO.Directory]::CreateDirectory($runDriver)
-        Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
-        if (-not [IO.File]::Exists((Join-Path $runDriver 'winapp.exe'))) { throw 'pinned_driver_executable_missing' }
-
-        $entryArguments = @{
-            ScenarioId        = (ConvertTo-UiAcceptanceSlug -Value $name)
-            ExecutablePath    = $productExecutable
-            ContractPath      = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
-            OwnedRoot         = $runRoot
-            RunToken          = $runToken
-            OutputDirectory   = $runOutput
-            SupportPath       = (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe')
-            WinAppPath        = (Join-Path $runDriver 'winapp.exe')
+        # Preparation and invocation are separate deliberately: everything that can fail before
+        # the scenario exists lives in the prepare step, so a root or driver that never came up
+        # is reported as a blocked setup and never as a dispatched scenario.
+        $prepareBody = {
+            $runRoot = New-UiAcceptanceRunRoot -SupportPath $supportExecutable `
+                -ParentDirectory ([IO.Path]::GetTempPath()) -RunId $runId -RunToken $runToken
+            $runSupport = Join-Path $runRoot 'support'
+            $runDriver = Join-Path $runRoot 'winapp'
+            Copy-Item -LiteralPath $supportRoot -Destination $runSupport -Recurse -Force
+            [void][IO.Directory]::CreateDirectory($runDriver)
+            Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
+            if (-not [IO.File]::Exists((Join-Path $runDriver 'winapp.exe'))) { throw 'pinned_driver_executable_missing' }
         }
 
-        $scenarioBody = { Invoke-UiAcceptanceScenario -Path $scenarioPath -Arguments $entryArguments }
-        $cleanupBody = {
-            $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $runRoot
-            if ($ledger.Count -gt 0) {
-                $null = Stop-OwnedProcessTree -Ledger $ledger -ApprovedDirectories @($product)
+        $invokeBody = {
+            $entryArguments = @{
+                ScenarioId        = (ConvertTo-UiAcceptanceSlug -Value $name)
+                ExecutablePath    = $productExecutable
+                ContractPath      = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
+                OwnedRoot         = $runRoot
+                RunToken          = $runToken
+                OutputDirectory   = $runOutput
+                SupportPath       = (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe')
+                WinAppPath        = (Join-Path $runDriver 'winapp.exe')
             }
-        }
-        $metadata = @{
-            sourceCommit  = (& git -C $script:repositoryRoot rev-parse HEAD 2>$null | Out-String).Trim()
-            productHash   = $productHash
-            productVersion = $productVersion
-            driverVersion = [string] $driverManifest.version
-            driverHash    = [string] $driverManifest.sha256
-            fixtureHashes = @()
-            hostOs        = [Environment]::OSVersion.VersionString
-            dpi           = 96
-            theme         = 'unknown'
-            viewport      = @{ width = 0; height = 0 }
+
+            $cleanupBody = {
+                $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $runRoot
+                if ($ledger.Count -gt 0) {
+                    $null = Stop-OwnedProcessTree -Ledger $ledger -ApprovedDirectories @($product)
+                }
+            }
+            $metadata = @{
+                sourceCommit  = (& git -C $script:repositoryRoot rev-parse HEAD 2>$null | Out-String).Trim()
+                productHash   = $productHash
+                productVersion = $productVersion
+                driverVersion = [string] $driverManifest.version
+                driverHash    = [string] $driverManifest.sha256
+                fixtureHashes = @()
+                hostOs        = [Environment]::OSVersion.VersionString
+                dpi           = 96
+                theme         = 'unknown'
+                viewport      = @{ width = 0; height = 0 }
+            }
+
+            return Invoke-UiAcceptanceRun -ScenarioId $name `
+                -Scenario { Invoke-UiAcceptanceScenario -Path $scenarioPath -Arguments $entryArguments } `
+                -Cleanup $cleanupBody `
+                -OwnedRoot $runRoot -OutputDirectory $runOutput -Metadata $metadata `
+                -RunToken $runToken -SupportPath $supportExecutable `
+                -ApprovedDirectories @($product)
         }
 
-        $result = Invoke-UiAcceptanceRun -ScenarioId $name -Scenario $scenarioBody -Cleanup $cleanupBody `
-            -OwnedRoot $runRoot -OutputDirectory $runOutput -Metadata $metadata `
-            -RunToken $runToken -SupportPath $supportExecutable `
-            -ApprovedDirectories @($product)
+        # The ledger grows only when the invocation step is reached, never during preparation.
+        $result = Invoke-UiAcceptanceDispatch -Name $name -Prepare $prepareBody -Invoke $invokeBody -Ledger $dispatched
         $reportPath = [string] $result.ReportPath
         if ([IO.File]::Exists($reportPath)) {
             $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json

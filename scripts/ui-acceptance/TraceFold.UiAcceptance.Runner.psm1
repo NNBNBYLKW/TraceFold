@@ -173,6 +173,36 @@ function Test-UiAcceptanceRequestCompleteness {
 
 <#
 .SYNOPSIS
+    Prepares one scenario and records it as dispatched only once it is really invoked.
+
+.DESCRIPTION
+    The summary must not blur preparation with dispatch. Creating the owned root, unpacking the
+    pinned driver and writing the report directory are preparation: when any of them fails the
+    scenario never ran, and counting it would let a broken scaffold read like a run. Everything
+    that can fail before the scenario belongs to -Prepare; only reaching -Invoke counts, so the
+    ledger entry is written strictly between the two and never inside a preparation step.
+#>
+function Invoke-UiAcceptanceDispatch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][scriptblock] $Prepare,
+        [Parameter(Mandatory)][scriptblock] $Invoke,
+        [Parameter(Mandatory)] $Ledger
+    )
+
+    if ($null -eq $Ledger) { throw 'A dispatch ledger is required.' }
+    if ($Ledger -ccontains $Name) { throw ('The scenario is already dispatched: ' + $Name + '.') }
+
+    # Anything thrown here leaves the ledger untouched: nothing was dispatched.
+    $prepared = & $Prepare
+
+    [void] $Ledger.Add($Name)
+    return & $Invoke $prepared
+}
+
+<#
+.SYNOPSIS
     Reads the declared parameter block of a scenario entry file.
 
 .DESCRIPTION
@@ -454,5 +484,6 @@ Export-ModuleMember -Function @(
     'Get-UiAcceptanceEntryParameterDetail',
     'New-UiAcceptanceEntryArguments',
     'Invoke-UiAcceptanceScenario',
-    'New-UiAcceptanceRunRoot'
+    'New-UiAcceptanceRunRoot',
+    'Invoke-UiAcceptanceDispatch'
 )
