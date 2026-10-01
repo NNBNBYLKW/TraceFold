@@ -23,7 +23,9 @@ $script:uiAcceptanceScenarios = [ordered] @{
     LibraryFilterNaming = '40-library-filter-naming-undo.ps1'
     Conflict      = '02-conflict.ps1'
     Library       = '03-library.ps1'
-    Taxonomy      = '04-taxonomy.ps1'
+    # The taxonomy entry is this scenario: it is the whole taxonomy slice for the checkpoint, so a pass
+    # on this entry is a pass on the complete taxonomy workflow and on nothing else.
+    Taxonomy      = '50-taxonomy-maintenance-undo.ps1'
     Diagnostics   = '60-diagnostics-read-only.ps1'
     Visual        = '06-visual.ps1'
 }

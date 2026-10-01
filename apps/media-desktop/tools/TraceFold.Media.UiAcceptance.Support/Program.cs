@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace TraceFold.Media.UiAcceptance.Support;
@@ -23,7 +24,22 @@ public static class Program
 
     public const int ExitUnexpectedError = 10;
 
-    public static int Main(string[] args) => Run([.. args], Console.Out);
+    /// <summary>
+    /// Runs the command surface, publishing its payload as UTF-8 whatever the console code page is.
+    /// </summary>
+    /// <remarks>
+    /// The snapshot payload carries taxonomy terms verbatim, so the bytes on the pipe have to be the
+    /// UTF-8 encoding of those terms and not a transcoding into the console code page. The caller
+    /// reads this pipe as UTF-8, and on a machine whose code page is a double-byte one a term whose
+    /// last encoded byte is a lead byte would otherwise consume the delimiter that follows it, which
+    /// turns a valid payload into an unreadable one. The console code page is a property of the
+    /// machine, so it cannot be allowed to decide the encoding of a contract.
+    /// </remarks>
+    public static int Main(string[] args)
+    {
+        Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        return Run([.. args], Console.Out);
+    }
 
     public static int Run(IReadOnlyList<string> args, TextWriter output)
     {

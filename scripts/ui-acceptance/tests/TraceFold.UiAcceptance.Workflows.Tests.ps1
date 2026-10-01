@@ -126,6 +126,37 @@ function Get-TestCases {
         }
     },
     @{
+        Name = 'a hidden candidate is excluded on request while the visible one stays addressable'
+        Body = {
+            # A library row is a template, so its identity is the file name in its own name prefix.
+            # Two rows render the same file, but only one is on screen: without the visibility
+            # criterion the pair would be refused as ambiguous and the on-screen row could never be
+            # addressed at all, which is the defect this criterion exists to prevent.
+            $visible = New-WorkflowNode -Type 'ListItem' -Name '正式文件 photo.jpg，实际文件 photo.jpg，图片' `
+                -GradientSelector 'itm-photo-0001'
+            $hidden = New-WorkflowNode -Type 'ListItem' -Name '正式文件 photo.jpg，实际文件 photo.jpg，图片' `
+                -Offscreen $true -GradientSelector 'itm-photo-0002'
+            $nodes = ConvertTo-UiAcceptanceFlatNodes -Tree (New-WorkflowTree -Elements @($visible, $hidden)) `
+                -FailureCode 'ui.driver_schema_incompatible'
+            Assert-Throws { Find-UiAcceptanceUniqueNode -Nodes $nodes -NativeType 'ListItem' `
+                    -NameContains 'photo.jpg' -FailureCode 'row' }
+            $row = Find-UiAcceptanceUniqueNode -Nodes $nodes -NativeType 'ListItem' `
+                -NameContains 'photo.jpg' -VisibleOnly -FailureCode 'row'
+            Assert-True ($null -ne $row)
+            Assert-Equal 'itm-photo-0001' (Get-UiAcceptanceNodeSelector -Node $row -FailureCode 'row')
+            # The criterion only excludes: a node that is genuinely absent is still reported absent.
+            $absent = Find-UiAcceptanceUniqueNode -Nodes $nodes -NativeType 'ListItem' `
+                -NameContains 'photo-third.jpg' -VisibleOnly -FailureCode 'row'
+            Assert-True ($null -eq $absent)
+            # Two on-screen candidates remain ambiguous, so the exclusion never weakens uniqueness.
+            $second = New-WorkflowNode -Type 'ListItem' -Name '正式文件 photo.jpg，实际文件 photo.jpg，图片'
+            $both = ConvertTo-UiAcceptanceFlatNodes -Tree (New-WorkflowTree -Elements @($visible, $second)) `
+                -FailureCode 'ui.driver_schema_incompatible'
+            Assert-Throws { Find-UiAcceptanceUniqueNode -Nodes $both -NativeType 'ListItem' `
+                    -NameContains 'photo.jpg' -VisibleOnly -FailureCode 'row' }
+        }
+    },
+    @{
         Name = 'list rows come from the named container only, in render order, never from a sibling container'
         Body = {
             # The row prefix is shared by every row of the list, so it alone cannot tell a row from a
@@ -189,6 +220,76 @@ function Get-TestCases {
         }
     },
     @{
+        Name = 'list rows carry the text they render, in order, and only from their own container'
+        Body = {
+            $sourceRow = New-WorkflowNode -Type 'ListItem' -GradientSelector 'itm-source-0001' -Children @(
+                (New-WorkflowNode -Type 'Group' -Children @(
+                        (New-WorkflowNode -Type 'Text' -Name '合并源'),
+                        (New-WorkflowNode -Type 'Text' -Name '2'))))
+            $targetRow = New-WorkflowNode -Type 'ListItem' -GradientSelector 'itm-target-0001' -Children @(
+                (New-WorkflowNode -Type 'Text' -Name '合并目标'))
+            $termList = New-WorkflowNode -Type 'List' -AutomationId 'TaxonomyTermList' `
+                -Children @($sourceRow, $targetRow)
+            # A same-shaped row that belongs to another list, which must never be read as a row of this one.
+            $outsideRow = New-WorkflowNode -Type 'ListItem' -GradientSelector 'itm-outside-0001' -Children @(
+                (New-WorkflowNode -Type 'Text' -Name '范围外'))
+            $otherList = New-WorkflowNode -Type 'List' -AutomationId 'TaxonomyMergeTargetResults' `
+                -Children @($outsideRow)
+            $nodes = Convert-ToFlat -Elements @($otherList, $termList)
+
+            $rows = Get-UiAcceptanceListRowTexts -Nodes $nodes -ContainerId 'TaxonomyTermList' `
+                -FailureCode 'term_rows'
+            Assert-Equal 2 @($rows).Count
+            Assert-Equal 2 @(@($rows)[0].Texts).Count
+            Assert-Equal '合并源' (@($rows)[0].Texts)[0]
+            Assert-Equal '2' (@($rows)[0].Texts)[1]
+            Assert-Equal 'itm-source-0001' (@($rows)[0].Selector)
+            Assert-Equal '合并目标' (@($rows)[1].Texts)[0]
+            Assert-Equal 0 @($rows | Where-Object { @($_.Texts) -ccontains '范围外' }).Count
+        }
+    },
+    @{
+        Name = 'a hidden row and a hidden text are left out, and two rows that render the same text both count'
+        Body = {
+            $visibleRow = New-WorkflowNode -Type 'ListItem' -GradientSelector 'itm-a-0001' -Children @(
+                (New-WorkflowNode -Type 'Text' -Name '甲'))
+            $hiddenRow = New-WorkflowNode -Type 'ListItem' -GradientSelector 'itm-hidden-0001' -Offscreen $true `
+                -Children @((New-WorkflowNode -Type 'Text' -Name '隐藏'))
+            # Two rows that render the same text are two rows: their slugs differ, as two real rows do.
+            $duplicateRow = New-WorkflowNode -Type 'ListItem' -GradientSelector 'itm-b-0001' -Children @(
+                (New-WorkflowNode -Type 'Text' -Name '甲'))
+            $mixedRow = New-WorkflowNode -Type 'ListItem' -GradientSelector 'itm-mixed-0001' -Children @(
+                (New-WorkflowNode -Type 'Text' -Name '乙'),
+                (New-WorkflowNode -Type 'Text' -Name '不可见文本' -Offscreen $true))
+            $termList = New-WorkflowNode -Type 'List' -AutomationId 'TaxonomyTermList' `
+                -Children @($visibleRow, $hiddenRow, $duplicateRow, $mixedRow)
+            $nodes = Convert-ToFlat -Elements @($termList)
+
+            $rows = Get-UiAcceptanceListRowTexts -Nodes $nodes -ContainerId 'TaxonomyTermList' `
+                -FailureCode 'term_rows'
+            Assert-Equal 3 @($rows).Count
+            Assert-Equal '甲' (@($rows)[0].Texts)[0]
+            Assert-Equal '甲' (@($rows)[1].Texts)[0]
+            Assert-Equal 1 @(@($rows)[2].Texts).Count
+            Assert-Equal '乙' (@($rows)[2].Texts)[0]
+            Assert-Equal 0 @($rows | Where-Object { @($_.Texts) -ccontains '隐藏' }).Count
+        }
+    },
+    @{
+        Name = 'a missing or ambiguous row-text container is refused rather than guessed'
+        Body = {
+            $only = New-WorkflowNode -Type 'List' -AutomationId 'LibraryGrid'
+            $nodes = Convert-ToFlat -Elements @($only)
+            Assert-Throws { Get-UiAcceptanceListRowTexts -Nodes $nodes -ContainerId 'TaxonomyTermList' `
+                    -FailureCode 'term_rows' }
+            $first = New-WorkflowNode -Type 'List' -AutomationId 'TaxonomyTermList' -GradientSelector 'lst-a'
+            $second = New-WorkflowNode -Type 'List' -AutomationId 'TaxonomyTermList' -GradientSelector 'lst-b'
+            $ambiguous = Convert-ToFlat -Elements @($first, $second)
+            Assert-Throws { Get-UiAcceptanceListRowTexts -Nodes $ambiguous -ContainerId 'TaxonomyTermList' `
+                    -FailureCode 'term_rows' }
+        }
+    },
+    @{
         Name = 'a row set comparison ignores order but not repeats, and refuses a wrong set'
         Body = {
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('b', 'a') -Expected @('a', 'b'))
@@ -201,6 +302,16 @@ function Get-TestCases {
             # A repeat is not the same as its absence: two identical rows must never equal one.
             Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', 'a') -Expected @('a')))
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('a', 'a') -Expected @('a', 'a'))
+            # An empty set is a legitimate answer, and the two runtimes deliver it differently, so
+            # every spelling of "nothing" has to be accepted and treated as the same set.
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed $null -Expected $null)
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed $null -Expected @())
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @() -Expected $null)
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @() -Expected @())
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed $null -Expected @('a')))
+            # One row that rendered no text is not a member: an empty string says "no members".
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('') -Expected @())
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('') -Expected @('', ''))
         }
     },
     @{
@@ -505,6 +616,33 @@ function Get-TestCases {
             $outside = $asset.PSObject.Copy()
             $outside.repositoryPath = '../outside/paired.mp4'
             Assert-Throws { Test-UiAcceptanceFixtureAsset -Asset $outside -RepositoryRoot $script:root }
+        }
+    },
+    @{
+        Name = 'a support payload is decoded as UTF-8 whatever the machine code page is'
+        Body = {
+            $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-wf-' + [guid]::NewGuid().ToString('N'))
+            [void][IO.Directory]::CreateDirectory($base)
+            try {
+                $support = Join-Path $script:uiRoot 'tests/fixtures/fake-support.ps1'
+                $env:TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN = '1'
+                $env:TRACEFOLD_FAKE_SUPPORT_SNAPSHOT_LEAD_BYTE = '1'
+                # The payload carries a term whose last UTF-8 byte is a lead byte, so a capture that
+                # let the machine code page decode this pipe would consume the closing quote and the
+                # JSON around it would not survive.
+                $term = [string][char]0x5408 + [char]0x5E76 + [char]0x6E90
+                $result = Invoke-UiAcceptanceSupportCommand -SupportPath $support `
+                    -Arguments @('snapshot','--data-root',$base,'--token','test-token')
+                Assert-Equal 0 $result.ExitCode
+                Assert-True ($result.Stdout.TrimEnd().EndsWith('}')) 'the whole payload must survive'
+                $parsed = ConvertFrom-UiAcceptanceJson -Text $result.Stdout -Source 'snapshot'
+                Assert-Equal $term ([string] $parsed.taxonomy.author[0])
+            }
+            finally {
+                Remove-Item Env:TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN -ErrorAction SilentlyContinue
+                Remove-Item Env:TRACEFOLD_FAKE_SUPPORT_SNAPSHOT_LEAD_BYTE -ErrorAction SilentlyContinue
+                Remove-UiTestTree -Path $base
+            }
         }
     }
     )

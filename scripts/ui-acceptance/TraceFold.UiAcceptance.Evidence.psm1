@@ -183,6 +183,55 @@ function Write-UiAcceptanceReport {
 
 <#
 .SYNOPSIS
+    Returns one optional text field of a node, treating an absent field as empty.
+
+.DESCRIPTION
+    The driver omits a field the element does not have, so absence is a legitimate answer and not a
+    malformed node. Reading the property through its metadata keeps that distinction from turning
+    into an exception under strict mode.
+#>
+function Get-UiRedactedNodeText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Node,
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    $property = $Node.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return '' }
+    return [string] $property.Value
+}
+
+<#
+.SYNOPSIS
+    Returns one node's rectangle, or zeroes in every field when none was reported.
+
+.DESCRIPTION
+    The caller normalizes the driver's response before handing it over, so a rectangle is expected as
+    a nested object with all four fields. The one case that is tolerated is a node with no rectangle
+    at all, which the driver produces for an element it can enumerate but not measure; that node is
+    recorded with zeroes in every field so every node keeps the same shape and the zeroes are never
+    read as a real position. A partially reported rectangle describes no rectangle and is refused
+    rather than completed with zeroes that would read as real edges of the element.
+#>
+function Get-UiRedactedNodeBounds {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Node)
+
+    $property = $Node.PSObject.Properties['bounds']
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return [ordered]@{ x = 0; y = 0; width = 0; height = 0 }
+    }
+    $bounds = $property.Value
+    Assert-UiAcceptanceFields -InputObject $bounds -Required @('x','y','width','height')
+    return [ordered]@{
+        x = [int] $bounds.x; y = [int] $bounds.y
+        width = [int] $bounds.width; height = [int] $bounds.height
+    }
+}
+
+<#
+.SYNOPSIS
     Writes one redacted UIA tree evidence file from already-normalized nodes.
 
 .DESCRIPTION
@@ -204,22 +253,21 @@ function Write-UiRedactedTreeEvidence {
     if (-not [IO.Directory]::Exists($OutputDirectory)) { throw 'Run output directory does not exist.' }
     $redacted = @()
     foreach ($node in @($Nodes)) {
-        Assert-UiAcceptanceFields -InputObject $node -Required @('automationId','controlType','name','enabled','offscreen','bounds')
-        Assert-UiAcceptanceFields -InputObject $node.bounds -Required @('x','y','width','height')
+        # The caller normalizes the driver's response, so a node arrives in the reviewed shape. The
+        # identity fields are read as optional here because the normalized shape states them as empty
+        # for an element that has none, and the rectangle is read through its own helper for the same
+        # reason. The state fields are required: a node whose visibility and enablement are unknown
+        # cannot be reasoned about at all.
+        Assert-UiAcceptanceFields -InputObject $node -Required @('controlType','enabled','offscreen')
         if ($node.enabled -isnot [bool] -or $node.offscreen -isnot [bool]) { throw 'Invalid UIA tree state.' }
         $redacted += [ordered]@{
-            automationId = Protect-UiAcceptanceText -Value ([string]$node.automationId) -RunToken $RunToken -OwnedRoot $OwnedRoot
-            parentAutomationId = Protect-UiAcceptanceText -Value $(if ($null -ne $node.PSObject.Properties['parentAutomationId']) {
-                [string]$node.parentAutomationId
-            } else { '' }) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            automationId = Protect-UiAcceptanceText -Value (Get-UiRedactedNodeText -Node $node -Name 'automationId') -RunToken $RunToken -OwnedRoot $OwnedRoot
+            parentAutomationId = Protect-UiAcceptanceText -Value (Get-UiRedactedNodeText -Node $node -Name 'parentAutomationId') -RunToken $RunToken -OwnedRoot $OwnedRoot
             controlType = Protect-UiAcceptanceText -Value ([string]$node.controlType) -RunToken $RunToken -OwnedRoot $OwnedRoot
-            name = Protect-UiAcceptanceText -Value ([string]$node.name) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            name = Protect-UiAcceptanceText -Value (Get-UiRedactedNodeText -Node $node -Name 'name') -RunToken $RunToken -OwnedRoot $OwnedRoot
             enabled = [bool]$node.enabled
             offscreen = [bool]$node.offscreen
-            bounds = [ordered]@{
-                x = [int]$node.bounds.x; y = [int]$node.bounds.y
-                width = [int]$node.bounds.width; height = [int]$node.bounds.height
-            }
+            bounds = Get-UiRedactedNodeBounds -Node $node
         }
     }
     $fileName = (ConvertTo-UiAcceptanceSlug -Value $EvidenceId) + '-uia.json'

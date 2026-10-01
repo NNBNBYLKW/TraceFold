@@ -212,6 +212,64 @@ function Get-UiAcceptanceListRowNames {
 
 <#
 .SYNOPSIS
+    Collects one container's rows with the text each row renders, in the order they are rendered.
+
+.DESCRIPTION
+    A list whose rows are built from a data template often carries no row name at all: what identifies
+    a row is the text its own children render, so a caller has to be able to match a row by that text.
+    Each row is returned with its own accessible name, its selector and the on-screen text of its
+    descendants in render order, so a row can be both matched and acted on. The walk stays inside the
+    container this call names, rows the product reports off screen are left out, and repeats are kept,
+    so a duplicated row cannot make two rows look like one. The container itself is resolved by its
+    own stable id, and a missing or ambiguous container is refused rather than guessed.
+#>
+function Get-UiAcceptanceListRowTexts {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Nodes,
+        [Parameter(Mandatory)][string] $ContainerId,
+        [Parameter(Mandatory)][string] $FailureCode
+    )
+
+    $container = Find-UiAcceptanceUniqueNode -Nodes $Nodes -AutomationId $ContainerId `
+        -FailureCode $FailureCode
+    if ($null -eq $container) { throw $FailureCode }
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $pending = [System.Collections.Generic.Stack[object]]::new()
+    $children = @(Get-UiAcceptanceNodeChildren -Node $container)
+    for ($index = $children.Count - 1; $index -ge 0; $index--) { $pending.Push($children[$index]) }
+    while ($pending.Count -gt 0) {
+        $node = $pending.Pop()
+        if ((Get-UiAcceptanceNodeProperty -Node $node -Name 'type') -ceq 'ListItem' -and
+            (Get-UiAcceptanceNodeProperty -Node $node -Name 'isOffscreen') -ceq 'False') {
+            $texts = [System.Collections.Generic.List[string]]::new()
+            $inner = [System.Collections.Generic.Stack[object]]::new()
+            $rowChildren = @(Get-UiAcceptanceNodeChildren -Node $node)
+            for ($index = $rowChildren.Count - 1; $index -ge 0; $index--) { $inner.Push($rowChildren[$index]) }
+            while ($inner.Count -gt 0) {
+                $child = $inner.Pop()
+                if ((Get-UiAcceptanceNodeProperty -Node $child -Name 'type') -ceq 'Text' -and
+                    (Get-UiAcceptanceNodeProperty -Node $child -Name 'isOffscreen') -ceq 'False') {
+                    $text = Get-UiAcceptanceNodeProperty -Node $child -Name 'name'
+                    if (-not [string]::IsNullOrWhiteSpace($text)) { $texts.Add($text) }
+                }
+                $nesting = @(Get-UiAcceptanceNodeChildren -Node $child)
+                for ($index = $nesting.Count - 1; $index -ge 0; $index--) { $inner.Push($nesting[$index]) }
+            }
+            $rows.Add([pscustomobject] @{
+                    Name     = Get-UiAcceptanceNodeProperty -Node $node -Name 'name'
+                    Selector = Get-UiAcceptanceNodeProperty -Node $node -Name 'selector'
+                    Texts    = @($texts.ToArray())
+                })
+        }
+        $childNodes = @(Get-UiAcceptanceNodeChildren -Node $node)
+        for ($index = $childNodes.Count - 1; $index -ge 0; $index--) { $pending.Push($childNodes[$index]) }
+    }
+    return ,@($rows.ToArray())
+}
+
+<#
+.SYNOPSIS
     Compares two row collections as multisets, so order does not matter but repeats do.
 
 .DESCRIPTION
@@ -220,18 +278,34 @@ function Get-UiAcceptanceListRowNames {
     appears, because two identical rows must never compare equal to one. The comparison sorts both
     sides ordinally, so its answer does not depend on the culture of the machine or on the PowerShell
     version it runs on.
+
+    An empty set is a legitimate input - it is how "this list renders nothing" is stated - and the two
+    PowerShell runtimes disagree about how it arrives: a caller's $null and a caller's @() both mean no
+    members, but binding a bare empty string to a typed [string[]] parameter is itself an error in
+    PowerShell 7. The parameters are therefore untyped, and a value that is null or an empty string is
+    read as "no members", so a caller with nothing says nothing on either runtime instead of one of
+    them refusing the call. A row that renders no text is not a member of the set: the caller states
+    such a row by its name, never by an empty string.
 #>
 function Test-UiAcceptanceRowSetMatch {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Observed,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Expected
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()] $Observed,
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()] $Expected
     )
 
     $observedSorted = [System.Collections.Generic.List[string]]::new()
-    foreach ($value in @($Observed)) { $observedSorted.Add([string] $value) }
+    foreach ($value in @($Observed)) {
+        if ($null -ne $value -and -not [string]::IsNullOrEmpty([string] $value)) {
+            $observedSorted.Add([string] $value)
+        }
+    }
     $expectedSorted = [System.Collections.Generic.List[string]]::new()
-    foreach ($value in @($Expected)) { $expectedSorted.Add([string] $value) }
+    foreach ($value in @($Expected)) {
+        if ($null -ne $value -and -not [string]::IsNullOrEmpty([string] $value)) {
+            $expectedSorted.Add([string] $value)
+        }
+    }
     $observedSorted.Sort([System.StringComparer]::Ordinal)
     $expectedSorted.Sort([System.StringComparer]::Ordinal)
     if ($observedSorted.Count -ne $expectedSorted.Count) { return $false }
@@ -250,6 +324,9 @@ function Test-UiAcceptanceRowSetMatch {
     several candidates would silently assert against the wrong element. The criterion set is
     deliberately explicit: a caller states the native type and the accessible-name prefix, so a
     same-named Group, TextBlock or generated-id container can never be mistaken for the row.
+    Elements the product reports off screen can be excluded, which is what a caller needs when a
+    collapsed container keeps what it had already realised in the tree; without that filter a row
+    that is no longer shown still reads as if it were.
 #>
 function Find-UiAcceptanceUniqueNode {
     [CmdletBinding()]
@@ -259,12 +336,16 @@ function Find-UiAcceptanceUniqueNode {
         [string] $AutomationId,
         [string] $NamePrefix,
         [string] $NameContains,
+        [switch] $VisibleOnly,
         [Parameter(Mandatory)][string] $FailureCode
     )
 
     $matches = @($Nodes | Where-Object {
         $node = $_
         $ok = $true
+        if ($VisibleOnly) {
+            $ok = $ok -and ((Get-UiAcceptanceNodeProperty -Node $node -Name 'isOffscreen') -ceq 'False')
+        }
         if (-not [string]::IsNullOrEmpty($NativeType)) {
             $ok = $ok -and ((Get-UiAcceptanceNodeProperty -Node $node -Name 'type') -ceq $NativeType)
         }
@@ -467,6 +548,118 @@ function Set-UiAcceptanceTaxonomyTerm {
             -TimeoutMs $TimeoutMs -RunToken $RunToken -OwnedRoot $OwnedRoot)
 }
 
+<#
+.SYNOPSIS
+    Quotes one argument for a hand-built Windows command line.
+
+.DESCRIPTION
+    The escaping follows the CommandLineToArgvW rules exactly, because an argument boundary that
+    moved would hand the child a different argument vector.
+#>
+function ConvertTo-UiAcceptanceProcessArgument {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $Value)
+
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+
+    $backslash = [char] 0x5C
+    $quote = [char] 0x22
+    $builder = New-Object System.Text.StringBuilder
+    [void] $builder.Append($quote)
+    $pending = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq $backslash) { $pending++; continue }
+        if ($character -eq $quote) {
+            [void] $builder.Append($backslash, ($pending * 2) + 1)
+            [void] $builder.Append($quote)
+            $pending = 0
+            continue
+        }
+        if ($pending -gt 0) {
+            [void] $builder.Append($backslash, $pending)
+            $pending = 0
+        }
+        [void] $builder.Append($character)
+    }
+    if ($pending -gt 0) { [void] $builder.Append($backslash, $pending * 2) }
+    [void] $builder.Append($quote)
+    return $builder.ToString()
+}
+
+<#
+.SYNOPSIS
+    Runs one support-CLI command and returns its standard output decoded as UTF-8.
+
+.DESCRIPTION
+    The support CLI writes its payload as UTF-8, but a captured child's pipe is decoded with the
+    console code page when the stream reader is left to itself. On a machine whose code page is a
+    double-byte one, a payload whose last encoded byte happens to be a lead byte consumes the
+    following delimiter, so valid JSON would be read as invalid and a term would be read wrongly.
+    The stream readers are therefore given UTF-8 explicitly on both runtimes.
+
+    Standard output and standard error are drained together, because a child that fills the error
+    pipe while nothing reads it would block before it could exit.
+#>
+function Invoke-UiAcceptanceSupportCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $SupportPath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Arguments,
+        [int] $TimeoutMs = 60000
+    )
+
+    if (-not [IO.File]::Exists($SupportPath)) { throw 'The support CLI is missing.' }
+    if ($TimeoutMs -le 0) { throw 'The support timeout must be positive.' }
+
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $target = (Resolve-Path -LiteralPath $SupportPath -ErrorAction Stop).ProviderPath
+    $commandArguments = New-Object 'System.Collections.Generic.List[string]'
+    # A fixture written as a script is launched through this same interpreter, so the toolkit
+    # self-tests exercise the real path without publishing the CLI.
+    if ([IO.Path]::GetExtension($target) -ieq '.ps1') {
+        $start.FileName = (Get-Process -Id $PID).Path
+        foreach ($item in @('-NoProfile', '-File', $target)) { [void] $commandArguments.Add($item) }
+    }
+    else { $start.FileName = $target }
+    foreach ($item in @($Arguments)) { [void] $commandArguments.Add([string] $item) }
+    # Windows PowerShell 5.1 runs on a .NET whose ProcessStartInfo has no ArgumentList, so the
+    # command line is built with the same CommandLineToArgvW escaping the driver path uses. The
+    # escaping is applied here rather than borrowed, so this module owns its own argument boundary.
+    $quoted = @()
+    foreach ($item in $commandArguments.ToArray()) {
+        $quoted += (ConvertTo-UiAcceptanceProcessArgument -Value ([string] $item))
+    }
+    $start.Arguments = ($quoted -join ' ')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    # The payload is UTF-8; pinning it here keeps it independent of the machine's code page.
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    $start.StandardOutputEncoding = $utf8
+    $start.StandardErrorEncoding = $utf8
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        [void] $process.Start()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $exited = $process.WaitForExit($TimeoutMs)
+        if (-not $exited) {
+            try { $process.Kill($true) } catch { try { $process.Kill() } catch { } }
+            [void] $process.WaitForExit(2000)
+            throw ('The support CLI did not finish within ' + [string] $TimeoutMs + ' ms.')
+        }
+        return [pscustomobject] @{
+            ExitCode = $process.ExitCode
+            Stdout   = $stdout.GetAwaiter().GetResult()
+            Stderr   = $stderr.GetAwaiter().GetResult()
+        }
+    }
+    finally { $process.Dispose() }
+}
+
 Export-ModuleMember -Function @(
     'Get-UiAcceptanceNodeProperty',
     'Get-UiAcceptanceNodeChildren',
@@ -474,11 +667,13 @@ Export-ModuleMember -Function @(
     'Read-UiAcceptanceTree',
     'Get-UiAcceptanceNamedNodes',
     'Get-UiAcceptanceListRowNames',
+    'Get-UiAcceptanceListRowTexts',
     'Test-UiAcceptanceRowSetMatch',
     'Find-UiAcceptanceUniqueNode',
     'Get-UiAcceptanceNodeSelector',
     'Get-UiAcceptanceDescendantSelector',
     'Invoke-UiAcceptanceResolvedMutation',
     'Test-UiAcceptanceFixtureAsset',
-    'Set-UiAcceptanceTaxonomyTerm'
+    'Set-UiAcceptanceTaxonomyTerm',
+    'Invoke-UiAcceptanceSupportCommand'
 )

@@ -99,6 +99,92 @@ function Get-TestCases {
                 }
                 finally { Remove-UiTestTree -Path $base }
             }
+        },
+        @{
+            Name = 'a node with no identity field is recorded with an empty one'
+            Body = {
+                # A list row has no automation id, so the normalized node states that field as empty.
+                # That is a legitimate element, not a malformed one, and the evidence has to carry it
+                # with the field present so a reader never has to tell absent from empty.
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-ev-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    $nodes = @([pscustomobject]@{
+                        controlType='ListItem';name='a row';enabled=$true;offscreen=$false
+                        bounds=[pscustomobject]@{x=0;y=0;width=10;height=10}
+                    })
+                    $name = Write-UiRedactedTreeEvidence -OutputDirectory $base -EvidenceId 'rows' -Nodes $nodes
+                    $parsed = Get-Content -LiteralPath (Join-Path $base $name) -Raw | ConvertFrom-Json
+                    $recorded = @($parsed.tree)
+                    Assert-Equal 1 $recorded.Count
+                    # The recorded file states the identity for every node, so a reader never has to
+                    # guess whether the element had no id or the writer lost it.
+                    Assert-Equal '' ([string] $recorded[0].automationId)
+                    Assert-Equal 'ListItem' ([string] $recorded[0].controlType)
+                    Assert-Equal 'a row' ([string] $recorded[0].name)
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a node with no retrievable rectangle is recorded as unmeasured'
+            Body = {
+                # The driver can enumerate a virtualized element and still fail to retrieve its
+                # rectangle, in which case the normalized node carries no rectangle at all. That
+                # element is real and belongs in the evidence, and its absent rectangle must not be
+                # reported as a position.
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-ev-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    $nodes = @([pscustomobject]@{
+                        automationId='TaxonomyMergeAffectedFiles';controlType='List'
+                        name='preview';enabled=$true;offscreen=$false
+                    })
+                    $name = Write-UiRedactedTreeEvidence -OutputDirectory $base -EvidenceId 'unmeasured' -Nodes $nodes
+                    $parsed = Get-Content -LiteralPath (Join-Path $base $name) -Raw | ConvertFrom-Json
+                    $recorded = @($parsed.tree)
+                    Assert-Equal 1 $recorded.Count
+                    # The rectangle is present with zeroes in every field: an unmeasured element is
+                    # recorded as unmeasured, and never as an element sitting at the origin.
+                    Assert-Equal 0 ([int] $recorded[0].bounds.width)
+                    Assert-Equal 0 ([int] $recorded[0].bounds.height)
+                    Assert-Equal $false ([bool] $recorded[0].offscreen)
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a node with a partially reported rectangle is refused'
+            Body = {
+                # Half a rectangle describes no rectangle, so a node that arrives with only part of
+                # its rectangle is refused instead of having the missing edges filled in with zeroes
+                # that would then read as real edges of the element.
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-ev-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    $nodes = @([pscustomobject]@{
+                        controlType='Button';name='half';enabled=$true;offscreen=$false
+                        bounds=[pscustomobject]@{x=1;y=2}
+                    })
+                    Assert-Throws { Write-UiRedactedTreeEvidence -OutputDirectory $base -EvidenceId 'half' -Nodes $nodes }
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a node missing its state is refused rather than recorded'
+            Body = {
+                # Enablement and visibility are the two facts every later check depends on, so an
+                # element that arrives without them is refused instead of being written down as an
+                # element whose state is unknown.
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-ev-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    $nodes = @([pscustomobject]@{ controlType='Button';name='no state' })
+                    Assert-Throws { Write-UiRedactedTreeEvidence -OutputDirectory $base -EvidenceId 'bad' -Nodes $nodes }
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
         }
     )
 }

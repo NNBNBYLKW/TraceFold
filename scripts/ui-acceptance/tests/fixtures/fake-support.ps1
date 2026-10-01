@@ -22,6 +22,8 @@
 #   TRACEFOLD_FAKE_NATIVE_CLASS        class name the descendant lookup resolves to
 #   TRACEFOLD_FAKE_NATIVE_NAME         accessible name the probe reports
 #   TRACEFOLD_FAKE_NATIVE_WIDTH        pixel width the probe reports
+#   TRACEFOLD_FAKE_SUPPORT_SNAPSHOT_LEAD_BYTE
+#                                      snapshot writes a term whose last UTF-8 byte is a lead byte
 
 $items = [string[]] $args
 
@@ -29,14 +31,25 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if ($null -eq $items) { $items = @() }
-if ($items.Count -lt 2) { exit 2 }
 
-$group = $items[0]
-$action = $items[1]
+# 'snapshot' is a flat command: it takes its options directly and has no action word, exactly as
+# the real CLI does. Every other command is '<group> <action> [--name value ...]'.
+$flat = $items.Count -ge 1 -and $items[0] -ceq 'snapshot'
+if ($flat) {
+    $group = 'snapshot'
+    $action = ''
+    $optionStart = 1
+}
+else {
+    if ($items.Count -lt 2) { exit 2 }
+    $group = $items[0]
+    $action = $items[1]
+    $optionStart = 2
+}
 
 $values = @{}
 $patterns = New-Object System.Collections.ArrayList
-for ($index = 2; $index -lt $items.Count; $index++) {
+for ($index = $optionStart; $index -lt $items.Count; $index++) {
     $token = $items[$index]
     if (-not $token.StartsWith('--')) { exit 2 }
     if ($index + 1 -ge $items.Count) { exit 2 }
@@ -138,6 +151,18 @@ switch ($group) {
     }
     'snapshot' {
         if (-not (Test-FakeSupportOption 'data-root')) { exit 2 }
+        # A term whose last UTF-8 byte is a lead byte is emitted when asked for, so a caller that
+        # lets the machine code page decode this pipe corrupts the payload and would read it as
+        # invalid JSON. The bytes are written directly, which is what the real CLI does.
+        if (-not [string]::IsNullOrWhiteSpace($env:TRACEFOLD_FAKE_SUPPORT_SNAPSHOT_LEAD_BYTE)) {
+            $term = [string][char] 0x5408 + [char] 0x5E76 + [char] 0x6E90
+            $json = '{"tables":{},"taxonomy":{"author":["' + $term + '"]},"formalAssets":[]}'
+            $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+            $stream = [Console]::OpenStandardOutput()
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush()
+            exit 0
+        }
         Write-Output '{"tables":{},"taxonomy":{}}'
         exit 0
     }

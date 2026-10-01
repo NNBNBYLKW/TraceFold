@@ -60,6 +60,31 @@ function Read-LibraryFilterScenarioSource {
     return [IO.File]::ReadAllText($path)
 }
 
+function Read-TaxonomyScenarioSource {
+    $path = Join-Path $script:uiRoot 'scenarios/50-taxonomy-maintenance-undo.ps1'
+    if (-not [IO.File]::Exists($path)) { throw 'Taxonomy maintenance scenario is missing.' }
+    return [IO.File]::ReadAllText($path)
+}
+
+<#
+.SYNOPSIS
+    Returns every literal a scenario passes as a mutation step id.
+
+.DESCRIPTION
+    A step id may be executed once, so the same literal twice in one scenario is a defect the runner
+    would only catch at run time. Only literal arguments are collected: a composed id is unique by
+    construction as long as its parts are.
+#>
+function Get-ScenarioLiteralStepIds {
+    param([Parameter(Mandatory)][string] $Source)
+
+    $ids = @()
+    foreach ($match in [regex]::Matches($Source, "-Step\s+'([^']+)'")) {
+        $ids += $match.Groups[1].Value
+    }
+    return $ids
+}
+
 function Get-TestCases {
     return @(
         @{
@@ -1092,6 +1117,176 @@ function Get-TestCases {
             Body = {
                 $path = Join-Path $script:uiRoot 'scenarios/40-library-filter-naming-undo.ps1'
                 if (-not [IO.File]::Exists($path)) { throw 'Library filter and naming scenario is missing.' }
+                $bytes = [IO.File]::ReadAllBytes($path)
+                $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+                $isAscii = $true
+                foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
+                Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the taxonomy scenario exists, parses and reports Passed'
+            Body = {
+                $source = Read-TaxonomyScenarioSource
+                $tokens = $null
+                $errors = $null
+                $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+                Assert-Equal 0 @($errors).Count
+                Assert-True ($source -cmatch "Status\s*=\s*'Passed'") 'the scenario must report a pass result'
+                $parameters = Get-ScenarioParameterNames -Source $source
+                foreach ($required in @('ScenarioId','ExecutablePath','OwnedRoot','RunToken','OutputDirectory','SupportPath','WinAppPath')) {
+                    Assert-True ($parameters -ccontains $required) ('the scenario must accept ' + $required)
+                }
+                Assert-True ($parameters -ccontains 'LaunchProcess') 'the scenario must accept the launch seam'
+            }
+        },
+        @{
+            Name = 'the taxonomy scenario merges through the page and the preview dialog, then undoes once'
+            Body = {
+                $source = Read-TaxonomyScenarioSource
+                # The terms are created through the ordinary metadata UI, then found on the taxonomy page
+                # through its real kind, search and selection operations.
+                Assert-Contains $source 'LibraryAuthorInput'
+                Assert-Contains $source 'NavTaxonomy'
+                Assert-Contains $source 'TaxonomyKindList'
+                Assert-Contains $source 'TaxonomySearchBox'
+                Assert-Contains $source 'TaxonomyTermList'
+                Assert-Contains $source 'TaxonomySelectedCount'
+                Assert-Contains $source 'TaxonomyMergeButton'
+                # The merge runs on the page's own preview dialog, and the confirmation happens once.
+                Assert-Contains $source 'TaxonomyMergeDialog'
+                Assert-Contains $source 'TaxonomyMergeSources'
+                Assert-Contains $source 'TaxonomyMergeTargetResults'
+                Assert-Contains $source 'TaxonomyMergeTargetSearch'
+                Assert-Contains $source 'TaxonomyMergeAffectedFiles'
+                Assert-Contains $source 'TaxonomyMergeAffectedSummary'
+                Assert-Contains $source 'TaxonomyMergeApplyButton'
+                Assert-Equal 1 ([regex]::Matches($source, "ui','invoke','TaxonomyMergeApplyButton'").Count)
+                # Rows of these lists carry no name of their own, so they are matched by the text they
+                # render, and the affected files are compared as a set, never as a count.
+                Assert-Contains $source 'Get-UiAcceptanceListRowTexts'
+                Assert-Contains $source 'Test-UiAcceptanceRowSetMatch'
+                # The merge is verified per file and per reference, and the source has to be gone.
+                Assert-Contains $source 'taxonomy.merge_source_gone'
+                Assert-Contains $source 'taxonomy.merge_references'
+                Assert-Contains $source 'taxonomy.merge_duplicate'
+                Assert-Contains $source 'taxonomy.merge_target_kept'
+                # One undo for the merge, and the pre-merge state has to be restored exactly.
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'undo-merge'").Count)
+                Assert-Contains $source 'taxonomy.undo_restore'
+            }
+        },
+        @{
+            Name = 'the taxonomy scenario proves the delete guard and deletes only an unreferenced term'
+            Body = {
+                $source = Read-TaxonomyScenarioSource
+                # A referenced term must be shown as blocked, and the guard is read from the product:
+                # the delete action is disabled and the blocking term is listed.
+                Assert-Contains $source 'TaxonomyDeleteBlockers'
+                Assert-Contains $source 'TaxonomyDeleteButton'
+                Assert-Contains $source 'taxonomy.delete_guard'
+                Assert-True ($source.Contains("-ceq 'False'")) 'the guarded delete action must be asserted disabled'
+                # The reference is then released through the ordinary metadata UI, and the product's own
+                # unused filter is what proves the term is unreferenced.
+                Assert-Contains $source 'TaxonomyReferenceFilter'
+                Assert-Contains $source 'taxonomy.term_unreferenced'
+                # One confirm and one undo for the delete, on the dialog the product opens for it.
+                Assert-Contains $source 'TaxonomyDeleteConfirmDialog'
+                Assert-Contains $source 'TaxonomyDeleteTermList'
+                Assert-Contains $source 'taxonomy.delete_completion'
+                Assert-Contains $source 'taxonomy.delete_confirm'
+                # One undo for the delete, and the term has to come back.
+                Assert-Equal 1 ([regex]::Matches($source, "-Step 'undo-delete'").Count)
+                Assert-Contains $source 'taxonomy.delete_restore'
+            }
+        },
+        @{
+            Name = 'the taxonomy scenario checks files, identity, relunch persistence and cleanup'
+            Body = {
+                $source = Read-TaxonomyScenarioSource
+                Assert-Contains $source 'Get-FileHash'
+                Assert-Contains $source 'taxonomy.file_changed'
+                Assert-Contains $source 'taxonomy.record_identity'
+                # The app is closed and reopened, and the persisted state is read from the product UI
+                # and from a read-only snapshot taken while it is closed.
+                Assert-Contains $source 'Stop-OwnedProcessTree'
+                Assert-Contains $source 'taxonomy.restart_stop'
+                Assert-Contains $source 'taxonomy.restart_window'
+                Assert-Contains $source 'taxonomy.restart_persistence'
+                # Every stage writes what the product showed, so the staged claims are auditable.
+                Assert-Contains $source 'Save-TaxonomyStageState'
+                Assert-Contains $source 'taxonomy-stage-'
+            }
+        },
+        @{
+            Name = 'the taxonomy scenario is safe, independent and uses one id per action'
+            Body = {
+                $source = Read-TaxonomyScenarioSource
+                Assert-NotContains $source 'Stop-Process -Name'
+                Assert-NotContains $source 'taskkill'
+                Assert-NotContains $source 'ui click'
+                Assert-NotContains $source 'Start-Sleep'
+                Assert-NotContains $source 'PickInboxFolder'
+                Assert-NotContains $source 'Microsoft.Data.Sqlite'
+                Assert-NotContains $source 'DirectorySettingsService'
+                Assert-NotContains $source 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT ='
+                Assert-NotContains $source 'InboxCard_'
+                Assert-Contains $source 'Test-UiAcceptanceFixtureAsset'
+                # The read-only facts come from the snapshot, and the snapshot is taken through the
+                # support helper that pins the payload encoding instead of the caller's ambient one.
+                Assert-Contains $source 'Invoke-UiAcceptanceSupportCommand'
+                Assert-Contains $source "'snapshot','--data-root'"
+                Assert-NotContains $source 'snapshot --data-root'
+                # No temporary diagnostic may remain in the delivered scenario.
+                Assert-NotContains $source 'DIAGNOSTIC (temporary)'
+                Assert-NotContains $source 'taxonomy.diag'
+                # The taxonomy page's search box is typed into rather than set, so a query would be
+                # appended to whatever an earlier stage left there. Every query on that box is
+                # therefore preceded by a clear, and the clear is a real dispatched action rather
+                # than an assumption that the box was already empty.
+                $queries = @([regex]::Matches($source, "Set-TaxonomySearch -OuterId 'TaxonomySearchBox'"))
+                $clears = @([regex]::Matches($source, "Clear-TaxonomySearch -OuterId 'TaxonomySearchBox'"))
+                Assert-True ($queries.Count -ge 3) 'the taxonomy search box must be queried by more than one stage'
+                Assert-True ($clears.Count -ge 2) 'each later query on the taxonomy search box needs a clear first'
+                # Evidence is written from the driver's own answer converted into the reviewed node
+                # shape, because the writer's input contract is that shape and not the driver's.
+                Assert-Contains $source 'ConvertTo-TaxonomyReviewedNode'
+                Assert-Contains $source "Save-TaxonomyTree -EvidenceId"
+                # A property is never read off a command that was wrapped in an array sub-expression:
+                # under strict mode the property is then looked for on the array and refused, which
+                # would make a claim fail for a reason that has nothing to do with the product.
+                Assert-True ($source -cnotmatch '[@]\(Get-Taxonomy[A-Za-z]+[^)]*\)\.[A-Za-z]') `
+                    'a property must not be read off an array-wrapped command'
+                # A read-only claim is never taken from a total: ownership is read per file.
+                Assert-Contains $source 'Get-TaxonomyTermOwners'
+                # Every literal step id is used once, so no dispatched action can be repeated by copy.
+                $ids = Get-ScenarioLiteralStepIds -Source $source
+                Assert-True (@($ids).Count -ge 10) 'the scenario must carry a step id per dispatched action'
+                $duplicated = @($ids | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+                Assert-Equal 0 @($duplicated).Count ('duplicate step ids: ' + (@($duplicated) -join ', '))
+            }
+        },
+        @{
+            Name = 'the runner points the taxonomy entry at the taxonomy scenario and leaves the other placeholders alone'
+            Body = {
+                Assert-Equal '50-taxonomy-maintenance-undo.ps1' (Get-UiAcceptanceScenarioFile -Name 'Taxonomy')
+                $names = @(Get-UiAcceptanceScenarioName)
+                Assert-True ($names -ccontains 'Taxonomy')
+                # The aggregate entries that no task has implemented stay exactly as they were, so a
+                # single scenario passing can never be read as the whole suite passing.
+                Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
+                Assert-Equal '03-library.ps1' (Get-UiAcceptanceScenarioFile -Name 'Library')
+                Assert-Equal '06-visual.ps1' (Get-UiAcceptanceScenarioFile -Name 'Visual')
+                foreach ($name in $names) {
+                    Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
+                }
+            }
+        },
+        @{
+            Name = 'the taxonomy scenario is readable by Windows PowerShell 5.1'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/50-taxonomy-maintenance-undo.ps1'
+                if (-not [IO.File]::Exists($path)) { throw 'Taxonomy maintenance scenario is missing.' }
                 $bytes = [IO.File]::ReadAllBytes($path)
                 $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
                 $isAscii = $true
