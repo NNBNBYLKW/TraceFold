@@ -382,61 +382,71 @@ foreach ($name in $pending) {
     }
 
     try {
-        # Preparation and invocation are separate deliberately: everything that can fail before
-        # the scenario exists lives in the prepare step, so a root or driver that never came up
-        # is reported as a blocked setup and never as a dispatched scenario.
-        $prepareBody = {
-            $runRoot = New-UiAcceptanceRunRoot -SupportPath $supportExecutable `
-                -ParentDirectory ([IO.Path]::GetTempPath()) -RunId $runId -RunToken $runToken
-            $runSupport = Join-Path $runRoot 'support'
-            $runDriver = Join-Path $runRoot 'winapp'
-            Copy-Item -LiteralPath $supportRoot -Destination $runSupport -Recurse -Force
-            [void][IO.Directory]::CreateDirectory($runDriver)
-            Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
-            if (-not [IO.File]::Exists((Join-Path $runDriver 'winapp.exe'))) { throw 'pinned_driver_executable_missing' }
+        # Preparation stays in this scope, never in a helper script block: the catch below has to
+        # know the root it was given so it can stop whatever the root owns and hand it back to the
+        # support tool, and every later step reads the paths produced here. Moving this away to
+        # make counting easier made the walk forget where its own scaffold was.
+        $runRoot = New-UiAcceptanceRunRoot -SupportPath $supportExecutable `
+            -ParentDirectory ([IO.Path]::GetTempPath()) -RunId $runId -RunToken $runToken
+        $runSupport = Join-Path $runRoot 'support'
+        $runDriver = Join-Path $runRoot 'winapp'
+        Copy-Item -LiteralPath $supportRoot -Destination $runSupport -Recurse -Force
+        [void][IO.Directory]::CreateDirectory($runDriver)
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
+        if (-not [IO.File]::Exists((Join-Path $runDriver 'winapp.exe'))) { throw 'pinned_driver_executable_missing' }
+
+        $entryArguments = @{
+            ScenarioId        = (ConvertTo-UiAcceptanceSlug -Value $name)
+            ExecutablePath    = $productExecutable
+            ContractPath      = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
+            OwnedRoot         = $runRoot
+            RunToken          = $runToken
+            OutputDirectory   = $runOutput
+            SupportPath       = (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe')
+            WinAppPath        = (Join-Path $runDriver 'winapp.exe')
         }
 
-        $invokeBody = {
-            $entryArguments = @{
-                ScenarioId        = (ConvertTo-UiAcceptanceSlug -Value $name)
-                ExecutablePath    = $productExecutable
-                ContractPath      = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
-                OwnedRoot         = $runRoot
-                RunToken          = $runToken
-                OutputDirectory   = $runOutput
-                SupportPath       = (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe')
-                WinAppPath        = (Join-Path $runDriver 'winapp.exe')
+        $cleanupBody = {
+            $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $runRoot
+            if ($ledger.Count -gt 0) {
+                $null = Stop-OwnedProcessTree -Ledger $ledger -ApprovedDirectories @($product)
             }
-
-            $cleanupBody = {
-                $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $runRoot
-                if ($ledger.Count -gt 0) {
-                    $null = Stop-OwnedProcessTree -Ledger $ledger -ApprovedDirectories @($product)
-                }
-            }
-            $metadata = @{
-                sourceCommit  = (& git -C $script:repositoryRoot rev-parse HEAD 2>$null | Out-String).Trim()
-                productHash   = $productHash
-                productVersion = $productVersion
-                driverVersion = [string] $driverManifest.version
-                driverHash    = [string] $driverManifest.sha256
-                fixtureHashes = @()
-                hostOs        = [Environment]::OSVersion.VersionString
-                dpi           = 96
-                theme         = 'unknown'
-                viewport      = @{ width = 0; height = 0 }
-            }
-
-            return Invoke-UiAcceptanceRun -ScenarioId $name `
-                -Scenario { Invoke-UiAcceptanceScenario -Path $scenarioPath -Arguments $entryArguments } `
-                -Cleanup $cleanupBody `
-                -OwnedRoot $runRoot -OutputDirectory $runOutput -Metadata $metadata `
-                -RunToken $runToken -SupportPath $supportExecutable `
-                -ApprovedDirectories @($product)
+        }
+        # Provenance is best effort and decides nothing: git that is missing, that refuses, or that
+        # is pointed at a tree this shell cannot read must not stop a scenario from running. On
+        # Windows PowerShell a native tool writing to stderr is an error record, so an unavailable
+        # commit used to abort the preparation of every scenario; an unknown commit stays unknown.
+        $sourceCommit = ''
+        try {
+            $rawHead = & git -C $script:repositoryRoot rev-parse HEAD 2>$null
+            if ($LASTEXITCODE -eq 0) { $sourceCommit = ($rawHead | Out-String).Trim() }
+        }
+        catch { $sourceCommit = '' }
+        $metadata = @{
+            sourceCommit  = $sourceCommit
+            productHash   = $productHash
+            productVersion = $productVersion
+            driverVersion = [string] $driverManifest.version
+            driverHash    = [string] $driverManifest.sha256
+            fixtureHashes = @()
+            hostOs        = [Environment]::OSVersion.VersionString
+            dpi           = 96
+            theme         = 'unknown'
+            viewport      = @{ width = 0; height = 0 }
         }
 
-        # The ledger grows only when the invocation step is reached, never during preparation.
-        $result = Invoke-UiAcceptanceDispatch -Name $name -Prepare $prepareBody -Invoke $invokeBody -Ledger $dispatched
+        $result = Invoke-UiAcceptanceRun -ScenarioId $name `
+            -Scenario {
+                # Counted on the line where the scenario really runs and nowhere else: preparation
+                # that failed above never reaches it, so 'dispatchedCount' cannot inflate, and a
+                # scenario that does run is counted exactly once.
+                Register-UiAcceptanceDispatch -Name $name -Ledger $dispatched
+                Invoke-UiAcceptanceScenario -Path $scenarioPath -Arguments $entryArguments
+            } `
+            -Cleanup $cleanupBody `
+            -OwnedRoot $runRoot -OutputDirectory $runOutput -Metadata $metadata `
+            -RunToken $runToken -SupportPath $supportExecutable `
+            -ApprovedDirectories @($product)
         $reportPath = [string] $result.ReportPath
         if ([IO.File]::Exists($reportPath)) {
             $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json

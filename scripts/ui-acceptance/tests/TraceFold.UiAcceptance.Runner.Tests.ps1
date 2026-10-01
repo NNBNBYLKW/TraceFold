@@ -379,6 +379,280 @@ function Read-Stage5CCSummary {
     }
 }
 
+<#
+.SYNOPSIS
+    Writes a stand-in support CLI project the entry can publish in seconds.
+
+.DESCRIPTION
+    Before the entry runs anything it publishes the support tool and then asks that tool to
+    create and delete the owned root. The stand-in implements exactly these two commands and
+    keeps the ownership rule that matters: a root is created where it was asked for and is only
+    handed back to a caller that proves it knows the run token. It agrees to nothing else, so
+    whether the paths and the cleanup line up is decided by the entry's own wiring.
+
+    Every create and delete is journalled when the caller asks for it, because a test has to be
+    able to prove that nothing owned was left behind instead of assuming it.
+#>
+function Write-Stage5CCStubSupport {
+    param([Parameter(Mandatory)][string] $ProjectRoot)
+
+    [void][IO.Directory]::CreateDirectory($ProjectRoot)
+
+    $source = @'
+using System;
+using System.IO;
+using System.Text;
+
+internal static class Program
+{
+    private static int Main(string[] args)
+    {
+        if (args.Length < 2 || !string.Equals(args[0], "root", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("unsupported support command");
+            return 3;
+        }
+
+        string parent = ReadOption(args, "--parent");
+        string runId = ReadOption(args, "--run-id");
+        string token = ReadOption(args, "--token");
+        string root = ReadOption(args, "--root");
+
+        if (string.Equals(args[1], "create", StringComparison.Ordinal))
+        {
+            if (parent.Length == 0 || runId.Length == 0 || token.Length == 0)
+            {
+                Console.Error.WriteLine("root create needs a parent, a run id and a token");
+                return 3;
+            }
+            string created = Path.Combine(parent, "TraceFold-UIA-" + runId.Replace("-", string.Empty));
+            Directory.CreateDirectory(created);
+            File.WriteAllText(Path.Combine(created, ".owned-token"), token, new UTF8Encoding(false));
+            Journal("create", created);
+            Console.Out.WriteLine("{\"root\":" + Quote(created) + "}");
+            return 0;
+        }
+
+        if (string.Equals(args[1], "delete", StringComparison.Ordinal))
+        {
+            if (root.Length == 0 || token.Length == 0)
+            {
+                Console.Error.WriteLine("root delete needs a root and a token");
+                return 3;
+            }
+            string marker = Path.Combine(root, ".owned-token");
+            string stored = File.Exists(marker) ? File.ReadAllText(marker) : string.Empty;
+            if (!string.Equals(stored, token, StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("root ownership token mismatch");
+                return 3;
+            }
+            if (Directory.Exists(root)) { Directory.Delete(root, true); }
+            Journal("delete", root);
+            return 0;
+        }
+
+        Console.Error.WriteLine("unsupported support command");
+        return 3;
+    }
+
+    private static string ReadOption(string[] args, string name)
+    {
+        for (int index = 2; index < args.Length - 1; index++)
+        {
+            if (string.Equals(args[index], name, StringComparison.Ordinal)) { return args[index + 1]; }
+        }
+        return string.Empty;
+    }
+
+    private static void Journal(string action, string path)
+    {
+        string journal = Environment.GetEnvironmentVariable("TRACEFOLD_STUB_SUPPORT_JOURNAL");
+        if (string.IsNullOrEmpty(journal)) { return; }
+        File.AppendAllText(journal, action + "|" + path + Environment.NewLine, new UTF8Encoding(false));
+    }
+
+    private static string Quote(string value)
+    {
+        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+}
+'@
+    [IO.File]::WriteAllText((Join-Path $ProjectRoot 'Program.cs'), $source, [Text.UTF8Encoding]::new($false))
+
+    $project = @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>TraceFold.Media.UiAcceptance.Support</AssemblyName>
+    <RootNamespace>TraceFold.UIAcceptance.StubSupport</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+</Project>
+'@
+    $projectPath = Join-Path $ProjectRoot 'TraceFold.Media.UiAcceptance.Support.csproj'
+    [IO.File]::WriteAllText($projectPath, $project, [Text.UTF8Encoding]::new($false))
+
+    return $projectPath
+}
+
+<#
+.SYNOPSIS
+    Writes a scenario entry stub that records every invocation and what it was handed.
+
+.DESCRIPTION
+    The point of these cases is the wiring, so the stub writes its own arguments down before it
+    answers: what survives is the proof that the entry really passed the prepared paths to the
+    scenario, and how many times that happened. It deliberately does not read the paths back from
+    the summary, which would only prove what the summary claims.
+#>
+function Write-Stage5CCScenarioStub {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [ValidateSet('Passed', 'Failed')][string] $Outcome = 'Passed'
+    )
+
+    $template = @'
+param(
+    [string] $ScenarioId,
+    [string] $ExecutablePath,
+    [string] $ContractPath,
+    [string] $OwnedRoot,
+    [string] $RunToken,
+    [string] $OutputDirectory,
+    [string] $SupportPath,
+    [string] $WinAppPath
+)
+
+$journal = $env:TRACEFOLD_STUB_SCENARIO_JOURNAL
+if (-not [string]::IsNullOrWhiteSpace($journal)) {
+    $record = [ordered]@{
+        scenarioId      = $ScenarioId
+        executablePath  = $ExecutablePath
+        contractPath    = $ContractPath
+        ownedRoot       = $OwnedRoot
+        runTokenPresent = (-not [string]::IsNullOrWhiteSpace($RunToken))
+        outputDirectory = $OutputDirectory
+        supportPath     = $SupportPath
+        winAppPath      = $WinAppPath
+        supportExists   = [bool] [IO.File]::Exists($SupportPath)
+        driverExists    = [bool] [IO.File]::Exists($WinAppPath)
+        rootExists      = [bool] [IO.Directory]::Exists($OwnedRoot)
+    }
+    [IO.File]::AppendAllText($journal, ($record | ConvertTo-Json -Compress) + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+}
+
+return [pscustomobject]@{ Status = '__OUTCOME__'; Reason = '__REASON__' }
+'@
+
+    $reason = if ($Outcome -ceq 'Failed') { 'scenario_refused_on_purpose' } else { '' }
+    $text = $template.Replace('__OUTCOME__', $Outcome).Replace('__REASON__', $reason)
+    [IO.File]::WriteAllText($Path, $text, [Text.UTF8Encoding]::new($false))
+    return $Path
+}
+
+function Write-Stage5CCDriverManifest {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $ArchivePath
+    )
+
+    # The manifest describes whatever archive this case built, so the entry's length and SHA-256
+    # comparison is answered by the same bytes the pinned check performed, never by a copy of the
+    # real driver numbers.
+    $archive = Get-Item -LiteralPath $ArchivePath
+    $manifest = [ordered]@{
+        version     = '0.5.0'
+        archiveSize = [int64] $archive.Length
+        sha256      = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash
+    }
+    [IO.File]::WriteAllText($Path, ($manifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+    return $Path
+}
+
+function New-Stage5CCDriverArchive {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [switch] $WithoutDriverExecutable
+    )
+
+    $staging = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-driver-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($staging)
+    try {
+        if ($WithoutDriverExecutable) {
+            [IO.File]::WriteAllText((Join-Path $staging 'readme.txt'), 'The pinned executable is missing on purpose.', [Text.UTF8Encoding]::new($false))
+        }
+        else {
+            [IO.File]::WriteAllBytes((Join-Path $staging 'winapp.exe'), [byte[]]@(1, 2, 3))
+        }
+        Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $Path -Force
+    }
+    finally { Remove-UiTestTree -Path $staging }
+
+    return $Path
+}
+
+function New-Stage5CCProductStub {
+    param([Parameter(Mandatory)][string] $Path)
+
+    [void][IO.Directory]::CreateDirectory($Path)
+    [IO.File]::WriteAllBytes((Join-Path $Path 'TraceFold.Media.exe'), [byte[]]@(1, 2, 3))
+    return $Path
+}
+
+<#
+.SYNOPSIS
+    Builds a repository copy the entry can actually walk past its precheck.
+#>
+function New-Stage5CCLiveRepository {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $Scenario,
+        [ValidateSet('Passed', 'Failed')][string] $ScenarioOutcome = 'Passed'
+    )
+
+    $repo = New-Stage5CCFakeRepository -Path $Path
+    $null = Write-Stage5CCStubSupport -ProjectRoot (Join-Path $repo 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support')
+    $null = Write-Stage5CCScenarioStub -Path (Join-Path $repo ('scripts/ui-acceptance/scenarios/' + (Get-UiAcceptanceScenarioFile -Name $Scenario))) -Outcome $ScenarioOutcome
+    return $repo
+}
+
+function Invoke-Stage5CCLiveEntry {
+    param(
+        [Parameter(Mandatory)][string] $RepositoryRoot,
+        [Parameter(Mandatory)][string] $ProductDirectory,
+        [Parameter(Mandatory)][string] $WinAppCliArchivePath,
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)][string] $Scenario
+    )
+
+    # The entry answers with 'exit', so it can only be observed from a child process.
+    $hostExe = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+    $entry = Join-Path $RepositoryRoot 'scripts/run-stage5cc-ui-acceptance.ps1'
+    $null = & $hostExe -NoProfile -File $entry `
+        -ProductDirectory $ProductDirectory -WinAppCliArchivePath $WinAppCliArchivePath `
+        -OutputDirectory $OutputDirectory -Scenario $Scenario 2>&1
+    return $LASTEXITCODE
+}
+
+function Read-Stage5CCJournal {
+    param([Parameter(Mandatory)][string] $Path)
+
+    if (-not [IO.File]::Exists($Path)) { return }
+    $lines = @([IO.File]::ReadAllLines($Path) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $records = @($lines | ForEach-Object { $_ | ConvertFrom-Json })
+    # No comma: every caller wraps the call in @(), so the single-element cases must also survive
+    # that wrap. Wrapping an empty array here would have reported one invocation instead of none.
+    return $records
+}
+
 function Get-TestCases {
     $script:metadata = @{sourceCommit='abc';productHash='hash';productVersion='1';driverVersion='0.5.0';driverHash='hash';fixtureHashes=@();hostOs='Windows';dpi=96;theme='Light';viewport=@{width=1024;height=720}}
     return @(
@@ -1138,52 +1412,185 @@ function Get-TestCases {
             }
         },
         @{
-            Name = 'a preparation failure never counts as a dispatched scenario'
-            Body = {
-                $ledger = New-Object 'System.Collections.Generic.List[string]'
-                $probe = @{ Invoked = 0 }
-                try {
-                    # Everything before the scenario lives in -Prepare: a root that was refused,
-                    # a driver that did not unpack, an output directory that already exists.
-                    Assert-Throws {
-                        Invoke-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger `
-                            -Prepare { throw 'owned_root_create_refused' } `
-                            -Invoke { $probe.Invoked = $probe.Invoked + 1; return ([pscustomobject]@{ Status = 'Passed' }) }
-                    }
-                    Assert-Equal 0 $ledger.Count
-                    Assert-Equal 0 $probe.Invoked
-                }
-                finally { $ledger.Clear() }
-            }
-        },
-        @{
-            Name = 'one real scenario invocation counts exactly one dispatch'
+            Name = 'preparation success hands the prepared paths to one real scenario invocation'
             Body = {
                 $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
                 [void][IO.Directory]::CreateDirectory($base)
+                $previousScenarioJournal = $env:TRACEFOLD_STUB_SCENARIO_JOURNAL
+                $previousSupportJournal = $env:TRACEFOLD_STUB_SUPPORT_JOURNAL
                 try {
-                    $entry = Join-Path $base 'entry.ps1'
-                    [IO.File]::WriteAllText($entry, "param([string] `$ScenarioId)`nreturn [pscustomobject]@{ Status = 'Passed' }`n", [Text.UTF8Encoding]::new($false))
-                    $ledger = New-Object 'System.Collections.Generic.List[string]'
-                    $probe = @{ Invoked = 0 }
-                    $outcome = Invoke-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger `
-                        -Prepare { return @{ Marker = 'prepared' } } `
-                        -Invoke {
-                            param($prepared)
-                            $probe.Invoked = $probe.Invoked + 1
-                            Assert-Equal 'prepared' $prepared.Marker
-                            return (Invoke-UiAcceptanceScenario -Path $entry -Arguments @{ ScenarioId = 'visual' })
-                        }
+                    $repo = New-Stage5CCLiveRepository -Path (Join-Path $base 'repo') -Scenario 'Visual'
+                    $product = New-Stage5CCProductStub -Path (Join-Path $base 'product')
+                    $archive = New-Stage5CCDriverArchive -Path (Join-Path $base 'driver.zip')
+                    $null = Write-Stage5CCDriverManifest -Path (Join-Path $base 'repo/apps/media-desktop/tools/winapp/win-x64/manifest.json') -ArchivePath $archive
+
+                    $journal = Join-Path $base 'scenario-journal.jsonl'
+                    $supportJournal = Join-Path $base 'support-journal.txt'
+                    $env:TRACEFOLD_STUB_SCENARIO_JOURNAL = $journal
+                    $env:TRACEFOLD_STUB_SUPPORT_JOURNAL = $supportJournal
+                    $out = Join-Path $base 'out-prepared'
+
+                    Assert-Equal 0 (Invoke-Stage5CCLiveEntry -RepositoryRoot $repo -ProductDirectory $product -WinAppCliArchivePath $archive -OutputDirectory $out -Scenario 'Visual')
+
+                    $summary = (Read-Stage5CCSummary -OutputDirectory $out).Summary
+                    Assert-Equal 'Passed' $summary.status
+                    Assert-Equal 1 @($summary.entries).Count
+                    Assert-Equal 1 $summary.checks.dispatchedCount
+                    Assert-Equal $false $summary.checks.blockedBeforeDispatch
+
+                    # The stub scenario wrote down what it was handed, and those values are the
+                    # prepared paths: preparation really reached the invocation intact.
+                    $records = @(Read-Stage5CCJournal -Path $journal)
+                    Assert-Equal 1 $records.Count
+                    $record = $records[0]
+                    Assert-Equal 'visual' $record.scenarioId
+                    Assert-Equal ([IO.Path]::Combine($product, 'TraceFold.Media.exe')) $record.executablePath
+                    Assert-Equal (Join-Path $out 'Visual') $record.outputDirectory
+                    Assert-Equal ([IO.Path]::Combine($repo, 'apps', 'media-desktop', 'tools', 'ui-acceptance-contract', 'stage5cc-uia-contract.json')) $record.contractPath
+                    Assert-Equal $true ([bool] $record.runTokenPresent)
+                    Assert-Equal $true ([bool] $record.rootExists)
+                    Assert-Equal ([IO.Path]::Combine([string] $record.ownedRoot, 'winapp', 'winapp.exe')) $record.winAppPath
+                    Assert-Equal ([IO.Path]::Combine([string] $record.ownedRoot, 'support', 'TraceFold.Media.UiAcceptance.Support.exe')) $record.supportPath
+                    Assert-Equal $true ([bool] $record.supportExists)
+                    Assert-Equal $true ([bool] $record.driverExists)
+
+                    # One root was owned for this run, and the run handed it back: the support
+                    # journalled the create and the delete of exactly the same directory.
+                    $supportLines = @([IO.File]::ReadAllLines($supportJournal) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    Assert-Equal 2 $supportLines.Count
+                    Assert-Equal ('create|' + [string] $record.ownedRoot) $supportLines[0]
+                    Assert-Equal ('delete|' + [string] $record.ownedRoot) $supportLines[1]
+                    Assert-True (-not [IO.Directory]::Exists([string] $record.ownedRoot))
+
+                    $report = Get-Content -LiteralPath ([IO.Path]::Combine($out, 'Visual', 'report.json')) -Raw | ConvertFrom-Json
+                    Assert-Equal 'Passed' $report.scenarios[0].status
+                    Assert-Equal 'Passed' $report.cleanup.status
+                }
+                finally {
+                    $env:TRACEFOLD_STUB_SCENARIO_JOURNAL = $previousScenarioJournal
+                    $env:TRACEFOLD_STUB_SUPPORT_JOURNAL = $previousSupportJournal
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'a preparation failure after the owned root exists counts nothing and cleans up'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                $previousScenarioJournal = $env:TRACEFOLD_STUB_SCENARIO_JOURNAL
+                $previousSupportJournal = $env:TRACEFOLD_STUB_SUPPORT_JOURNAL
+                try {
+                    $repo = New-Stage5CCLiveRepository -Path (Join-Path $base 'repo') -Scenario 'Visual'
+                    $product = New-Stage5CCProductStub -Path (Join-Path $base 'product')
+                    # The archive unpacks, but without the pinned executable, so the owned root is
+                    # already there when preparation refuses to continue.
+                    $archive = New-Stage5CCDriverArchive -Path (Join-Path $base 'driver.zip') -WithoutDriverExecutable
+                    $null = Write-Stage5CCDriverManifest -Path (Join-Path $base 'repo/apps/media-desktop/tools/winapp/win-x64/manifest.json') -ArchivePath $archive
+
+                    $journal = Join-Path $base 'scenario-journal.jsonl'
+                    $supportJournal = Join-Path $base 'support-journal.txt'
+                    $env:TRACEFOLD_STUB_SCENARIO_JOURNAL = $journal
+                    $env:TRACEFOLD_STUB_SUPPORT_JOURNAL = $supportJournal
+                    $out = Join-Path $base 'out-refused'
+
+                    Assert-Equal 1 (Invoke-Stage5CCLiveEntry -RepositoryRoot $repo -ProductDirectory $product -WinAppCliArchivePath $archive -OutputDirectory $out -Scenario 'Visual')
+
+                    $summary = (Read-Stage5CCSummary -OutputDirectory $out).Summary
+                    Assert-Equal 'Blocked' $summary.status
+                    $entry = @($summary.entries)[0]
+                    Assert-Equal 'Blocked' $entry.executionStatus
+                    Assert-Equal 'pinned_driver_executable_missing' $entry.reason
+                    Assert-Equal '' $entry.reportPath
+                    Assert-Equal $false $entry.complete
+
+                    # The precheck let this request through and preparation stopped it afterwards,
+                    # so the flag stays false while the count stays at zero: they are two answers.
+                    Assert-Equal 0 $summary.checks.missingCount
+                    Assert-Equal 0 $summary.checks.dispatchedCount
+                    Assert-Equal $false $summary.checks.blockedBeforeDispatch
+
+                    # The scenario was never reached, not even once.
+                    Assert-Equal 0 @(Read-Stage5CCJournal -Path $journal).Count
+
+                    # The walk still knew where its scaffold had been put, and gave it back rather
+                    # than leaving an owned root behind for someone else to find.
+                    $supportLines = @([IO.File]::ReadAllLines($supportJournal) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    Assert-Equal 2 $supportLines.Count
+                    Assert-Equal ([string] $supportLines[0]).Replace('create|', 'delete|') $supportLines[1]
+                    $root = ([string] $supportLines[0]).Substring('create|'.Length)
+                    Assert-True (-not [IO.Directory]::Exists($root))
+                }
+                finally {
+                    $env:TRACEFOLD_STUB_SCENARIO_JOURNAL = $previousScenarioJournal
+                    $env:TRACEFOLD_STUB_SUPPORT_JOURNAL = $previousSupportJournal
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'a failing scenario counts one dispatch and keeps the cleanup and failure gates'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                $previousScenarioJournal = $env:TRACEFOLD_STUB_SCENARIO_JOURNAL
+                $previousSupportJournal = $env:TRACEFOLD_STUB_SUPPORT_JOURNAL
+                try {
+                    $repo = New-Stage5CCLiveRepository -Path (Join-Path $base 'repo') -Scenario 'Visual' -ScenarioOutcome 'Failed'
+                    $product = New-Stage5CCProductStub -Path (Join-Path $base 'product')
+                    $archive = New-Stage5CCDriverArchive -Path (Join-Path $base 'driver.zip')
+                    $null = Write-Stage5CCDriverManifest -Path (Join-Path $base 'repo/apps/media-desktop/tools/winapp/win-x64/manifest.json') -ArchivePath $archive
+
+                    $journal = Join-Path $base 'scenario-journal.jsonl'
+                    $supportJournal = Join-Path $base 'support-journal.txt'
+                    $env:TRACEFOLD_STUB_SCENARIO_JOURNAL = $journal
+                    $env:TRACEFOLD_STUB_SUPPORT_JOURNAL = $supportJournal
+                    $out = Join-Path $base 'out-failed'
+
+                    Assert-Equal 1 (Invoke-Stage5CCLiveEntry -RepositoryRoot $repo -ProductDirectory $product -WinAppCliArchivePath $archive -OutputDirectory $out -Scenario 'Visual')
+
+                    $summary = (Read-Stage5CCSummary -OutputDirectory $out).Summary
+                    Assert-Equal 'Failed' $summary.status
+                    Assert-Equal 'Failed' @($summary.entries)[0].status
+                    Assert-Equal 'Failed' @($summary.entries)[0].executionStatus
+
+                    # It really ran, so it really counts: the count is not a promise of success.
+                    Assert-Equal 1 $summary.checks.dispatchedCount
+                    Assert-Equal $false $summary.checks.blockedBeforeDispatch
+                    Assert-Equal 1 @(Read-Stage5CCJournal -Path $journal).Count
+
+                    # The gates that survive a failed scenario: a report that says so, cleanup that
+                    # passed, and no owned root left behind.
+                    $report = Get-Content -LiteralPath ([IO.Path]::Combine($out, 'Visual', 'report.json')) -Raw | ConvertFrom-Json
+                    Assert-Equal 'Failed' $report.scenarios[0].status
+                    Assert-Equal 'Passed' $report.cleanup.status
+                    Assert-Contains $report.scenarios[0].steps[0].reason 'scenario_refused_on_purpose'
+
+                    $supportLines = @([IO.File]::ReadAllLines($supportJournal) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    Assert-Equal 2 $supportLines.Count
+                    Assert-Equal ([string] $supportLines[0]).Replace('create|', 'delete|') $supportLines[1]
+                    Assert-True (-not [IO.Directory]::Exists((([string] $supportLines[0]).Substring('create|'.Length))))
+                }
+                finally {
+                    $env:TRACEFOLD_STUB_SCENARIO_JOURNAL = $previousScenarioJournal
+                    $env:TRACEFOLD_STUB_SUPPORT_JOURNAL = $previousSupportJournal
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'the dispatch ledger refuses to count the same scenario twice'
+            Body = {
+                $ledger = New-Object 'System.Collections.Generic.List[string]'
+                try {
+                    Register-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger
                     Assert-Equal 1 $ledger.Count
                     Assert-Equal 'Visual' $ledger[0]
-                    Assert-Equal 1 $probe.Invoked
-                    Assert-Equal 'Passed' $outcome.Status
-
-                    # The same scenario is never counted twice, even if the walk asks again.
-                    Assert-Throws { Invoke-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger -Prepare { } -Invoke { } }
+                    Assert-Throws { Register-UiAcceptanceDispatch -Name 'Visual' -Ledger $ledger }
                     Assert-Equal 1 $ledger.Count
+                    Assert-Throws { Register-UiAcceptanceDispatch -Name 'Visual' -Ledger $null }
                 }
-                finally { Remove-UiTestTree -Path $base }
+                finally { $ledger.Clear() }
             }
         }
     )

@@ -173,32 +173,32 @@ function Test-UiAcceptanceRequestCompleteness {
 
 <#
 .SYNOPSIS
-    Prepares one scenario and records it as dispatched only once it is really invoked.
+    Records a scenario in the dispatch ledger at the moment it is really invoked.
 
 .DESCRIPTION
-    The summary must not blur preparation with dispatch. Creating the owned root, unpacking the
-    pinned driver and writing the report directory are preparation: when any of them fails the
-    scenario never ran, and counting it would let a broken scaffold read like a run. Everything
-    that can fail before the scenario belongs to -Prepare; only reaching -Invoke counts, so the
-    ledger entry is written strictly between the two and never inside a preparation step.
+    The ledger answers one question in the summary: how many scenarios reached their own
+    invocation. Preparation is not dispatch - creating the owned root, copying the support tool
+    and unpacking the pinned driver all happen before a scenario exists, and a scaffold that
+    never came up must read as zero rather than as a run that happened.
+
+    So this is called from exactly one place: the step that invokes the scenario, immediately
+    before Invoke-UiAcceptanceScenario. Anything failing earlier never reaches that line, which
+    is what keeps 'dispatchedCount' honest without moving preparation into a separate scope.
+
+    Counting one scenario twice would mean the walk itself lost track of where it is, so the
+    second attempt is refused rather than silently doubling the number.
 #>
-function Invoke-UiAcceptanceDispatch {
+function Register-UiAcceptanceDispatch {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][scriptblock] $Prepare,
-        [Parameter(Mandatory)][scriptblock] $Invoke,
         [Parameter(Mandatory)] $Ledger
     )
 
     if ($null -eq $Ledger) { throw 'A dispatch ledger is required.' }
     if ($Ledger -ccontains $Name) { throw ('The scenario is already dispatched: ' + $Name + '.') }
 
-    # Anything thrown here leaves the ledger untouched: nothing was dispatched.
-    $prepared = & $Prepare
-
     [void] $Ledger.Add($Name)
-    return & $Invoke $prepared
 }
 
 <#
@@ -485,5 +485,5 @@ Export-ModuleMember -Function @(
     'New-UiAcceptanceEntryArguments',
     'Invoke-UiAcceptanceScenario',
     'New-UiAcceptanceRunRoot',
-    'Invoke-UiAcceptanceDispatch'
+    'Register-UiAcceptanceDispatch'
 )
