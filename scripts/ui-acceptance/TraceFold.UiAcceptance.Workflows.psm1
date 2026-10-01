@@ -282,10 +282,14 @@ function Get-UiAcceptanceListRowTexts {
     An empty set is a legitimate input - it is how "this list renders nothing" is stated - and the two
     PowerShell runtimes disagree about how it arrives: a caller's $null and a caller's @() both mean no
     members, but binding a bare empty string to a typed [string[]] parameter is itself an error in
-    PowerShell 7. The parameters are therefore untyped, and a value that is null or an empty string is
-    read as "no members", so a caller with nothing says nothing on either runtime instead of one of
-    them refusing the call. A row that renders no text is not a member of the set: the caller states
-    such a row by its name, never by an empty string.
+    PowerShell 7. The parameters are therefore untyped, and only a null value is read as "no members",
+    so a caller with nothing says nothing on either runtime instead of one of them refusing the call.
+
+    An empty string is a value, not a third way of saying "no members". A row that rendered no text is
+    still a row the list showed, so treating its empty text as absent would silently drop it: a
+    nameless row would then be absorbed into an empty set, and two nameless rows into one, and the
+    comparison would confirm a row set the product never displayed. Text is compared exactly as it was
+    read - nothing is trimmed and nothing is folded into a missing row.
 #>
 function Test-UiAcceptanceRowSetMatch {
     [CmdletBinding()]
@@ -296,15 +300,11 @@ function Test-UiAcceptanceRowSetMatch {
 
     $observedSorted = [System.Collections.Generic.List[string]]::new()
     foreach ($value in @($Observed)) {
-        if ($null -ne $value -and -not [string]::IsNullOrEmpty([string] $value)) {
-            $observedSorted.Add([string] $value)
-        }
+        if ($null -ne $value) { $observedSorted.Add([string] $value) }
     }
     $expectedSorted = [System.Collections.Generic.List[string]]::new()
     foreach ($value in @($Expected)) {
-        if ($null -ne $value -and -not [string]::IsNullOrEmpty([string] $value)) {
-            $expectedSorted.Add([string] $value)
-        }
+        if ($null -ne $value) { $expectedSorted.Add([string] $value) }
     }
     $observedSorted.Sort([System.StringComparer]::Ordinal)
     $expectedSorted.Sort([System.StringComparer]::Ordinal)

@@ -290,7 +290,7 @@ function Get-TestCases {
         }
     },
     @{
-        Name = 'a row set comparison ignores order but not repeats, and refuses a wrong set'
+        Name = 'a row set comparison ignores order but not repeats, keeps a nameless row, and refuses a wrong set'
         Body = {
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('b', 'a') -Expected @('a', 'b'))
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed @() -Expected @())
@@ -303,15 +303,33 @@ function Get-TestCases {
             Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', 'a') -Expected @('a')))
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('a', 'a') -Expected @('a', 'a'))
             # An empty set is a legitimate answer, and the two runtimes deliver it differently, so
-            # every spelling of "nothing" has to be accepted and treated as the same set.
+            # $null and @() are the two spellings of "nothing" and both have to be accepted as the
+            # same set.
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed $null -Expected $null)
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed $null -Expected @())
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed @() -Expected $null)
             Assert-True (Test-UiAcceptanceRowSetMatch -Observed @() -Expected @())
             Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed $null -Expected @('a')))
-            # One row that rendered no text is not a member: an empty string says "no members".
-            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('') -Expected @())
-            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('') -Expected @('', ''))
+            # A row that rendered no text is still a row, and an empty string is not a third spelling
+            # of "nothing". Treating it as one would let a nameless row be absorbed into an empty set
+            # - or into its own repeat - and so confirm a row set the product never showed.
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('') -Expected @()))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @() -Expected @('')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('') -Expected @('', '')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('', '') -Expected @('')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', '') -Expected @('a')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a') -Expected @('a', '')))
+            # The same empty rows on both sides still compare equal, and the same multiset read in
+            # another order is still the same multiset.
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('') -Expected @(''))
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('', '') -Expected @('', ''))
+            Assert-True (Test-UiAcceptanceRowSetMatch -Observed @('a', '', 'b', 'a') -Expected @('b', 'a', 'a', ''))
+            # A repeat is still not the same as its absence, and an empty row is a value whose
+            # repeats have to be counted too.
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', 'a', '') -Expected @('a', '')))
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a', '', '') -Expected @('a', '')))
+            # A row of text that differs only in case is still a different row.
+            Assert-True (-not (Test-UiAcceptanceRowSetMatch -Observed @('a') -Expected @('A')))
         }
     },
     @{
