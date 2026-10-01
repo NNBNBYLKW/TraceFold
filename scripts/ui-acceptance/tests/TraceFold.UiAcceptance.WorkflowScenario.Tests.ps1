@@ -68,6 +68,169 @@ function Read-TaxonomyScenarioSource {
 
 <#
 .SYNOPSIS
+    Returns one raw driver response in the shape the pinned driver answers with.
+
+.DESCRIPTION
+    The fixture starts from windows[].elements[].children carrying the driver's own field names,
+    because that is the only shape in which two reports of an element can still be told apart.
+
+    Every element is named 'term' on purpose, so a node can only survive by what the driver actually
+    reported and never by its name: the parent carries an id and a child, four siblings carry no id
+    at all and are separated only by position, type, enablement or visibility, and one element is
+    reported twice with every field identical, which is the one case that has to collapse.
+#>
+function Get-TaxonomyEvidenceRawTree {
+    $json = @'
+{
+  "windows": [
+    {
+      "elements": [
+        { "type": "Text", "automationId": "term-1", "name": "term", "isEnabled": true, "isOffscreen": false,
+          "x": 10, "y": 20, "width": 100, "height": 30,
+          "children": [
+            { "type": "Text", "name": "term", "isEnabled": true, "isOffscreen": false,
+              "x": 12, "y": 22, "width": 40, "height": 20 }
+          ] },
+        { "type": "Text", "name": "term", "isEnabled": true, "isOffscreen": false,
+          "x": 10, "y": 60, "width": 100, "height": 30 },
+        { "type": "Text", "name": "term", "isEnabled": true, "isOffscreen": false,
+          "x": 10, "y": 100, "width": 100, "height": 30 },
+        { "type": "ListItem", "name": "term", "isEnabled": true, "isOffscreen": false,
+          "x": 10, "y": 100, "width": 100, "height": 30 },
+        { "type": "Text", "name": "term", "isEnabled": false, "isOffscreen": false,
+          "x": 10, "y": 140, "width": 100, "height": 30 },
+        { "type": "Text", "name": "term", "isEnabled": true, "isOffscreen": true,
+          "x": 10, "y": 180, "width": 100, "height": 30 },
+        { "type": "Text", "name": "term", "isEnabled": true, "isOffscreen": false,
+          "x": 10, "y": 60, "width": 100, "height": 30 }
+      ]
+    }
+  ]
+}
+'@
+    return (ConvertFrom-Json -InputObject $json)
+}
+
+<#
+.SYNOPSIS
+    Returns a small raw driver response built from the caller's JSON, for the cases that need a
+    shape the main fixture does not carry.
+#>
+function ConvertFrom-TaxonomyEvidenceJson {
+    param([Parameter(Mandatory)][string] $Json)
+
+    return (ConvertFrom-Json -InputObject $Json)
+}
+
+function Get-TaxonomyEvidenceNodesAt {
+    param(
+        [Parameter(Mandatory)] $Tree,
+        [Parameter(Mandatory)][int] $Y
+    )
+
+    # Returned without the comma on purpose: every caller wraps the call in @(), and a wrapped
+    # return would be one array inside another, which reads as a single node of its own.
+    return @($Tree | Where-Object { [int] $_.bounds.y -eq $Y })
+}
+
+<#
+.SYNOPSIS
+    Builds the text of a scope that carries the taxonomy scenario's own functions.
+
+.DESCRIPTION
+    The scenario is an owned-run entry point, so dot-sourcing the file would launch the product. Its
+    top-level functions are lifted out of the parsed file instead, which keeps the conversion, the
+    collapse of repeated reports and the call to the evidence writer the production ones. The only
+    thing replaced is the observation, and it is replaced at the transport seam, so the chain that
+    runs here is the same one a gate run uses from the driver's answer to the JSON left on disk.
+#>
+function Get-TaxonomyEvidenceScopeText {
+    param(
+        [Parameter(Mandatory)][string] $ScenarioPath,
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $OutputDirectory
+    )
+
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($ScenarioPath, [ref] $tokens, [ref] $errors)
+    if (@($errors).Count -gt 0) { throw 'The taxonomy scenario does not parse.' }
+    $functions = @($ast.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.FunctionDefinitionAst]
+            }, $false))
+    if (@($functions).Count -eq 0) { throw 'The taxonomy scenario defines no functions.' }
+
+    $lines = @(
+        'Set-StrictMode -Version Latest',
+        '$ErrorActionPreference = ''Stop''',
+        '$productProcessId = 4242',
+        '$InspectDepth = 20',
+        '$ObservationTimeoutSeconds = 20',
+        '$WinAppPath = ''C:\fake\winapp.exe''',
+        '$RunToken = ''run-token''',
+        # Composed with -f rather than concatenated: inside an array literal a written-out
+        # concatenation is not one element, so the path would land on a line of its own.
+        ('$OwnedRoot = "{0}"' -f $Root),
+        ('$OutputDirectory = "{0}"' -f $OutputDirectory),
+        '$artifacts = New-Object ''System.Collections.Generic.List[string]'''
+    )
+    foreach ($function in $functions) { $lines += $function.Extent.Text }
+    $lines += @(
+        'function Invoke-WinAppObservation {',
+        '    param(',
+        '        [Parameter(Mandatory)][string[]] $Arguments,',
+        '        [Parameter(Mandatory)][int] $ProcessId,',
+        '        [Parameter(Mandatory)][int] $TimeoutSeconds,',
+        '        [Parameter(Mandatory)][string] $WinAppPath,',
+        '        [Parameter(Mandatory)][string] $RunToken,',
+        '        [Parameter(Mandatory)][string] $OwnedRoot',
+        '    )',
+        '    return [pscustomobject] @{ Status = ''Passed''; TimedOut = $false; Data = $script:taxonomyStubObservation }',
+        '}'
+    )
+    return ($lines -join "`n")
+}
+
+<#
+.SYNOPSIS
+    Runs the taxonomy scenario's evidence chain over one raw driver response and returns the tree
+    that was written.
+
+.DESCRIPTION
+    The tree is read back from the final JSON rather than from the array the conversion returned, so
+    a claim is about the evidence a gate run would leave behind and not about an intermediate value
+    that nothing consumes. The owned root is created for this call only and is handed back whether or
+    not the conversion succeeded.
+#>
+function Invoke-TaxonomyEvidenceRoundTrip {
+    param(
+        [Parameter(Mandatory)] $Raw,
+        [Parameter(Mandatory)][string] $ScenarioPath,
+        [string] $EvidenceId = 'taxonomy-evidence-regression'
+    )
+
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('TraceFold-Uia-Test-' + [guid]::NewGuid().ToString('D'))
+    [void][IO.Directory]::CreateDirectory($root)
+    try {
+        $out = Join-Path $root 'out'
+        [void][IO.Directory]::CreateDirectory($out)
+        $script:taxonomyStubObservation = $Raw
+        $text = Get-TaxonomyEvidenceScopeText -ScenarioPath $ScenarioPath -Root $root -OutputDirectory $out
+        . ([scriptblock]::Create($text))
+        $file = Save-TaxonomyTree -EvidenceId $EvidenceId
+        $json = [IO.File]::ReadAllText((Join-Path $out $file))
+        # Returned without the comma on purpose: every caller wraps the call in @(), and a wrapped
+        # return would be one array inside another, which reads as a single node of its own.
+        return @((ConvertFrom-Json -InputObject $json).tree)
+    }
+    finally {
+        Remove-UiTestTree -Path $root
+    }
+}
+
+<#
+.SYNOPSIS
     Returns every literal a scenario passes as a mutation step id.
 
 .DESCRIPTION
@@ -1292,6 +1455,98 @@ function Get-TestCases {
                 $isAscii = $true
                 foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
                 Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the taxonomy evidence keeps same-named nodes that differ in position, type or state'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/50-taxonomy-maintenance-undo.ps1'
+                $tree = @(Invoke-TaxonomyEvidenceRoundTrip -Raw (Get-TaxonomyEvidenceRawTree) -ScenarioPath $path)
+                # One node per element the driver reported, the child included, and the element the
+                # driver reported twice with every field identical counted once.
+                Assert-Equal 7 @($tree).Count 'every element the driver reported has to reach the evidence'
+                # Every element of the fixture is named the same, so a node that survived because of
+                # its name would prove nothing about what the driver actually reported.
+                foreach ($node in $tree) {
+                    Assert-Equal 'term' $node.name 'the fixture names every element the same'
+                }
+                $parent = @($tree | Where-Object { $_.automationId -ceq 'term-1' })
+                Assert-Equal 1 @($parent).Count 'the parent has to keep the id the driver reported'
+                Assert-Equal '' $parent[0].parentAutomationId
+                Assert-Equal 'Text' $parent[0].controlType
+                Assert-True $parent[0].enabled
+                Assert-True (-not $parent[0].offscreen)
+                Assert-Equal 10 $parent[0].bounds.x
+                Assert-Equal 20 $parent[0].bounds.y
+                Assert-Equal 100 $parent[0].bounds.width
+                Assert-Equal 30 $parent[0].bounds.height
+                # A child is its own node and keeps the id of the parent it was read under, so the
+                # nesting the driver reported is still readable in the evidence.
+                $children = @($tree | Where-Object { $_.parentAutomationId -ceq 'term-1' })
+                Assert-Equal 1 @($children).Count 'the nested child has to reach the evidence'
+                Assert-Equal 'Text' $children[0].controlType
+                Assert-Equal 12 $children[0].bounds.x
+                Assert-Equal 22 $children[0].bounds.y
+                Assert-Equal 40 $children[0].bounds.width
+                Assert-Equal 20 $children[0].bounds.height
+                # Position alone separates a node: the five siblings closest to the parent carry no
+                # id at all, and two of them differ from another sibling in nothing but position.
+                $atSixty = @(Get-TaxonomyEvidenceNodesAt -Tree $tree -Y 60)
+                Assert-Equal 1 @($atSixty).Count 'the element reported twice, identically, collapses once'
+                $atHundred = @(Get-TaxonomyEvidenceNodesAt -Tree $tree -Y 100)
+                Assert-Equal 2 @($atHundred).Count 'a same-named element of another type is its own node'
+                $types = @($atHundred | ForEach-Object { $_.controlType } | Sort-Object)
+                Assert-Equal 'ListItem' $types[0]
+                Assert-Equal 'Text' $types[1]
+                $atHundredForty = @(Get-TaxonomyEvidenceNodesAt -Tree $tree -Y 140)
+                Assert-Equal 1 @($atHundredForty).Count
+                Assert-True (-not $atHundredForty[0].enabled) 'a disabled element stays distinguishable from an enabled one'
+                Assert-True (-not $atHundredForty[0].offscreen)
+                $atHundredEighty = @(Get-TaxonomyEvidenceNodesAt -Tree $tree -Y 180)
+                Assert-Equal 1 @($atHundredEighty).Count
+                Assert-True $atHundredEighty[0].offscreen 'an off screen element stays distinguishable from a visible one'
+                Assert-True $atHundredEighty[0].enabled
+                # The child and the five siblings carry no id, and they are all still there.
+                $anonymous = @($tree | Where-Object { $_.automationId -ceq '' })
+                Assert-Equal 6 @($anonymous).Count 'an empty id is not an identity of its own'
+            }
+        },
+        @{
+            Name = 'the taxonomy evidence keeps an unmeasured element and still refuses a half-reported rectangle'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/50-taxonomy-maintenance-undo.ps1'
+                $unmeasured = ConvertFrom-TaxonomyEvidenceJson -Json @'
+{"windows":[{"elements":[{"type":"Text","name":"term","isEnabled":true,"isOffscreen":false}]}]}
+'@
+                $tree = @(Invoke-TaxonomyEvidenceRoundTrip -Raw $unmeasured -ScenarioPath $path)
+                Assert-Equal 1 @($tree).Count
+                Assert-Equal 'Text' $tree[0].controlType
+                # An element the driver can enumerate but not measure is recorded with zeroes in
+                # every field, so it keeps the shape of a measured node without claiming a position.
+                Assert-Equal 0 $tree[0].bounds.x
+                Assert-Equal 0 $tree[0].bounds.y
+                Assert-Equal 0 $tree[0].bounds.width
+                Assert-Equal 0 $tree[0].bounds.height
+                # A rectangle the driver reported only in part describes no rectangle, so it is
+                # refused rather than completed with edges the driver never measured.
+                $partial = ConvertFrom-TaxonomyEvidenceJson -Json @'
+{"windows":[{"elements":[{"type":"Text","name":"term","isEnabled":true,"isOffscreen":false,"x":10,"y":20}]}]}
+'@
+                Assert-Throws {
+                    $null = Invoke-TaxonomyEvidenceRoundTrip -Raw $partial -ScenarioPath $path
+                } 'a half-reported rectangle has to be refused'
+            }
+        },
+        @{
+            Name = 'the taxonomy evidence refuses a response that is not the driver shape'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/50-taxonomy-maintenance-undo.ps1'
+                $message = ''
+                try {
+                    $null = Invoke-TaxonomyEvidenceRoundTrip -Raw ([pscustomobject] @{ tree = @() }) -ScenarioPath $path
+                }
+                catch { $message = $_.Exception.Message }
+                Assert-Contains $message 'taxonomy.driver_schema_incompatible'
             }
         }
     )

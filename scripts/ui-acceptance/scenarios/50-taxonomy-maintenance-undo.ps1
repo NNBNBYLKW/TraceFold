@@ -265,8 +265,16 @@ function ConvertTo-TaxonomyReviewedNode {
 .DESCRIPTION
     The same inspection that feeds the readers is converted once into the reviewed shape, so the
     evidence describes the tree that was actually read rather than a separate reading that might
-    differ. Repetition is still collapsed by the shared converter, so a pop-up that makes the driver
-    report one element more than once yields one node.
+    differ.
+
+    Repetition is collapsed while the nodes still carry the driver's own field names, because that
+    is the only shape in which two reports of an element can still be told apart. The reviewed shape
+    folds the native type, both state flags and the rectangle into fields of its own, so elements
+    that differ only in one of those are indistinguishable there: collapsing them afterwards keeps
+    one and drops the rest, which is how same-named elements that differ in nothing but position,
+    type or state were lost from the evidence. The shared converter decides which reports survive,
+    and the walk that converts them is the same walk that gives a child the id of the parent it was
+    read under, so collapsing first costs nothing that the evidence needs.
 #>
 function Read-TaxonomyEvidenceNodes {
     $observation = Invoke-WinAppObservation -Arguments @('ui','inspect','--depth',[string] $InspectDepth) `
@@ -276,36 +284,50 @@ function Read-TaxonomyEvidenceNodes {
     if ($null -eq $observation.Data -or $null -eq $observation.Data.PSObject.Properties['windows']) {
         throw 'taxonomy.driver_schema_incompatible'
     }
-    $converted = @()
+    $observed = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($node in @(ConvertTo-UiAcceptanceFlatNodes -Tree $observation.Data `
+            -FailureCode 'taxonomy.driver_schema_incompatible')) {
+        $observed.Add($node)
+    }
+    $nodes = New-Object 'System.Collections.Generic.List[object]'
     foreach ($window in @($observation.Data.windows)) {
         if ($null -eq $window.PSObject.Properties['elements']) { throw 'taxonomy.driver_schema_incompatible' }
         foreach ($element in @($window.elements)) {
-            $converted += (ConvertTo-TaxonomyReviewedNodeList -Node $element -ParentId '')
+            Add-TaxonomyEvidenceNodes -Node $element -ParentId '' -Observed $observed -Nodes $nodes
         }
     }
-    return (ConvertTo-UiAcceptanceFlatNodes `
-        -Tree ([pscustomobject] @{ windows = @([pscustomobject] @{ elements = @($converted) }) }) `
-        -FailureCode 'taxonomy.driver_schema_incompatible')
+    return $nodes.ToArray()
 }
 
 <#
 .SYNOPSIS
-    Walks a raw driver subtree depth first, converting every node into the reviewed shape.
+    Walks one raw driver subtree depth first, converting every node into the reviewed shape and
+    keeping the ones the collapse left.
+
+.DESCRIPTION
+    A node the collapse dropped is a repeat of an element that was already converted, so it is not
+    converted again. It is still walked into, because the collapse is per element: a child is its own
+    element with an identity of its own, and it keeps the id of the parent it was read under whether
+    or not that parent was the report that survived.
 #>
-function ConvertTo-TaxonomyReviewedNodeList {
+function Add-TaxonomyEvidenceNodes {
     param(
         [Parameter(Mandatory)] $Node,
-        [AllowEmptyString()][string] $ParentId
+        [Parameter(Mandatory)][AllowEmptyString()][string] $ParentId,
+        [Parameter(Mandatory)] $Observed,
+        [Parameter(Mandatory)] $Nodes
     )
 
-    $flat = @(ConvertTo-TaxonomyReviewedNode -Node $Node -ParentId $ParentId)
-    $id = [string] $flat[0].automationId
+    # The conversion is what states the node's id, so the id a child reports as its parent is taken
+    # from the conversion itself rather than from a second rule that could disagree with it.
+    $converted = ConvertTo-TaxonomyReviewedNode -Node $Node -ParentId $ParentId
+    if ($Observed.Contains($Node)) { $Nodes.Add($converted) }
     if ($null -ne $Node.PSObject.Properties['children']) {
         foreach ($child in @($Node.children)) {
-            $flat += (ConvertTo-TaxonomyReviewedNodeList -Node $child -ParentId $id)
+            Add-TaxonomyEvidenceNodes -Node $child -ParentId ([string] $converted.automationId) `
+                -Observed $Observed -Nodes $Nodes
         }
     }
-    return ,$flat
 }
 
 function Test-TaxonomyWait {
