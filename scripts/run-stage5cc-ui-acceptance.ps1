@@ -81,6 +81,76 @@ function Get-Stage5CCOverallStatus {
     return 'Passed'
 }
 
+<#
+.SYNOPSIS
+    Turns a precheck observation into the persisted 'checks' node of the summary.
+
+.DESCRIPTION
+    The node carries what this run checked, what it found missing and whether the outcome
+    stopped dispatch, so a reader can verify the gate from disk. It never carries a path:
+    summaries are shared artifacts and must stay free of machine specific locations. The
+    observation time comes from the check itself, not from the moment the summary is written.
+#>
+function New-Stage5CCCompletenessNode {
+    param(
+        [Parameter(Mandatory)] $Completeness,
+        [Parameter(Mandatory)][bool] $BlockedBeforeDispatch,
+        [Parameter(Mandatory)][int] $DispatchedCount
+    )
+
+    $missing = @()
+    foreach ($item in @($Completeness.Missing)) {
+        $missing += [ordered]@{
+            id        = [string] $item.id
+            entryFile = [string] $item.entryFile
+            reason    = [string] $item.reason
+        }
+    }
+
+    return ,[ordered]@{
+        scope                 = [string] $Completeness.Scope
+        checkedCount          = [int] $Completeness.CheckedCount
+        checkedIds            = @($Completeness.Checked | ForEach-Object { [string] $_ })
+        missingCount          = [int] $Completeness.MissingCount
+        missing               = $missing
+        blockedBeforeDispatch = [bool] $BlockedBeforeDispatch
+        dispatchedCount       = [int] $DispatchedCount
+        checkedUtc            = [string] $Completeness.CheckedUtc
+    }
+}
+
+function New-Stage5CCSummary {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.ArrayList] $Index,
+        [Parameter(Mandatory)][string] $Status,
+        [string] $Reason = '',
+        $Checks
+    )
+
+    $summary = [ordered]@{
+        checkpoint = '5CC'
+        complete   = ($Status -ceq 'Passed')
+        status     = $Status
+        reason     = $Reason
+        entries    = @($Index.ToArray())
+    }
+    if ($null -ne $Checks) { $summary['checks'] = $Checks }
+
+    return ,$summary
+}
+
+function Write-Stage5CCSummary {
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)] $Summary
+    )
+
+    [void][IO.Directory]::CreateDirectory($OutputDirectory)
+    $reportPath = Join-Path $OutputDirectory 'summary.json'
+    [IO.File]::WriteAllText($reportPath, (ConvertTo-Json -InputObject $Summary -Depth 20), [Text.UTF8Encoding]::new($false))
+    return $reportPath
+}
+
 function Get-Stage5CCOwnedLedger {
     param([Parameter(Mandatory)][string] $OwnedRoot)
 
@@ -126,66 +196,129 @@ catch {
 }
 
 $index = New-Object System.Collections.ArrayList
+$dispatched = New-Object System.Collections.ArrayList
 $blockedReason = ''
 
-if (-not [IO.File]::Exists($productExecutable)) {
-    $blockedReason = 'published_product_unavailable'
+# --- request precheck ------------------------------------------------------------------
+#
+# Runs before anything else: no support publish, no owned root and no scenario is created when
+# the registry owes an entry that does not exist. A named request owes only the entries it
+# named, so verifying one slice is never blocked by a missing unrelated one; a request that
+# contains 'All' owes the whole registry, and one missing entry stops the batch here.
+
+$completeness = $null
+try {
+    $completeness = Test-UiAcceptanceRequestCompleteness -ScenariosRoot (Join-Path $script:uiRoot 'scenarios') -Requested $Scenario
 }
-elseif (-not [IO.File]::Exists($archivePath)) {
-    $blockedReason = 'pinned_driver_archive_unavailable'
+catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit $ExitInvalidArguments
 }
-else {
-    $archive = Get-Item -LiteralPath $archivePath
-    if ($archive.Length -ne [long] $driverManifest.archiveSize -or
-        (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne [string] $driverManifest.sha256) {
-        $blockedReason = 'pinned_driver_archive_mismatch'
-    }
-}
-if ([string]::IsNullOrWhiteSpace($blockedReason) -and $requested -contains 'MainChain') {
-    $mediaManifestPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ffmpeg/win-x64/manifest.json'
-    $mediaManifest = [IO.File]::ReadAllText($mediaManifestPath) | ConvertFrom-Json
-    foreach ($fileName in @('ffmpeg.exe','ffprobe.exe')) {
-        $toolPath = Join-Path $product ('tools/ffmpeg/' + $fileName)
-        if (-not [IO.File]::Exists($toolPath)) {
-            $blockedReason = 'pinned_media_tools_unavailable'
-            break
-        }
-        $expected = $mediaManifest.files.PSObject.Properties[$fileName].Value
-        if ((Get-Item -LiteralPath $toolPath).Length -ne [long]$expected.size -or
-            (Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash -cne [string]$expected.sha256) {
-            $blockedReason = 'pinned_media_tools_mismatch'
-            break
+
+if ($completeness.IncludesAll -and -not $completeness.Complete) {
+    # 'All' asks for the checkpoint, so every registry entry must exist. Nothing is dispatched:
+    # the walk stops here, before the product, driver, desktop or process checks and long before
+    # a support publish or an owned root.
+    foreach ($name in @($completeness.Checked)) {
+        Write-Stage5CCIndexEntry -Index $index -Entry @{
+            id = $name; status = 'Blocked'; reportStatus = 'Blocked'; executionStatus = 'Blocked'
+            reason = 'scenario_entry_missing'; reportPath = ''; outputDirectory = ''
+            durationMs = 0; complete = $false
         }
     }
+    $checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $true -DispatchedCount 0
+    $precheckStatus = Get-Stage5CCOverallStatus -Index $index
+    $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $precheckStatus -Reason 'scenario_entry_missing' -Checks $checks)
+    [Console]::Out.WriteLine(('Stage 5CC: ' + $precheckStatus + ' (scenario_entry_missing)'))
+    exit $ExitBlocked
 }
-if ([string]::IsNullOrWhiteSpace($blockedReason)) {
-    if (-not (Test-UiInteractiveDesktop)) {
-        $blockedReason = 'interactive_desktop_unavailable'
+
+$missingIds = @($completeness.Missing | ForEach-Object { [string] $_.id })
+$missingRecorded = @()
+
+if ($missingIds.Count -gt 0 -and -not $completeness.IncludesAll) {
+    # A named request owes only the entries it named. Each missing one is refused here, before
+    # anything is dispatched for it, and the rest of the request keeps running: verifying one
+    # slice must never be blocked by an unrelated unimplemented scenario.
+    foreach ($name in $missingIds) {
+        Write-Stage5CCIndexEntry -Index $index -Entry @{
+            id = $name; status = 'Blocked'; reportStatus = 'Blocked'; executionStatus = 'Blocked'
+            reason = 'scenario_entry_missing'; reportPath = ''; outputDirectory = ''
+            durationMs = 0; complete = $false
+        }
+        $missingRecorded += $name
     }
-    elseif (@(Get-Process -Name 'TraceFold.Media' -ErrorAction SilentlyContinue).Count -gt 0) {
-        $blockedReason = 'ordinary_product_process_running'
+}
+
+# Only the entries that still owe the later phases. Entries refused above are not walked again.
+$pending = @($requested | Where-Object { $missingRecorded -cnotcontains $_ })
+
+# Nothing left to run means no product, driver, desktop or process check needs answering: the
+# run stops with the entries it already refused, and nothing was dispatched.
+if ($pending.Count -gt 0) {
+    if (-not [IO.File]::Exists($productExecutable)) {
+        $blockedReason = 'published_product_unavailable'
     }
+    elseif (-not [IO.File]::Exists($archivePath)) {
+        $blockedReason = 'pinned_driver_archive_unavailable'
+    }
+    else {
+        $archive = Get-Item -LiteralPath $archivePath
+        if ($archive.Length -ne [long] $driverManifest.archiveSize -or
+            (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne [string] $driverManifest.sha256) {
+            $blockedReason = 'pinned_driver_archive_mismatch'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($blockedReason) -and $pending -contains 'MainChain') {
+        $mediaManifestPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ffmpeg/win-x64/manifest.json'
+        $mediaManifest = [IO.File]::ReadAllText($mediaManifestPath) | ConvertFrom-Json
+        foreach ($fileName in @('ffmpeg.exe','ffprobe.exe')) {
+            $toolPath = Join-Path $product ('tools/ffmpeg/' + $fileName)
+            if (-not [IO.File]::Exists($toolPath)) {
+                $blockedReason = 'pinned_media_tools_unavailable'
+                break
+            }
+            $expected = $mediaManifest.files.PSObject.Properties[$fileName].Value
+            if ((Get-Item -LiteralPath $toolPath).Length -ne [long]$expected.size -or
+                (Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash -cne [string]$expected.sha256) {
+                $blockedReason = 'pinned_media_tools_mismatch'
+                break
+            }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($blockedReason)) {
+        if (-not (Test-UiInteractiveDesktop)) {
+            $blockedReason = 'interactive_desktop_unavailable'
+        }
+        elseif (@(Get-Process -Name 'TraceFold.Media' -ErrorAction SilentlyContinue).Count -gt 0) {
+            $blockedReason = 'ordinary_product_process_running'
+        }
+    }
+}
+
+if ($pending.Count -eq 0) {
+    # Every requested entry was refused above, so there is nothing left to publish, own or run.
+    $checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $false -DispatchedCount 0
+    $refusedStatus = Get-Stage5CCOverallStatus -Index $index
+    $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $refusedStatus -Reason 'scenario_entry_missing' -Checks $checks)
+    [Console]::Out.WriteLine(('Stage 5CC: ' + $refusedStatus + ' (scenario_entry_missing)'))
+    exit $ExitBlocked
 }
 
 if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
-    foreach ($name in $requested) {
+    foreach ($name in $pending) {
         Write-Stage5CCIndexEntry -Index $index -Entry @{
             id = $name; status = 'Blocked'; reportStatus = 'Blocked'; executionStatus = 'Blocked'
             reason = $blockedReason; reportPath = ''; outputDirectory = ''
             durationMs = 0; complete = $false
         }
     }
-    [void][IO.Directory]::CreateDirectory($output)
-    $summary = [ordered] @{
-        checkpoint = '5CC'
-        complete = $false
-        status = Get-Stage5CCOverallStatus -Index $index
-        reason = $blockedReason
-        entries = @($index.ToArray())
-    }
-    [IO.File]::WriteAllText((Join-Path $output 'summary.json'),
-        (ConvertTo-Json -InputObject $summary -Depth 20), [Text.UTF8Encoding]::new($false))
-    [Console]::Out.WriteLine(('Stage 5CC: ' + $summary.status + ' (' + $blockedReason + ')'))
+    # The precheck ran and passed for this request, and that observation is recorded here too, so
+    # every summary says which entries were checked and how many reached dispatch.
+    $checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $false -DispatchedCount 0
+    $preflightStatus = Get-Stage5CCOverallStatus -Index $index
+    $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $preflightStatus -Reason $blockedReason -Checks $checks)
+    [Console]::Out.WriteLine(('Stage 5CC: ' + $preflightStatus + ' (' + $blockedReason + ')'))
     exit $ExitBlocked
 }
 
@@ -210,7 +343,7 @@ $productHash = (Get-FileHash -LiteralPath $productExecutable -Algorithm SHA256).
 $productVersion = [string] (Get-Item -LiteralPath $productExecutable).VersionInfo.FileVersion
 if ([string]::IsNullOrWhiteSpace($productVersion)) { $productVersion = 'unknown' }
 
-foreach ($name in $requested) {
+foreach ($name in $pending) {
     $started = [DateTimeOffset]::UtcNow
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $entryFile = Get-UiAcceptanceScenarioFile -Name $name
@@ -224,8 +357,12 @@ foreach ($name in $requested) {
     $executionStatus = 'NotRun'
     $reason = ''
 
+    # Checked again at dispatch time: an entry file may have appeared or vanished since the
+    # request precheck, and this is the check that actually decides whether anything runs. The
+    # reason stays 'scenario_not_implemented', which is an implementation debt, never a product
+    # failure, so it must never be reported as one.
     if (-not [IO.File]::Exists($scenarioPath)) {
-        $executionStatus = 'NotRun'
+        $executionStatus = 'Blocked'
         $reason = 'scenario_not_implemented'
         $clock.Stop()
         Write-Stage5CCIndexEntry -Index $index -Entry @{
@@ -236,6 +373,7 @@ foreach ($name in $requested) {
         }
         continue
     }
+    [void] $dispatched.Add($name)
 
     try {
         $runRoot = New-UiAcceptanceRunRoot -SupportPath $supportExecutable `
@@ -320,15 +458,8 @@ foreach ($name in $requested) {
 }
 
 $overall = Get-Stage5CCOverallStatus -Index $index
-$summary = [ordered] @{
-    checkpoint = '5CC'
-    complete = ($overall -ceq 'Passed')
-    status = $overall
-    reason = ''
-    entries = @($index.ToArray())
-}
-[IO.File]::WriteAllText((Join-Path $output 'summary.json'),
-    (ConvertTo-Json -InputObject $summary -Depth 20), [Text.UTF8Encoding]::new($false))
+$checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $false -DispatchedCount $dispatched.Count
+$null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $overall -Checks $checks)
 [Console]::Out.WriteLine('Stage 5CC: ' + $overall)
 
 if ($overall -ceq 'Passed') { exit 0 }

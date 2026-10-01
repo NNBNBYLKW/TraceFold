@@ -78,6 +78,101 @@ function Resolve-UiAcceptanceScenarioRequest {
 
 <#
 .SYNOPSIS
+    Reports whether the entry script of each named scenario exists on disk.
+
+.DESCRIPTION
+    The registry stays the only source of the file names, so a caller never guesses one: it
+    names scenarios and gets availability back. The resolved absolute path is deliberately not
+    returned, because the result is persisted into summaries and those must not carry machine
+    paths. An unavailable entry is not yet a verdict: what it means depends on whether the
+    request owed that scenario at all, which Test-UiAcceptanceRequestCompleteness decides.
+#>
+function Get-UiAcceptanceScenarioAvailability {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $ScenariosRoot,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Requested
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ScenariosRoot)) { throw 'A scenarios directory is required.' }
+    $root = [IO.Path]::GetFullPath($ScenariosRoot)
+    $rows = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($name in @($Requested)) {
+        if ([string]::IsNullOrWhiteSpace($name)) { throw 'A requested scenario is empty.' }
+        if (-not $script:uiAcceptanceScenarios.Contains($name)) { throw ('Unknown scenario: ' + $name + '.') }
+        $entryFile = [string] $script:uiAcceptanceScenarios[$name]
+        [void] $rows.Add([pscustomobject] @{
+            Name      = $name
+            EntryFile = $entryFile
+            Available = [bool] [IO.File]::Exists((Join-Path $root $entryFile))
+        })
+    }
+
+    return $rows.ToArray()
+}
+
+<#
+.SYNOPSIS
+    Decides which entries a request must prove complete before anything is dispatched.
+
+.DESCRIPTION
+    Two questions that must stay apart:
+      * a request that names scenarios owes exactly those entries, so one unrelated unimplemented
+        scenario must not stop another slice from being verified on its own;
+      * a request containing 'All' asks for the whole checkpoint, so every registry entry must
+        exist, and any missing one has to block before a single scenario is dispatched.
+    Nothing here reads a previous run: the answer is derived from the registry and the scenario
+    directory as they are now, and it comes back with the evidence (scope, checked ids, missing
+    ids) so the caller can persist and later re-read exactly what gated the run.
+#>
+function Test-UiAcceptanceRequestCompleteness {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $ScenariosRoot,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Requested
+    )
+
+    $raw = @($Requested)
+    if ($raw.Count -eq 0) { throw 'At least one scenario must be requested.' }
+    $includesAll = $false
+    foreach ($candidate in $raw) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { throw 'A requested scenario is empty.' }
+        if ($candidate -ceq 'All') { $includesAll = $true; continue }
+        if (-not $script:uiAcceptanceScenarios.Contains($candidate)) { throw ('Unknown scenario: ' + $candidate + '.') }
+    }
+
+    $checked = @()
+    if ($includesAll) { $checked = @(Get-UiAcceptanceScenarioName) }
+    else { $checked = @(Resolve-UiAcceptanceScenarioRequest -Requested $raw) }
+
+    $rows = @(Get-UiAcceptanceScenarioAvailability -ScenariosRoot $ScenariosRoot -Requested $checked)
+    $missingRows = @($rows | Where-Object { -not $_.Available })
+    $missing = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($row in $missingRows) {
+        [void] $missing.Add([ordered] @{
+            id        = [string] $row.Name
+            entryFile = [string] $row.EntryFile
+            reason    = 'scenario_entry_missing'
+        })
+    }
+    $available = @($rows | Where-Object { $_.Available } | ForEach-Object { [string] $_.Name })
+    $checkedUtc = [DateTimeOffset]::UtcNow.ToString('o')
+
+    return [pscustomobject] @{
+        IncludesAll  = $includesAll
+        Scope        = $(if ($includesAll) { 'all' } else { 'request' })
+        Checked      = $checked
+        CheckedCount = $checked.Count
+        Available    = $available
+        Missing      = $missing.ToArray()
+        MissingCount = $missing.Count
+        Complete     = [bool]($missing.Count -eq 0)
+        CheckedUtc   = $checkedUtc
+    }
+}
+
+<#
+.SYNOPSIS
     Reads the declared parameter block of a scenario entry file.
 
 .DESCRIPTION
@@ -352,6 +447,8 @@ Export-ModuleMember -Function @(
     'Invoke-UiAcceptanceRun',
     'Get-UiAcceptanceScenarioName',
     'Get-UiAcceptanceScenarioFile',
+    'Get-UiAcceptanceScenarioAvailability',
+    'Test-UiAcceptanceRequestCompleteness',
     'Resolve-UiAcceptanceScenarioRequest',
     'Get-UiAcceptanceEntryParameter',
     'Get-UiAcceptanceEntryParameterDetail',

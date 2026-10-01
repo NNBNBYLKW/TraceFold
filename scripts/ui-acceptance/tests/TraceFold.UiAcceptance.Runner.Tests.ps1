@@ -313,6 +313,72 @@ function New-StartupLayoutScenarioArguments {
     return $arguments
 }
 
+<#
+.SYNOPSIS
+    Builds an isolated repository copy whose scenario directory answers the registry.
+
+.DESCRIPTION
+    The entry script is exercised against a copy so these cases never depend on which scenario
+    happens to be implemented in the working tree at that moment: another slice landing or a
+    placeholder being renamed elsewhere cannot turn them green or red. Entry file names are
+    taken from the registry itself, so the mapping is never restated by the fixture.
+#>
+function New-Stage5CCFakeRepository {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [string[]] $Missing = @()
+    )
+
+    $scripts = Join-Path $Path 'scripts'
+    $fakeUiRoot = Join-Path $scripts 'ui-acceptance'
+    $fakeScenarios = Join-Path $fakeUiRoot 'scenarios'
+    [void][IO.Directory]::CreateDirectory($fakeScenarios)
+    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows')) {
+        Copy-Item -LiteralPath (Join-Path $script:uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')) -Destination (Join-Path $fakeUiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1'))
+    }
+    Copy-Item -LiteralPath (Join-Path $script:root 'scripts/run-stage5cc-ui-acceptance.ps1') -Destination (Join-Path $scripts 'run-stage5cc-ui-acceptance.ps1')
+    $manifestDirectory = Join-Path $Path 'apps/media-desktop/tools/winapp/win-x64'
+    [void][IO.Directory]::CreateDirectory($manifestDirectory)
+    Copy-Item -LiteralPath (Join-Path $script:root 'apps/media-desktop/tools/winapp/win-x64/manifest.json') -Destination (Join-Path $manifestDirectory 'manifest.json')
+
+    foreach ($name in @(Get-UiAcceptanceScenarioName)) {
+        if ($Missing -ccontains $name) { continue }
+        $entryPath = Join-Path $fakeScenarios (Get-UiAcceptanceScenarioFile -Name $name)
+        [IO.File]::WriteAllText($entryPath, ('# Marker for the ' + $name + ' entry.' + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    }
+
+    return $Path
+}
+
+function Invoke-Stage5CCEntry {
+    param(
+        [Parameter(Mandatory)][string] $RepositoryRoot,
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)][string] $Scenario
+    )
+
+    # A subprocess is used because the entry answers with 'exit', which would end the self-test.
+    $hostExe = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+    $entry = Join-Path $RepositoryRoot 'scripts/run-stage5cc-ui-acceptance.ps1'
+    $null = & $hostExe -NoProfile -File $entry `
+        -ProductDirectory (Join-Path $RepositoryRoot 'no-product') `
+        -WinAppCliArchivePath (Join-Path $RepositoryRoot 'no-driver.zip') `
+        -OutputDirectory $OutputDirectory -Scenario $Scenario 2>&1
+    return $LASTEXITCODE
+}
+
+function Read-Stage5CCSummary {
+    param([Parameter(Mandatory)][string] $OutputDirectory)
+
+    $path = Join-Path $OutputDirectory 'summary.json'
+    Assert-True ([IO.File]::Exists($path)) 'the run must persist a summary'
+    $text = [IO.File]::ReadAllText($path)
+    return [pscustomobject]@{
+        Text    = $text
+        Summary = ($text | ConvertFrom-Json)
+    }
+}
+
 function Get-TestCases {
     $script:metadata = @{sourceCommit='abc';productHash='hash';productVersion='1';driverVersion='0.5.0';driverHash='hash';fixtureHashes=@();hostOs='Windows';dpi=96;theme='Light';viewport=@{width=1024;height=720}}
     return @(
@@ -805,6 +871,262 @@ function Get-TestCases {
                     Assert-Equal 'Blocked' $summary.status
                     Assert-NotContains $json $base
                     Assert-NotContains $json 'ownedRoot'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'request completeness asks only for the entries a named request owes'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $scenarios = Join-Path $base 'scenarios'
+                [void][IO.Directory]::CreateDirectory($scenarios)
+                try {
+                    # Only one entry exists on disk, so every other name is unimplemented here.
+                    [IO.File]::WriteAllText((Join-Path $scenarios (Get-UiAcceptanceScenarioFile -Name 'StartupLayout')), '# marker', [Text.UTF8Encoding]::new($false))
+                    $single = Test-UiAcceptanceRequestCompleteness -ScenariosRoot $scenarios -Requested @('StartupLayout')
+                    Assert-Equal $false $single.IncludesAll
+                    Assert-Equal 'request' $single.Scope
+                    Assert-True $single.Complete
+                    Assert-Equal 1 $single.CheckedCount
+                    Assert-Equal 'StartupLayout' @($single.Checked)[0]
+
+                    $pair = Test-UiAcceptanceRequestCompleteness -ScenariosRoot $scenarios -Requested @('StartupLayout', 'Visual')
+                    Assert-True (-not $pair.Complete)
+                    Assert-Equal 1 $pair.MissingCount
+                    Assert-Equal 'Visual' @($pair.Missing)[0].id
+                    Assert-Equal (Get-UiAcceptanceScenarioFile -Name 'Visual') @($pair.Missing)[0].entryFile
+                    Assert-True (@($pair.Available) -ccontains 'StartupLayout')
+
+                    # 'All' owes the whole registry, not just what the caller happened to name.
+                    $every = Test-UiAcceptanceRequestCompleteness -ScenariosRoot $scenarios -Requested @('All')
+                    Assert-True $every.IncludesAll
+                    Assert-Equal 'all' $every.Scope
+                    Assert-Equal @(Get-UiAcceptanceScenarioName).Count $every.CheckedCount
+                    Assert-Equal (@(Get-UiAcceptanceScenarioName).Count - 1) $every.MissingCount
+                    Assert-True (-not $every.Complete)
+
+                    $rows = @(Get-UiAcceptanceScenarioAvailability -ScenariosRoot $scenarios -Requested @('StartupLayout', 'Visual'))
+                    Assert-Equal 2 $rows.Count
+                    Assert-Equal $true $rows[0].Available
+                    Assert-Equal $false $rows[1].Available
+                    Assert-Equal (Get-UiAcceptanceScenarioFile -Name 'Visual') $rows[1].EntryFile
+
+                    # An unknown name is an argument error here too, never a silently empty answer.
+                    Assert-Throws { Test-UiAcceptanceRequestCompleteness -ScenariosRoot $scenarios -Requested @('startup-layout') }
+                    Assert-Throws { Test-UiAcceptanceRequestCompleteness -ScenariosRoot $scenarios -Requested @() }
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'an All request records every unimplemented entry and dispatches nothing'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo') -Missing @('Visual')
+                    $out = Join-Path $base 'out-all'
+                    Assert-Equal 1 (Invoke-Stage5CCEntry -RepositoryRoot $repo -OutputDirectory $out -Scenario 'All')
+
+                    $read = Read-Stage5CCSummary -OutputDirectory $out
+                    $summary = $read.Summary
+                    Assert-Equal 'Blocked' $summary.status
+                    Assert-Equal 'scenario_entry_missing' $summary.reason
+                    Assert-Equal $false $summary.complete
+                    Assert-Equal @(Get-UiAcceptanceScenarioName).Count @($summary.entries).Count
+                    foreach ($entry in @($summary.entries)) {
+                        Assert-Equal 'Blocked' $entry.executionStatus
+                        Assert-Equal 'scenario_entry_missing' $entry.reason
+                        Assert-Equal '' $entry.reportPath
+                        Assert-Equal $false $entry.complete
+                    }
+
+                    $checks = $summary.checks
+                    Assert-Equal 'all' $checks.scope
+                    Assert-Equal @(Get-UiAcceptanceScenarioName).Count $checks.checkedCount
+                    Assert-Equal 1 $checks.missingCount
+                    Assert-Equal 'Visual' @($checks.missing)[0].id
+                    Assert-Equal (Get-UiAcceptanceScenarioFile -Name 'Visual') @($checks.missing)[0].entryFile
+                    Assert-Equal 0 $checks.dispatchedCount
+                    Assert-Equal $true $checks.blockedBeforeDispatch
+                    Assert-True (-not [string]::IsNullOrWhiteSpace($checks.checkedUtc))
+
+                    # Nothing was dispatched: no per scenario directory and no support publish.
+                    $children = @([IO.Directory]::GetFileSystemEntries($out) | ForEach-Object { [IO.Path]::GetFileName($_) })
+                    Assert-Equal 1 $children.Count
+                    Assert-Equal 'summary.json' $children[0]
+                    Assert-True (-not [IO.Directory]::Exists((Join-Path $repo 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/bin/stage5cc-bootstrap')))
+                    Assert-NotContains $read.Text $base
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a named request is not blocked by an unrelated unimplemented entry'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    # Visual stays unimplemented on purpose: verifying the taxonomy slice must not
+                    # depend on another slice landing first.
+                    $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo') -Missing @('Visual')
+                    $out = Join-Path $base 'out-taxonomy'
+                    Assert-Equal 1 (Invoke-Stage5CCEntry -RepositoryRoot $repo -OutputDirectory $out -Scenario 'Taxonomy')
+
+                    $summary = (Read-Stage5CCSummary -OutputDirectory $out).Summary
+                    Assert-Equal 1 @($summary.entries).Count
+                    Assert-Equal 'Taxonomy' @($summary.entries)[0].id
+                    # The walk left the precheck and reached the later phases: the answer is about
+                    # the missing product, not about an unimplemented entry.
+                    Assert-Equal 'published_product_unavailable' @($summary.entries)[0].reason
+                    Assert-Equal 'published_product_unavailable' $summary.reason
+
+                    $checks = $summary.checks
+                    Assert-Equal 'request' $checks.scope
+                    Assert-Equal 1 $checks.checkedCount
+                    Assert-Equal 0 $checks.missingCount
+                    Assert-Equal 0 @($checks.missing).Count
+                    Assert-Equal $false $checks.blockedBeforeDispatch
+                    Assert-True (@($checks.checkedIds) -ccontains 'Taxonomy')
+                    Assert-Equal $false (@($checks.checkedIds) -ccontains 'Visual')
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a named request for an unimplemented scenario is refused without dispatch'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo') -Missing @('Visual')
+                    $out = Join-Path $base 'out-visual'
+                    Assert-Equal 1 (Invoke-Stage5CCEntry -RepositoryRoot $repo -OutputDirectory $out -Scenario 'Visual')
+
+                    $summary = (Read-Stage5CCSummary -OutputDirectory $out).Summary
+                    Assert-Equal 'Blocked' $summary.status
+                    Assert-Equal 'scenario_entry_missing' $summary.reason
+                    Assert-Equal 1 @($summary.entries).Count
+                    $entry = @($summary.entries)[0]
+                    Assert-Equal 'Visual' $entry.id
+                    Assert-Equal 'Blocked' $entry.executionStatus
+                    Assert-Equal 'scenario_entry_missing' $entry.reason
+                    Assert-Equal '' $entry.reportPath
+                    Assert-Equal $false $entry.complete
+
+                    # Refused before any product, driver or process question was asked: those are
+                    # unmet here too, and the answer is still only about the missing entry.
+                    Assert-Equal 'request' $summary.checks.scope
+                    Assert-Equal 1 $summary.checks.missingCount
+                    Assert-Equal 'Visual' @($summary.checks.missing)[0].id
+                    Assert-Equal 0 $summary.checks.dispatchedCount
+                    $children = @([IO.Directory]::GetFileSystemEntries($out) | ForEach-Object { [IO.Path]::GetFileName($_) })
+                    Assert-Equal 1 $children.Count
+                    Assert-Equal 'summary.json' $children[0]
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'an All request whose entries all exist clears the precheck and walks on'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo')
+                    $out = Join-Path $base 'out-all-complete'
+                    Assert-Equal 1 (Invoke-Stage5CCEntry -RepositoryRoot $repo -OutputDirectory $out -Scenario 'All')
+
+                    $summary = (Read-Stage5CCSummary -OutputDirectory $out).Summary
+                    Assert-Equal @(Get-UiAcceptanceScenarioName).Count @($summary.entries).Count
+                    foreach ($entry in @($summary.entries)) {
+                        Assert-Equal 'published_product_unavailable' $entry.reason
+                        Assert-Equal 'Blocked' $entry.executionStatus
+                    }
+                    Assert-Equal 'all' $summary.checks.scope
+                    Assert-Equal 0 $summary.checks.missingCount
+                    Assert-Equal 0 @($summary.checks.missing).Count
+                    Assert-Equal $false $summary.checks.blockedBeforeDispatch
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'the precheck is recomputed every run and never inherits an earlier clean check'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo')
+                    $first = Join-Path $base 'out-first'
+                    $second = Join-Path $base 'out-second'
+                    Assert-Equal 1 (Invoke-Stage5CCEntry -RepositoryRoot $repo -OutputDirectory $first -Scenario 'All')
+
+                    $before = (Read-Stage5CCSummary -OutputDirectory $first).Summary
+                    Assert-Equal 0 $before.checks.missingCount
+                    Assert-Equal $false $before.checks.blockedBeforeDispatch
+
+                    # The earlier run recorded that every entry existed. Removing one must change
+                    # the verdict of the next run instead of being answered from what the previous
+                    # run left behind: a gate that remembers is not a gate that checks.
+                    [IO.File]::Delete((Join-Path $repo ('scripts/ui-acceptance/scenarios/' + (Get-UiAcceptanceScenarioFile -Name 'Visual'))))
+                    Assert-Equal 1 (Invoke-Stage5CCEntry -RepositoryRoot $repo -OutputDirectory $second -Scenario 'All')
+
+                    $after = (Read-Stage5CCSummary -OutputDirectory $second).Summary
+                    Assert-Equal 1 $after.checks.missingCount
+                    Assert-Equal 'Visual' @($after.checks.missing)[0].id
+                    Assert-Equal $true $after.checks.blockedBeforeDispatch
+                    Assert-Equal 0 $after.checks.dispatchedCount
+                    foreach ($entry in @($after.entries)) { Assert-Equal 'scenario_entry_missing' $entry.reason }
+
+                    $reread = (Read-Stage5CCSummary -OutputDirectory $first).Summary
+                    Assert-Equal 0 $reread.checks.missingCount
+                    Assert-True ([DateTimeOffset]::Parse([string]$after.checks.checkedUtc) -ge [DateTimeOffset]::Parse([string]$before.checks.checkedUtc))
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'the persisted completeness check survives an independent re-read field by field'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo') -Missing @('Conflict', 'Visual')
+                    $out = Join-Path $base 'out-persist'
+                    Assert-Equal 1 (Invoke-Stage5CCEntry -RepositoryRoot $repo -OutputDirectory $out -Scenario 'All')
+
+                    # Read twice from disk: what is asserted is what a reviewer can reread later,
+                    # not what the process happens to hold in memory.
+                    $first = Read-Stage5CCSummary -OutputDirectory $out
+                    $second = Read-Stage5CCSummary -OutputDirectory $out
+                    Assert-Equal $first.Text $second.Text
+
+                    foreach ($summary in @($first.Summary, $second.Summary)) {
+                        Assert-Equal '5CC' $summary.checkpoint
+                        Assert-Equal 'Blocked' $summary.status
+                        Assert-Equal 'scenario_entry_missing' $summary.reason
+                        Assert-Equal $false $summary.complete
+                        Assert-Equal @(Get-UiAcceptanceScenarioName).Count @($summary.entries).Count
+                        Assert-Equal 'all' $summary.checks.scope
+                        Assert-Equal @(Get-UiAcceptanceScenarioName).Count $summary.checks.checkedCount
+                        Assert-Equal 2 $summary.checks.missingCount
+                        Assert-Equal 0 $summary.checks.dispatchedCount
+                        Assert-Equal $true $summary.checks.blockedBeforeDispatch
+                        $ids = @($summary.checks.missing | ForEach-Object { [string]$_.id })
+                        Assert-True ($ids -ccontains 'Conflict')
+                        Assert-True ($ids -ccontains 'Visual')
+                        foreach ($row in @($summary.checks.missing)) {
+                            Assert-Equal (Get-UiAcceptanceScenarioFile -Name ([string]$row.id)) $row.entryFile
+                            Assert-Equal 'scenario_entry_missing' $row.reason
+                        }
+                        foreach ($entry in @($summary.entries)) {
+                            Assert-Equal 'Blocked' $entry.status
+                            Assert-Equal 'Blocked' $entry.reportStatus
+                            Assert-Equal 'Blocked' $entry.executionStatus
+                            Assert-Equal 'scenario_entry_missing' $entry.reason
+                            Assert-Equal '' $entry.reportPath
+                            Assert-Equal 0 $entry.durationMs
+                            Assert-Equal $false $entry.complete
+                        }
+                    }
+                    Assert-NotContains $first.Text $base
+                    Assert-NotContains $second.Text $base
                 }
                 finally { Remove-UiTestTree -Path $base }
             }
