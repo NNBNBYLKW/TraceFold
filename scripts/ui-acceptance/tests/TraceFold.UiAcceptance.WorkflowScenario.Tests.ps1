@@ -248,6 +248,103 @@ function Get-ScenarioLiteralStepIds {
     return $ids
 }
 
+# The environment variable the library snapshot fixture reads to decide its exit status. It is set
+# and cleared by the test that exercises the caller's exit-status handling.
+$script:LibrarySnapshotFixtureExitVariable = 'TRACEFOLD_LIBRARY_SNAPSHOT_FIXTURE_EXIT'
+
+<#
+.SYNOPSIS
+    Returns the executable of the native library snapshot fixture, building it once if needed.
+
+.DESCRIPTION
+    The production snapshot read is about the bytes a child process leaves on a pipe, so the fixture
+    has to be a real child process. A script would be run in this session by the unfixed call and
+    would never cross the boundary the defect lives on, so the fixture is a small console program.
+    It is built from the repository source into a scratch directory outside the tree, keyed by the
+    source digest, so a rebuild happens only when the source changes and no build output ever lands
+    in the working copy.
+#>
+function Get-LibrarySnapshotFixturePath {
+    $source = Join-Path $script:uiRoot 'tests/fixtures/library-snapshot-utf8'
+    $project = Join-Path $source 'library-snapshot-utf8.csproj'
+    $program = Join-Path $source 'Program.cs'
+    foreach ($required in @($project, $program)) {
+        if (-not [IO.File]::Exists($required)) { throw 'The library snapshot fixture source is missing.' }
+    }
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $joined = [IO.File]::ReadAllBytes($program) + [IO.File]::ReadAllBytes($project)
+        $stamp = [BitConverter]::ToString($sha.ComputeHash($joined)).Replace('-', '').Substring(0, 16)
+    }
+    finally { $sha.Dispose() }
+
+    $target = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-library-snapshot-fixture-' + $stamp)
+    $exe = Join-Path $target 'bin/library-snapshot-utf8.exe'
+    if ([IO.File]::Exists($exe)) { return $exe }
+
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($null -eq $dotnet) { throw 'The .NET SDK is required to build the library snapshot fixture.' }
+    $scratch = Join-Path $target 'src'
+    [void] [IO.Directory]::CreateDirectory($scratch)
+    Copy-Item -LiteralPath $program -Destination (Join-Path $scratch 'Program.cs') -Force
+    Copy-Item -LiteralPath $project -Destination (Join-Path $scratch 'library-snapshot-utf8.csproj') -Force
+    $report = & $dotnet.Source build (Join-Path $scratch 'library-snapshot-utf8.csproj') -c Release `
+        -o (Join-Path $target 'bin') 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not [IO.File]::Exists($exe)) {
+        throw ('The library snapshot fixture did not build: ' + (($report | Out-String).Trim()))
+    }
+    return $exe
+}
+
+<#
+.SYNOPSIS
+    Builds the text of a scope that carries the library scenario's own snapshot read.
+
+.DESCRIPTION
+    The library scenario is an owned-run entry point, so dot-sourcing the file would launch the
+    product. Its Read-LibraryState function is lifted out of the parsed file instead, which keeps the
+    JSON parse, the field selection, the redaction, the file write and the artifact registration the
+    production ones. Only the values around it are supplied, and the support path is a real child
+    process, so the chain that runs here is the one a gate run uses.
+#>
+function Get-LibrarySnapshotScopeText {
+    param(
+        [Parameter(Mandatory)][string] $ScenarioPath,
+        [Parameter(Mandatory)][string] $SupportPath,
+        [Parameter(Mandatory)][string] $OwnedRoot,
+        [Parameter(Mandatory)][string] $OutputDirectory
+    )
+
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($ScenarioPath, [ref] $tokens, [ref] $errors)
+    if (@($errors).Count -gt 0) { throw 'The library scenario does not parse.' }
+
+    $definition = $null
+    foreach ($candidate in @($ast.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.FunctionDefinitionAst]
+            }, $false))) {
+        if ($candidate.Name -ceq 'Read-LibraryState') { $definition = $candidate }
+    }
+    if ($null -eq $definition) { throw 'The library scenario does not define Read-LibraryState.' }
+
+    $lines = @(
+        'Set-StrictMode -Version Latest',
+        '$ErrorActionPreference = ''Stop''',
+        # Composed with -f rather than concatenated: inside an array literal a written-out
+        # concatenation is not one element, so the path would land on a line of its own.
+        ('$SupportPath = "{0}"' -f $SupportPath),
+        ('$OwnedRoot = "{0}"' -f $OwnedRoot),
+        '$RunToken = ''run-token''',
+        ('$OutputDirectory = "{0}"' -f $OutputDirectory),
+        '$artifacts = New-Object ''System.Collections.Generic.List[string]'''
+    )
+    $lines += $definition.Extent.Text
+    return ($lines -join "`n")
+}
+
 function Get-TestCases {
     return @(
         @{
@@ -1251,7 +1348,11 @@ function Get-TestCases {
                 Assert-Contains $source 'library.record_identity'
                 Assert-Contains $source 'library.preset_changed'
                 Assert-Contains $source 'Get-FileHash'
-                Assert-Contains $source 'snapshot --data-root'
+                # The read-only facts come from the snapshot, and the snapshot is taken through the
+                # support helper that pins the payload encoding instead of the caller's ambient one.
+                Assert-Contains $source 'Invoke-UiAcceptanceSupportCommand'
+                Assert-Contains $source "'snapshot', '--data-root'"
+                Assert-NotContains $source 'snapshot --data-root'
                 Assert-True ([regex]::Matches($source, 'Read-LibraryState -EvidenceId').Count -ge 3) 'before, named and undone snapshots are required'
             }
         },
@@ -1285,6 +1386,146 @@ function Get-TestCases {
                 $isAscii = $true
                 foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
                 Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the library snapshot read keeps UTF-8 terms when the caller console is a double-byte code page'
+            Body = {
+                $scenarioPath = Join-Path $script:uiRoot 'scenarios/40-library-filter-naming-undo.ps1'
+                $fixture = Get-LibrarySnapshotFixturePath
+                # Composed from code points so this file stays ASCII; the fixture builds the same terms
+                # the same way, and the ones written here end in a character whose final UTF-8 byte is
+                # a lead byte in the double-byte code pages.
+                $authorOne = ([string][char]0x4F5C) + [char]0x8005 + [char]0x7532
+                $authorTwo = ([string][char]0x4F5C) + [char]0x8005 + [char]0x4E59
+                $seriesOne = ([string][char]0x7CFB) + [char]0x5217 + [char]0x7532
+                $tagOne = ([string][char]0x591C) + [char]0x666F
+                $tagTwo = ([string][char]0x98CE) + [char]0x666F
+
+                $root = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-library-snapshot-' + [guid]::NewGuid().ToString('D'))
+                $out = Join-Path $root 'out'
+                [void][IO.Directory]::CreateDirectory($out)
+                # The caller's console is what an unpinned capture reads the child's pipe through, so
+                # the test states it instead of inheriting whatever the machine happens to be set to.
+                $savedEncoding = [Console]::OutputEncoding
+                try {
+                    [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(936)
+                    Assert-Equal 936 ([Console]::OutputEncoding.CodePage) 'the caller console has to be the double-byte one under test'
+
+                    $text = Get-LibrarySnapshotScopeText -ScenarioPath $scenarioPath -SupportPath $fixture `
+                        -OwnedRoot $root -OutputDirectory $out
+                    . ([scriptblock]::Create($text))
+
+                    $state = Read-LibraryState -EvidenceId 'library-snapshot-utf8'
+
+                    # The terms are compared as values, never as a count: what the defect costs is the
+                    # term itself.
+                    Assert-Equal 2 @($state.taxonomy.author).Count
+                    Assert-Equal $authorOne ([string] @($state.taxonomy.author)[0])
+                    Assert-Equal $authorTwo ([string] @($state.taxonomy.author)[1])
+                    Assert-Equal 1 @($state.taxonomy.series).Count
+                    Assert-Equal $seriesOne ([string] @($state.taxonomy.series)[0])
+                    Assert-Equal 2 @($state.taxonomy.tag).Count
+                    Assert-Equal $tagOne ([string] @($state.taxonomy.tag)[0])
+                    Assert-Equal $tagTwo ([string] @($state.taxonomy.tag)[1])
+
+                    $photo = @($state.formalAssets | Where-Object { [string] $_.actualFilename -ceq 'photo.jpg' })
+                    Assert-Equal 1 @($photo).Count
+                    Assert-Equal 'key-photo' ([string] $photo[0].assetKey)
+                    Assert-Equal 'ACC-photo-3' ([string] $photo[0].displayName)
+                    Assert-Equal 'image' ([string] $photo[0].mediaKind)
+                    Assert-Equal $authorOne ([string] @($photo[0].authors)[0])
+                    Assert-Equal $seriesOne ([string] $photo[0].series)
+                    Assert-Equal $tagOne ([string] @($photo[0].tags)[0])
+
+                    $third = @($state.formalAssets | Where-Object { [string] $_.actualFilename -ceq 'photo-third.jpg' })
+                    Assert-Equal 1 @($third).Count
+                    Assert-Equal 2 @($third[0].tags).Count
+                    Assert-Equal $tagOne ([string] @($third[0].tags)[0])
+                    Assert-Equal $tagTwo ([string] @($third[0].tags)[1])
+                    Assert-Equal $authorOne ([string] @($third[0].authors)[0])
+
+                    # What a later read consumes is the file, not the return value, so the file is read
+                    # back and checked field by field.
+                    Assert-Equal 1 $artifacts.Count 'the snapshot is registered exactly once'
+                    $relative = [string] $artifacts[0]
+                    Assert-Equal 'library-snapshot-utf8-snapshot.json' $relative
+                    $snapshotPath = Join-Path $out $relative
+                    $raw = [IO.File]::ReadAllBytes($snapshotPath)
+                    Assert-True (-not ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)) `
+                        'the snapshot is written without a BOM'
+                    $written = [IO.File]::ReadAllText($snapshotPath, [Text.Encoding]::UTF8)
+                    Assert-True ($written.Contains($authorOne)) 'the file carries the term as characters, not as an escape'
+                    Assert-NotContains $written '\u7532' 'a JSON escape would survive the defect this test exists for'
+                    $roundTrip = ConvertFrom-UiAcceptanceJson -Text $written -Source 'library-snapshot'
+                    Assert-Equal $authorOne ([string] @($roundTrip.taxonomy.author)[0])
+                    Assert-Equal $seriesOne ([string] @($roundTrip.taxonomy.series)[0])
+                    Assert-Equal $tagTwo ([string] @($roundTrip.taxonomy.tag)[1])
+                    $writtenThird = @($roundTrip.formalAssets | Where-Object { [string] $_.actualFilename -ceq 'photo-third.jpg' })
+                    Assert-Equal 1 @($writtenThird).Count
+                    Assert-Equal '[redacted-token]' ([string] $writtenThird[0].displayName) 'the write still redacts the run token'
+                    Assert-NotContains $written 'run-token' 'the run token must not reach the evidence file'
+                    Assert-Equal 'run-token' ([string] $third[0].displayName) 'the returned data is the payload the CLI sent'
+                }
+                finally {
+                    [Console]::OutputEncoding = $savedEncoding
+                    Remove-UiTestTree -Path $root
+                }
+                Assert-Equal $savedEncoding.CodePage ([Console]::OutputEncoding.CodePage) 'the console encoding has to be handed back'
+            }
+        },
+        @{
+            Name = 'the library snapshot read takes its exit status from the invocation it made'
+            Body = {
+                $scenarioPath = Join-Path $script:uiRoot 'scenarios/40-library-filter-naming-undo.ps1'
+                $variable = $script:LibrarySnapshotFixtureExitVariable
+                $fixture = Get-LibrarySnapshotFixturePath
+
+                $root = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-library-snapshot-' + [guid]::NewGuid().ToString('D'))
+                $out = Join-Path $root 'out'
+                [void][IO.Directory]::CreateDirectory($out)
+                $savedEncoding = [Console]::OutputEncoding
+                $exitExisted = $null -ne (Get-Variable -Name 'LASTEXITCODE' -Scope Global -ErrorAction SilentlyContinue)
+                $exitValue = $null
+                if ($exitExisted) { $exitValue = (Get-Variable -Name 'LASTEXITCODE' -Scope Global).Value }
+                $savedFixtureExit = [Environment]::GetEnvironmentVariable($variable, 'Process')
+                try {
+                    [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(936)
+                    Assert-Equal 936 ([Console]::OutputEncoding.CodePage) 'the caller console has to be the double-byte one under test'
+
+                    $text = Get-LibrarySnapshotScopeText -ScenarioPath $scenarioPath -SupportPath $fixture `
+                        -OwnedRoot $root -OutputDirectory $out
+                    . ([scriptblock]::Create($text))
+
+                    # A refusal is reported even though the exit status the caller is carrying says
+                    # otherwise, and it leaves nothing behind for a later read to pick up.
+                    [Environment]::SetEnvironmentVariable($variable, '5', 'Process')
+                    $global:LASTEXITCODE = 0
+                    $failure = ''
+                    try { $null = Read-LibraryState -EvidenceId 'library-snapshot-refused' }
+                    catch { $failure = $_.Exception.Message }
+                    Assert-Equal 'library.snapshot_unavailable' $failure 'a refused snapshot reports the unavailable condition'
+                    Assert-Equal 0 $artifacts.Count 'a refused snapshot is not registered'
+                    Assert-Equal 0 @([IO.Directory]::GetFiles($out)).Count 'a refused snapshot is not written'
+
+                    # The other direction: a success stays a success even though the exit status the
+                    # caller is carrying is not a successful one.
+                    [Environment]::SetEnvironmentVariable($variable, $null, 'Process')
+                    $global:LASTEXITCODE = 7
+                    $state = Read-LibraryState -EvidenceId 'library-snapshot-succeeded'
+                    Assert-Equal 3 @($state.formalAssets).Count
+                    Assert-Equal 1 $artifacts.Count 'the snapshot that succeeded is registered once'
+                }
+                finally {
+                    [Environment]::SetEnvironmentVariable($variable, $savedFixtureExit, 'Process')
+                    if ($exitExisted) { Set-Variable -Name 'LASTEXITCODE' -Value $exitValue -Scope Global }
+                    else { Remove-Variable -Name 'LASTEXITCODE' -Scope Global -ErrorAction SilentlyContinue }
+                    [Console]::OutputEncoding = $savedEncoding
+                    Remove-UiTestTree -Path $root
+                }
+                Assert-Equal $savedEncoding.CodePage ([Console]::OutputEncoding.CodePage) 'the console encoding has to be handed back'
+                Assert-Equal $exitExisted ($null -ne (Get-Variable -Name 'LASTEXITCODE' -Scope Global -ErrorAction SilentlyContinue)) `
+                    'the exit status has to be handed back exactly as it was found'
             }
         },
         @{

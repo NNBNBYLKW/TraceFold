@@ -516,9 +516,15 @@ function Clear-LibrarySearchText {
 function Read-LibraryState {
     param([Parameter(Mandatory)][string] $EvidenceId)
 
-    $raw = & $SupportPath snapshot --data-root $OwnedRoot --token $RunToken
-    if ($LASTEXITCODE -ne 0) { throw 'library.snapshot_unavailable' }
-    $data = ConvertFrom-UiAcceptanceJson -Text ($raw | Out-String) -Source 'snapshot'
+    # The support CLI publishes its snapshot as UTF-8, so the pipe is read as UTF-8 rather than left
+    # to the console code page: on a machine whose code page is a double-byte one, a term whose last
+    # encoded byte is a lead byte would otherwise consume the delimiter that follows it and turn a
+    # valid snapshot into an unreadable one. The exit status is the one this invocation returned,
+    # because the shared launcher does not touch a global the caller may be carrying from elsewhere.
+    $invocation = Invoke-UiAcceptanceSupportCommand -SupportPath $SupportPath `
+        -Arguments @('snapshot', '--data-root', $OwnedRoot, '--token', $RunToken)
+    if ($invocation.ExitCode -ne 0) { throw 'library.snapshot_unavailable' }
+    $data = ConvertFrom-UiAcceptanceJson -Text $invocation.Stdout -Source 'snapshot'
     Assert-UiAcceptanceFields -InputObject $data -Required @('tables','taxonomy','formalAssets')
     $relative = (ConvertTo-UiAcceptanceSlug -Value $EvidenceId) + '-snapshot.json'
     $text = ConvertTo-Json -InputObject ([ordered] @{
