@@ -1548,6 +1548,69 @@ function Get-TestCases {
                 catch { $message = $_.Exception.Message }
                 Assert-Contains $message 'taxonomy.driver_schema_incompatible'
             }
+        },
+        @{
+            Name = 'the taxonomy evidence keeps a pair of nodes that differ only in enablement'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/50-taxonomy-maintenance-undo.ps1'
+                # Everything else the driver reports is the same for both: the automation id, the
+                # selector, the class, the name, the native type, the rectangle and the visibility.
+                # Enablement is therefore the only thing that can tell these two apart, so a collapse
+                # that stops noticing the state flags turns them into one node here and nowhere else.
+                $raw = ConvertFrom-TaxonomyEvidenceJson -Json @'
+{"windows":[{"elements":[
+{"type":"ListItem","selector":"row","className":"TermRow","automationId":"term-row","name":"term","isEnabled":true,"isOffscreen":false,"x":10,"y":20,"width":100,"height":30},
+{"type":"ListItem","selector":"row","className":"TermRow","automationId":"term-row","name":"term","isEnabled":false,"isOffscreen":false,"x":10,"y":20,"width":100,"height":30}
+]}]}
+'@
+                $tree = @(Invoke-TaxonomyEvidenceRoundTrip -Raw $raw -ScenarioPath $path `
+                        -EvidenceId 'taxonomy-evidence-enabled-pair')
+                Assert-Equal 2 @($tree).Count 'enablement alone separates one node from another'
+                foreach ($node in $tree) {
+                    Assert-Equal 'term-row' $node.automationId
+                    Assert-Equal '' $node.parentAutomationId
+                    Assert-Equal 'ListItem' $node.controlType
+                    Assert-Equal 'term' $node.name
+                    Assert-True (-not $node.offscreen) 'both nodes of the pair are on screen'
+                    # Same rectangle in both nodes: the pair was never separated by its position.
+                    Assert-Equal 10 $node.bounds.x
+                    Assert-Equal 20 $node.bounds.y
+                    Assert-Equal 100 $node.bounds.width
+                    Assert-Equal 30 $node.bounds.height
+                }
+                Assert-Equal 1 @($tree | Where-Object { $_.enabled }).Count 'the enabled node has to survive'
+                Assert-Equal 1 @($tree | Where-Object { -not $_.enabled }).Count 'the disabled node has to survive beside it'
+            }
+        },
+        @{
+            Name = 'the taxonomy evidence keeps a pair of nodes that differ only in visibility'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/50-taxonomy-maintenance-undo.ps1'
+                # The counterpart of the enablement pair: identical automation id, selector, class,
+                # name, type, rectangle and enablement, with visibility as the only difference.
+                $raw = ConvertFrom-TaxonomyEvidenceJson -Json @'
+{"windows":[{"elements":[
+{"type":"ListItem","selector":"row","className":"TermRow","automationId":"term-row","name":"term","isEnabled":true,"isOffscreen":false,"x":10,"y":20,"width":100,"height":30},
+{"type":"ListItem","selector":"row","className":"TermRow","automationId":"term-row","name":"term","isEnabled":true,"isOffscreen":true,"x":10,"y":20,"width":100,"height":30}
+]}]}
+'@
+                $tree = @(Invoke-TaxonomyEvidenceRoundTrip -Raw $raw -ScenarioPath $path `
+                        -EvidenceId 'taxonomy-evidence-offscreen-pair')
+                Assert-Equal 2 @($tree).Count 'visibility alone separates one node from another'
+                foreach ($node in $tree) {
+                    Assert-Equal 'term-row' $node.automationId
+                    Assert-Equal '' $node.parentAutomationId
+                    Assert-Equal 'ListItem' $node.controlType
+                    Assert-Equal 'term' $node.name
+                    Assert-True $node.enabled 'both nodes of the pair are enabled'
+                    Assert-Equal 10 $node.bounds.x
+                    Assert-Equal 20 $node.bounds.y
+                    Assert-Equal 100 $node.bounds.width
+                    Assert-Equal 30 $node.bounds.height
+                }
+                Assert-Equal 1 @($tree | Where-Object { $_.offscreen }).Count 'the off screen node has to survive'
+                Assert-Equal 1 @($tree | Where-Object { -not $_.offscreen }).Count 'the visible node has to survive beside it'
+            }
         }
     )
 }
