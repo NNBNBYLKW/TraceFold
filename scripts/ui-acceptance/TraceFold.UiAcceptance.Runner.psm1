@@ -27,6 +27,10 @@ $script:uiAcceptanceScenarios = [ordered] @{
     # on this entry is a pass on the complete taxonomy workflow and on nothing else.
     Taxonomy      = '50-taxonomy-maintenance-undo.ps1'
     Diagnostics   = '60-diagnostics-read-only.ps1'
+    # Single instance safety sits between the diagnostics read-only slice and the visual matrix, so
+    # an 'All' request runs it in that position. The key is fixed: the registry name, the entry file
+    # and the runner's own name for the scenario all have to agree.
+    SingleInstance = '61-single-instance-safety.ps1'
     Visual        = '06-visual.ps1'
 }
 

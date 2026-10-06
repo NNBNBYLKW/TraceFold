@@ -379,6 +379,74 @@ function Get-TestCases {
             }
         },
         @{
+            Name = 'the runner registers the single instance scenario between diagnostics and visual'
+            Body = {
+                Assert-Equal '61-single-instance-safety.ps1' (Get-UiAcceptanceScenarioFile -Name 'SingleInstance')
+                $names = @(Get-UiAcceptanceScenarioName)
+                Assert-True ($names -ccontains 'SingleInstance') 'the registry must offer SingleInstance'
+                # Position matters: it is the execution order an All request produces, and the
+                # diagnostics read-only slice must finish before the single instance checks start.
+                $diagnosticsIndex = [array]::IndexOf($names, 'Diagnostics')
+                $singleIndex = [array]::IndexOf($names, 'SingleInstance')
+                $visualIndex = [array]::IndexOf($names, 'Visual')
+                Assert-True ($diagnosticsIndex -ge 0) 'Diagnostics must be registered'
+                Assert-True ($visualIndex -ge 0) 'Visual must be registered'
+                Assert-True ($singleIndex -eq ($diagnosticsIndex + 1)) 'SingleInstance must follow Diagnostics'
+                Assert-True ($visualIndex -eq ($singleIndex + 1)) 'Visual must follow SingleInstance'
+                $entry = Get-UiAcceptanceScenarioFile -Name 'SingleInstance'
+                Assert-True ([IO.File]::Exists((Join-Path $script:uiRoot ('scenarios/' + $entry)))) 'the entry file must exist'
+            }
+        },
+        @{
+            Name = 'the single instance scenario carries the behaviour the plan requires'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                Assert-True ([IO.File]::Exists($path)) 'the single instance scenario must exist'
+                $tokens = $null
+                $errors = $null
+                $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $source = Get-Content -LiteralPath $path -Raw
+
+                # The launch seam and the foreground seam are host seams, so a dispatcher can drive
+                # this file without an interactive desktop.
+                foreach ($required in @('ScenarioId', 'ExecutablePath', 'ContractPath', 'OwnedRoot', 'RunToken',
+                                        'OutputDirectory', 'SupportPath', 'WinAppPath', 'LaunchProcess')) {
+                    Assert-True ($source -cmatch ('\$' + $required + '\b')) ('the scenario must accept ' + $required)
+                }
+
+                # The second start must run the same executable against the same owned root and its
+                # exit code must be the product's own: 0 is required and anything else fails.
+                Assert-True ($source -cmatch 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT') 'the second start must carry the owned data root'
+                Assert-True ($source -cmatch 'WaitForExit') 'the second process must be waited for'
+                Assert-True ($source -cmatch 'ExitCode') 'the real exit code must be read'
+                Assert-True ($source -cmatch "secondaryExit -ne 0") 'a non-zero second exit must fail the scenario'
+
+                # Activation is proved by reading the foreground, never by making the window
+                # foreground first; the inspect calls are observability only.
+                Assert-True ($source -cmatch 'GetForegroundWindow') 'the foreground must be read'
+                Assert-True ($source -cmatch 'ForegroundCheck') 'the foreground seam must be used'
+                Assert-True (-not ($source -cmatch 'AppActivate')) 'foreground coaxing is banned'
+                Assert-True (-not ($source -cmatch 'SetForegroundWindow')) 'forcing the foreground is banned'
+                Assert-True ($source -cmatch 'not offered as the activation proof') 'observability must not be offered as activation'
+
+                # The database rule is uniqueness, not a byte freeze.
+                Assert-True ($source -cmatch 'second_database_created') 'a second database must fail the scenario'
+                Assert-True ($source -cmatch 'second_library_used') 'another library must fail the scenario'
+                Assert-True (-not ($source -cmatch 'Get-FileHash.*db')) 'no byte freeze of the database is required'
+
+                # Termination rules.
+                Assert-True (-not ($source -cmatch 'Stop-Process -Name')) 'termination by process name is banned'
+                Assert-True (-not ($source -cmatch 'Start-Sleep -Seconds')) 'fixed sleeps are banned'
+                Assert-True ($source -cmatch 'CloseMainWindow') 'the primary must be closed through its own window'
+                Assert-True ($source -cmatch 'restartPid') 'the restart must be its own process'
+
+                # The blocked path is for conditions the host cannot provide, not for product failures.
+                Assert-True ($source -cmatch 'single\.instance\.desktop_unavailable') 'the desktop precondition must be Blocked'
+                Assert-True ($source -cmatch "return \[pscustomobject\]") 'the scenario must return a result record'
+            }
+        },
+        @{
             Name = 'the diagnostics scenario reaches the tab, the five groups and one refresh'
             Body = {
                 $source = Read-DiagnosticsScenarioSource
