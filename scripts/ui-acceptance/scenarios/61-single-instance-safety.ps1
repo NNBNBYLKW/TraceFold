@@ -345,20 +345,44 @@ try {
     $postObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
     if ([string] $postObservation.Status -cne 'Passed') { throw 'single.instance.primary_unresponsive' }
 
-    # The controlled window has done its job. On the success path its release is performed and
-    # checked here, so a release failure is a failure of this scenario and can never be reported as
-    # Passed. The outer finally repeats the attempt as a safety net for every other path, where a
-    # release failure must not replace the original business error.
+    # The controlled window has done its job. Its release is performed and its result is READ BACK,
+    # not assumed from the absence of an exception: the object is asked whether it is really
+    # disposed. A release that did not take effect is unknown and fails this scenario, so a release
+    # problem can never be reported as Passed. Because this runs before the result record is built,
+    # the final status is decided by this fact rather than by a status written earlier.
+    $controlStage = 'primary-and-restart-verified'
     $controlWindowClosed = $false
     $controlReleaseFailure = ''
+    $controlReleaseReadBack = 'unknown'
     try {
         $controlWindow.Close()
         $controlWindow.Dispose()
-        $controlWindowClosed = $true
     }
     catch {
         $controlReleaseFailure = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
     }
+    if ($controlWindow.IsDisposed) {
+        $controlWindowClosed = $true
+        $controlReleaseReadBack = 'disposed'
+    }
+    elseif ([string]::IsNullOrWhiteSpace($controlReleaseFailure)) {
+        $controlReleaseFailure = 'single.instance.control_window_not_released'
+    }
+
+    # The release fact, the stage it happened at and the status it decides are written to their own
+    # record beside the other evidence, so a cleanup problem is delivered as its own fact and never
+    # replaces the business result or the original error record.
+    $controlReleaseRecord = [ordered] @{
+        stage                  = $controlStage
+        releaseAttempted       = $true
+        releaseReadBack        = $controlReleaseReadBack
+        releaseFailure         = $controlReleaseFailure
+        isDisposedReadBack     = [bool] $controlWindow.IsDisposed
+        finalStatusFromRelease = $(if ($controlWindowClosed) { 'Passed' } else { 'Failed' })
+    }
+    [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-control-release.json'),
+        (ConvertTo-Json -InputObject $controlReleaseRecord -Depth 5), [Text.UTF8Encoding]::new($false))
+    $artifacts.Add('single-instance-control-release.json')
     if (-not $controlWindowClosed) { throw $controlReleaseFailure }
 
     # --- 5. legal close, then restart on the same owned root -------------------------------------
@@ -418,6 +442,9 @@ try {
         controlWindowHandle      = $preState.controlWindowHandle
         controlWindowOwnerPid    = $preState.controlWindowOwnerPid
         controlWindowClosed      = $controlWindowClosed
+        controlReleaseReadBack   = $controlReleaseReadBack
+        controlReleaseFailure    = $controlReleaseFailure
+        controlReleaseStage      = $controlStage
         preForegroundHandle      = $preState.preForegroundHandle
         preForegroundOwnerPid    = $preState.preForegroundOwnerPid
         preStateNote             = 'a window this harness owns was brought forward first; the primary was required to be out of the foreground before the second start'
@@ -472,11 +499,15 @@ finally {
     # pre-state, of the second start or of an observation. A release failure here is kept separate
     # from the business error, never replaces the original ErrorRecord, and is only used when the
     # success path did not already release the object and report the failure itself.
-    if ($null -ne $controlWindow) {
+    # The safety net for the paths that never reached the release step. It runs only when the object
+    # exists and was not already confirmed released, so a confirmed release is never repeated, and it
+    # reads the released fact back the same way rather than assuming the call was enough.
+    if ($null -ne $controlWindow -and -not $controlWindowClosed) {
         try {
             $controlWindow.Close()
             $controlWindow.Dispose()
-            $controlWindowClosed = $true
+            if ($controlWindow.IsDisposed) { $controlWindowClosed = $true }
+            else { $controlReleaseFailure = 'single.instance.control_window_not_released (finally)' }
         }
         catch {
             $controlReleaseFailure = 'single.instance.control_window_not_closed (finally): ' + $_.Exception.GetType().Name
