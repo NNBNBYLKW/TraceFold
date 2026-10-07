@@ -145,14 +145,25 @@ function Get-WindowOwnerProcessId {
 function New-NonForegroundControlWindow {
     if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = 'TraceFold UI acceptance control window'
-    $form.Width = 220
-    $form.Height = 120
-    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-    $form.Location = New-Object System.Drawing.Point(-4000, -4000)
-    $form.ShowInTaskbar = $false
-    $form.Show()
-    $form.Activate()
+    try {
+        $form.Text = 'TraceFold UI acceptance control window'
+        $form.Width = 220
+        $form.Height = 120
+        $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+        $form.Location = New-Object System.Drawing.Point(-4000, -4000)
+        $form.ShowInTaskbar = $false
+        $form.Show()
+        $form.Activate()
+    }
+    catch {
+        # The object is created but never handed back, so the factory owns it: it is released here
+        # before the failure leaves this function and the caller's finally never sees a half built
+        # window. The construction failure is the fact the caller has to report, so it is rethrown
+        # unchanged rather than replaced by a release error.
+        try { $form.Close() } catch { }
+        try { $form.Dispose() } catch { }
+        throw
+    }
     return $form
 }
 
@@ -236,6 +247,10 @@ try {
     $controlHandle = [IntPtr] $controlWindow.Handle
     if ($controlHandle -eq [IntPtr]::Zero) { throw 'single.instance.control_window_missing' }
     $controlOwnerPid = Get-WindowOwnerProcessId -Handle $controlHandle
+    # The controlled object's ownership is checked against an independent reference, not against a
+    # second read of the same handle: a window this scenario owns has to belong to this very harness
+    # process, and the recorded owner is therefore cross checked against the running process id.
+    if ($controlOwnerPid -ne $PID) { throw 'single.instance.control_window_not_harness_owned' }
     $preForegroundHandle = Get-ForegroundWindowHandle
     if ($preForegroundHandle.ToInt64() -ne $controlHandle.ToInt64()) { throw 'single.instance.pre_state_not_controlled' }
     $preForegroundPid = Get-WindowOwnerProcessId -Handle $preForegroundHandle
