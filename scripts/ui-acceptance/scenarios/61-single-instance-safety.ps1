@@ -143,25 +143,35 @@ function Get-WindowOwnerProcessId {
 # It belongs to this harness process, its identity is recorded, and it is always closed again. The
 # primary window is never activated, clicked or asked to come forward.
 function New-NonForegroundControlWindow {
+    [CmdletBinding()]
+    param(
+        # Both steps are seams so the failure paths can be driven without a live desktop: a caller can
+        # supply a form that cannot be built, or a show action that throws. The defaults are the
+        # previous logic verbatim, so the behaviour of every existing call is unchanged.
+        [scriptblock] $CreateForm = { New-Object System.Windows.Forms.Form },
+        [scriptblock] $ShowAction = { param($f) $f.Show(); $f.Activate() }
+    )
     if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
-    $form = New-Object System.Windows.Forms.Form
+    $form = $null
     try {
+        $form = & $CreateForm
         $form.Text = 'TraceFold UI acceptance control window'
         $form.Width = 220
         $form.Height = 120
         $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
         $form.Location = New-Object System.Drawing.Point(-4000, -4000)
         $form.ShowInTaskbar = $false
-        $form.Show()
-        $form.Activate()
+        & $ShowAction $form
     }
     catch {
         # The object is created but never handed back, so the factory owns it: it is released here
         # before the failure leaves this function and the caller's finally never sees a half built
         # window. The construction failure is the fact the caller has to report, so it is rethrown
         # unchanged rather than replaced by a release error.
-        try { $form.Close() } catch { }
-        try { $form.Dispose() } catch { }
+        if ($null -ne $form) {
+            try { $form.Close() } catch { }
+            try { $form.Dispose() } catch { }
+        }
         throw
     }
     return $form
@@ -200,6 +210,38 @@ function Assert-SingleInstanceActivated {
     if ($PrimaryWindowAfterHandle -le 0) { throw 'single.instance.primary_window_missing' }
     if ($ForegroundHandle -ne $PrimaryWindowHandle) { throw 'single.instance.foreground_window_not_primary' }
     if ($ForegroundOwnerPid -ne $PrimaryPid) { throw 'single.instance.primary_not_activated' }
+}
+
+# The release of the controlled window as one unit, called by both the success path and the safety
+# net so the two can never drift apart. It uses only what the object already offers and it reads the
+# result back rather than treating a call that did not throw as proof: an object that is not disposed
+# afterwards is reported as a failure, not as an unknown that still counts as released.
+function Complete-SingleInstanceControlRelease {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $ControlWindow)
+    $releaseReadBack = 'unknown'
+    $releaseFailure = ''
+    $closed = $false
+    try {
+        $ControlWindow.Close()
+        $ControlWindow.Dispose()
+    }
+    catch {
+        $releaseFailure = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
+    }
+    if ($ControlWindow.IsDisposed) {
+        $closed = $true
+        $releaseReadBack = 'disposed'
+    }
+    elseif ([string]::IsNullOrWhiteSpace($releaseFailure)) {
+        $releaseFailure = 'single.instance.control_window_not_released'
+    }
+    return [pscustomobject] @{
+        closed             = $closed
+        releaseReadBack    = $releaseReadBack
+        releaseFailure     = $releaseFailure
+        isDisposedReadBack = [bool] $ControlWindow.IsDisposed
+    }
 }
 
 function Get-ProcessWindowHandle {
@@ -393,23 +435,10 @@ try {
     # problem can never be reported as Passed. Because this runs before the result record is built,
     # the final status is decided by this fact rather than by a status written earlier.
     $controlStage = 'primary-and-restart-verified'
-    $controlWindowClosed = $false
-    $controlReleaseFailure = ''
-    $controlReleaseReadBack = 'unknown'
-    try {
-        $controlWindow.Close()
-        $controlWindow.Dispose()
-    }
-    catch {
-        $controlReleaseFailure = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
-    }
-    if ($controlWindow.IsDisposed) {
-        $controlWindowClosed = $true
-        $controlReleaseReadBack = 'disposed'
-    }
-    elseif ([string]::IsNullOrWhiteSpace($controlReleaseFailure)) {
-        $controlReleaseFailure = 'single.instance.control_window_not_released'
-    }
+    $release = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow
+    $controlWindowClosed = [bool] $release.closed
+    $controlReleaseFailure = [string] $release.releaseFailure
+    $controlReleaseReadBack = [string] $release.releaseReadBack
 
     # The release fact, the stage it happened at and the status it decides are written to their own
     # record beside the other evidence, so a cleanup problem is delivered as its own fact and never
@@ -419,7 +448,7 @@ try {
         releaseAttempted       = $true
         releaseReadBack        = $controlReleaseReadBack
         releaseFailure         = $controlReleaseFailure
-        isDisposedReadBack     = [bool] $controlWindow.IsDisposed
+        isDisposedReadBack     = [bool] $release.isDisposedReadBack
         finalStatusFromRelease = $(if ($controlWindowClosed) { 'Passed' } else { 'Failed' })
     }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-control-release.json'),
@@ -572,14 +601,8 @@ finally {
     # exists and was not already confirmed released, so a confirmed release is never repeated, and it
     # reads the released fact back the same way rather than assuming the call was enough.
     if ($null -ne $controlWindow -and -not $controlWindowClosed) {
-        try {
-            $controlWindow.Close()
-            $controlWindow.Dispose()
-            if ($controlWindow.IsDisposed) { $controlWindowClosed = $true }
-            else { $controlReleaseFailure = 'single.instance.control_window_not_released (finally)' }
-        }
-        catch {
-            $controlReleaseFailure = 'single.instance.control_window_not_closed (finally): ' + $_.Exception.GetType().Name
-        }
+        $safety = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow
+        if ([bool] $safety.closed) { $controlWindowClosed = $true }
+        else { $controlReleaseFailure = [string] $safety.releaseFailure + ' (finally)' }
     }
 }
