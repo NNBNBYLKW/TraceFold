@@ -455,7 +455,7 @@ function Get-TestCases {
                 Assert-True ($source -cmatch "return \[pscustomobject\]") 'the scenario must return a result record'
             }
         },
-                @{
+                        @{
             Name = 'the single instance inventory helpers keep one array boundary'
             Body = {
                 # The three helpers are driven as they really are: their definitions are taken from
@@ -466,6 +466,7 @@ function Get-TestCases {
                 $tokens = $null
                 $errors = $null
                 $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
                 $helperNames = @('Get-SingleInstanceDbInventory', 'Get-SingleInstanceDbSidecarInventory', 'Get-SingleInstanceLibraryInventory')
                 $helperText = New-Object System.Collections.Generic.List[string]
                 foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
@@ -475,10 +476,9 @@ function Get-TestCases {
 
                 . ([scriptblock]::Create(($helperText -join [Environment]::NewLine)))
 
-                # [IO.Path]::IsPathFullyQualified does not exist on Windows PowerShell 5.1 (its .NET
-                # Framework has no such member), so the canonical path check uses APIs both runtimes
-                # have. The standard is not relaxed: the value still has to be an absolute path that
-                # is equal to its own full path.
+                # The older runtime's .NET has no IsPathFullyQualified, so the canonical path check
+                # uses members both runtimes have. The standard is unchanged: the value still has to
+                # be an absolute path equal to its own full path.
                 $isCanonicalPath = {
                     param($Value)
                     if ($Value -isnot [string]) { return $false }
@@ -486,37 +486,44 @@ function Get-TestCases {
                     if (-not [IO.Path]::IsPathRooted($Value)) { return $false }
                     return ([IO.Path]::GetFullPath($Value) -ceq $Value)
                 }
-                # A JSON count decodes as Int64 on PowerShell 7 and as Int32 on 5.1. Both are
-                # integers and are accepted; null, floats and strings are not read as zero.
+                # A decoded JSON count is an Int64 on one runtime and an Int32 on the other; both are
+                # integers. Null, floats and strings are rejected rather than read as zero.
                 $isIntegerValue = {
                     param($Value)
                     if ($null -eq $Value) { return $false }
                     return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte])
+                }
+                $asSet = {
+                    param($Values)
+                    return (@($Values) | Sort-Object)
                 }
 
                 $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('tf61-inventory-' + [guid]::NewGuid().ToString('N'))
                 [void] [IO.Directory]::CreateDirectory($sandbox)
 
                 try {
-                    # Each helper has its own filter, so each gets the layout that filter implies.
-                    # Db reads *.db under the root; the sidecar reader reads *.db-wal and *.db-shm
-                    # there; the library reader reads every file under <root>/library, so for it the
-                    # only way to have no match is a genuinely empty library directory.
+                    # Each helper has its own filter, so every name written here is chosen against that
+                    # filter: the files added later must match it, otherwise the helper would rightly
+                    # not report them. Non-matching controls are written only in the one and many
+                    # cases; the empty case stays genuinely empty.
                     $layouts = @(
                         @{ Name = 'Get-SingleInstanceDbInventory';
                            InLibrary = $false;
                            One = @('a.db');
                            Many = @('a.db', 'b.db', 'c.db');
-                           Other = @('note.txt', 'data.bak') },
+                           Added = @('added.db', 'added2.db');
+                           Other = @('note.txt') },
                         @{ Name = 'Get-SingleInstanceDbSidecarInventory';
                            InLibrary = $false;
                            One = @('a.db-wal');
                            Many = @('a.db-wal', 'b.db-shm', 'c.db-wal');
-                           Other = @('a.db', 'note.txt') },
+                           Added = @('added.db-wal', 'added2.db-shm');
+                           Other = @('note.txt') },
                         @{ Name = 'Get-SingleInstanceLibraryInventory';
                            InLibrary = $true;
                            One = @('asset.bin');
                            Many = @('asset.bin', 'asset2.bin', 'asset3.bin');
+                           Added = @('added.bin', 'added2.bin');
                            Other = @() }
                     )
 
@@ -526,35 +533,34 @@ function Get-TestCases {
 
                         foreach ($case in @('missing', 'empty', 'one', 'many')) {
                             $caseRoot = Join-Path $sandbox ($name + '-' + $case)
-                            $directory = if ($inLibrary) { Join-Path $caseRoot 'library' } else { $caseRoot }
+                            $directory = $caseRoot
+                            if ($inLibrary) { $directory = Join-Path $caseRoot 'library' }
 
                             $expected = New-Object System.Collections.Generic.List[string]
+                            $expectedCount = 0
+                            if ($case -ceq 'one') { $expectedCount = 1 }
+                            elseif ($case -ceq 'many') { $expectedCount = @($layout.Many).Count }
+
+                            # Only the missing case leaves the directory absent; every other case
+                            # creates it, and the empty case writes nothing into it at all.
                             if ($case -cne 'missing') {
                                 [void] [IO.Directory]::CreateDirectory($directory)
                             }
                             if ($case -ceq 'one' -or $case -ceq 'many') {
-                                $files = if ($case -ceq 'one') { @($layout.One) } else { @($layout.Many) }
-                                foreach ($fileName in $files) {
+                                $matching = @($layout.One)
+                                if ($case -ceq 'many') { $matching = @($layout.Many) }
+                                foreach ($fileName in $matching) {
                                     $full = Join-Path $directory $fileName
                                     [IO.File]::WriteAllText($full, 'x')
                                     $expected.Add([IO.Path]::GetFullPath($full))
                                 }
-                                # Non-matching files only for a helper that actually filters, and never
-                                # for the library reader whose rule matches every file.
-                                foreach ($other in @($layout.Other)) {
-                                    [IO.File]::WriteAllText((Join-Path $directory $other), 'x')
-                                }
-                            }
-                            elseif ($case -ceq 'empty') {
                                 foreach ($other in @($layout.Other)) {
                                     [IO.File]::WriteAllText((Join-Path $directory $other), 'x')
                                 }
                             }
 
-                            $expectedCount = 0
-                            if ($case -ceq 'one') { $expectedCount = 1 }
-                            elseif ($case -ceq 'many') { $expectedCount = @($layout.Many).Count }
-                            Assert-Equal $expected.Count $expectedCount ($name + '/' + $case + ' fixture must produce ' + $expectedCount + ' matching file(s)')
+                            # The fixture is checked against its own claim before the helper is called.
+                            Assert-Equal $expectedCount $expected.Count ($name + '/' + $case + ' fixture must create ' + $expectedCount + ' matching file(s)')
 
                             $actual = @(& $name -Root $caseRoot)
                             Assert-Equal $expectedCount $actual.Count ($name + '/' + $case + ' count')
@@ -562,33 +568,42 @@ function Get-TestCases {
                                 Assert-True (& $isCanonicalPath $item) ($name + '/' + $case + ' must yield canonical absolute path strings')
                             }
                             Assert-Equal 0 @($actual | Where-Object { $_ -isnot [string] }).Count ($name + '/' + $case + ' must not nest arrays')
-                            Assert-Equal (@($expected | Sort-Object) -join '|') (@($actual | Sort-Object) -join '|') ($name + '/' + $case + ' exact expected path set')
+                            Assert-Equal ((& $asSet $expected) -join '|') ((& $asSet $actual) -join '|') ($name + '/' + $case + ' exact expected path set')
 
                             if ($case -ceq 'one' -or $case -ceq 'many') {
-                                # The difference the scenario computes has to come from two real calls,
-                                # not a hand-built array: add one real file and read the helper again.
-                                $addedName = if ($inLibrary) { 'added.bin' } else { 'added.db' }
-                                $addedPath = Join-Path $directory $addedName
-                                [IO.File]::WriteAllText($addedPath, 'x')
+                                # Differences come from real calls of the helper before and after a real
+                                # file is written, never from a hand-built array.
+                                $firstAdded = Join-Path $directory ([string] $layout.Added[0])
+                                [IO.File]::WriteAllText($firstAdded, 'x')
                                 $after = @(& $name -Root $caseRoot)
-                                Assert-Equal ($expectedCount + 1) $after.Count ($name + '/' + $case + ' must see the added file')
-                                $added = @($after | Where-Object { @($actual) -cnotcontains $_ })
-                                Assert-Equal 1 $added.Count ($name + '/' + $case + ' difference adds exactly one')
-                                Assert-True (& $isCanonicalPath $added[0]) ($name + '/' + $case + ' difference must contain a real path')
-                                Assert-Equal 0 @($actual | Where-Object { @($after) -cnotcontains $_ }).Count ($name + '/' + $case + ' must not lose a path')
+                                Assert-Equal ($expectedCount + 1) $after.Count ($name + '/' + $case + ' must see the first added file')
+                                $addedOne = @(& $asSet $after | Where-Object { (& $asSet $actual) -cnotcontains $_ })
+                                Assert-Equal 1 $addedOne.Count ($name + '/' + $case + ' first difference adds exactly one path')
+                                Assert-True (& $isCanonicalPath $addedOne[0]) ($name + '/' + $case + ' first difference must be a real canonical path')
+                                Assert-Equal ([IO.Path]::GetFullPath($firstAdded)) $addedOne[0] ($name + '/' + $case + ' first difference must be the file that was created')
+                                Assert-Equal 0 @(& $asSet $actual | Where-Object { (& $asSet $after) -cnotcontains $_ }).Count ($name + '/' + $case + ' first difference must not lose a path')
 
-                                # No change between two real calls must add and lose nothing.
+                                # No change between two real calls adds and loses nothing.
                                 $again = @(& $name -Root $caseRoot)
-                                Assert-Equal 0 @($again | Where-Object { @($after) -cnotcontains $_ }).Count ($name + '/' + $case + ' no change adds nothing')
-                                Assert-Equal 0 @($after | Where-Object { @($again) -cnotcontains $_ }).Count ($name + '/' + $case + ' no change loses nothing')
+                                Assert-Equal 0 @(& $asSet $again | Where-Object { (& $asSet $after) -cnotcontains $_ }).Count ($name + '/' + $case + ' no change adds nothing')
+                                Assert-Equal 0 @(& $asSet $after | Where-Object { (& $asSet $again) -cnotcontains $_ }).Count ($name + '/' + $case + ' no change loses nothing')
 
-                                # A second real file must show up as exactly one more.
-                                $secondPath = Join-Path $directory (if ($inLibrary) { 'added2.bin' } else { 'added2.db' })
-                                [IO.File]::WriteAllText($secondPath, 'x')
+                                # A second real file: the difference against the original inventory has
+                                # to be exactly those two created paths, and nothing may disappear.
+                                $secondAdded = Join-Path $directory ([string] $layout.Added[1])
+                                [IO.File]::WriteAllText($secondAdded, 'x')
                                 $grown = @(& $name -Root $caseRoot)
                                 Assert-Equal ($expectedCount + 2) $grown.Count ($name + '/' + $case + ' must see both added files')
-                                $addedTwo = @($grown | Where-Object { @($after) -cnotcontains $_ })
-                                Assert-Equal 1 $addedTwo.Count ($name + '/' + $case + ' second difference adds exactly one')
+                                $addedTwo = @(& $asSet $grown | Where-Object { (& $asSet $actual) -cnotcontains $_ })
+                                Assert-Equal 2 $addedTwo.Count ($name + '/' + $case + ' difference from the original inventory must be exactly two paths')
+                                foreach ($one in $addedTwo) {
+                                    Assert-True (& $isCanonicalPath $one) ($name + '/' + $case + ' the two-path difference must contain real canonical paths')
+                                }
+                                Assert-Equal ([IO.Path]::GetFullPath($firstAdded)) (& $asSet $addedTwo)[0] ($name + '/' + $case + ' the two-path difference must start with the first created file')
+                                Assert-Equal ([IO.Path]::GetFullPath($secondAdded)) (& $asSet $addedTwo)[1] ($name + '/' + $case + ' the two-path difference must end with the second created file')
+                                Assert-Equal 0 @(& $asSet $actual | Where-Object { (& $asSet $grown) -cnotcontains $_ }).Count ($name + '/' + $case + ' the grown inventory must not lose a path')
+                                Assert-Equal (@(& $asSet $actual) -join '|') (@(@(& $asSet $grown) | Where-Object { (& $asSet $addedTwo) -cnotcontains $_ }) -join '|') ($name + '/' + $case + ' original plus difference must equal the grown set')
+                                Assert-Equal 1 @(& $asSet $grown | Where-Object { (& $asSet $after) -cnotcontains $_ }).Count ($name + '/' + $case + ' difference from the first addition must be exactly one path')
                             }
 
                             # The evidence object must round trip with the same shape and numbers.
@@ -609,6 +624,7 @@ function Get-TestCases {
                 }
             }
         },
+
 
         @{
             Name = 'the diagnostics scenario reaches the tab, the five groups and one refresh'
