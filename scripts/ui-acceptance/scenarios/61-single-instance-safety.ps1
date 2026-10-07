@@ -9,23 +9,20 @@
 #      real exit code - the product's single instance coordinator returns 0 when it redirected the
 #      activation and 1 when it failed or timed out, so 0 is required and 1 is a failure;
 #   3. prove the second start created no second database and used no other library;
-#   4. read the foreground after the second start and require the foreground window's owner to be
-#      the primary process with the primary window handle unchanged. An inspect that succeeds only
-#      shows the instance is observable; it is never offered as the activation proof;
+#   4. establish a controlled non-foreground pre-state with a window this harness owns, then read the
+#      foreground once after the second start and require that handle to be the primary window and
+#      that handle's owner to be the primary process. An inspect that succeeds only shows the
+#      instance is observable; it is not offered as the activation proof;
 #   5. close the primary through the product's own window, prove no leftovers, and start it again on
 #      the same owned root.
 #
 # NOT yet implemented, and therefore not claimed by this file:
-#   * establishing a controlled non-foreground pre-state before the second start. The foreground is
-#     currently only read, so the activation step proves the post-state without having set up the
-#     pre-state, and the counter-examples for that (already foreground, another window of the same
-#     process, non-foreground and not activated) are not covered here;
 #   * the negative case for an outside instance. It is not implemented in this file at all: proving
 #     Blocked with zero dispatches and zero new starts needs a separate controlled fixture with its
 #     own ownership ledger, which lives outside this scenario.
 #
 # Bans: no coordinates, no fixed sleeps, no termination by process name, no direct database access,
-# no AppActivate-style foreground coaxing, and no reuse of another scenario's root.
+# no coaxing the primary window to the foreground, and no reuse of another scenario's root.
 #
 # The single instance key is a fixed constant in the product and does not include the data root.
 # This scenario therefore does not claim a machine-wide or cross-session scope for that key; it only
@@ -48,7 +45,11 @@ param(
     [int] $InspectDepth = 20,
     [scriptblock] $LaunchProcess,
     [scriptblock] $DesktopCheck = { Test-UiInteractiveDesktop },
-    [scriptblock] $ForegroundCheck = { param($id) Test-UiForegroundProcess -ProcessId $id }
+    [scriptblock] $ForegroundCheck = { param($id) Test-UiForegroundProcess -ProcessId $id },
+    # The controlled object that takes the foreground away from the primary before the second start.
+    # It is a seam so a dispatcher can substitute its own controlled window, and the default is a
+    # window this harness owns and closes again.
+    [scriptblock] $EstablishNonForeground = { New-NonForegroundControlWindow }
 )
 
 Set-StrictMode -Version Latest
@@ -126,6 +127,35 @@ function Get-ForegroundWindowHandle {
     return $handle
 }
 
+# The owner of a specific window handle. The activation proof asks this about the one handle it
+# sampled, so the process behind that handle is the process the foreground really belongs to.
+function Get-WindowOwnerProcessId {
+    param([Parameter(Mandatory)][IntPtr] $Handle)
+    if (-not ('TraceFoldUiForegroundProbe' -as [type])) { throw 'single.instance.foreground_probe_unavailable' }
+    if ($Handle -eq [IntPtr]::Zero) { throw 'single.instance.window_handle_missing' }
+    [uint32] $owner = 0
+    [void] [TraceFoldUiForegroundProbe]::GetWindowThreadProcessId($Handle, [ref] $owner)
+    if ($owner -le 0) { throw 'single.instance.window_owner_unknown' }
+    return [int] $owner
+}
+
+# The controlled object used to take the foreground away from the primary before the second start.
+# It belongs to this harness process, its identity is recorded, and it is always closed again. The
+# primary window is never activated, clicked or asked to come forward.
+function New-NonForegroundControlWindow {
+    if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'TraceFold UI acceptance control window'
+    $form.Width = 220
+    $form.Height = 120
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $form.Location = New-Object System.Drawing.Point(-4000, -4000)
+    $form.ShowInTaskbar = $false
+    $form.Show()
+    $form.Activate()
+    return $form
+}
+
 function Get-ProcessWindowHandle {
     param([Parameter(Mandatory)][int] $ProcessId)
     $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
@@ -188,11 +218,30 @@ try {
     $primaryStartedUtc = [DateTime]::new([long] $primary.StartUtcTicks, [DateTimeKind]::Utc).ToString('o')
 
     $preObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
+
+    # --- controlled non-foreground pre-state ----------------------------------------------------
+    # The activation proof only means something if the primary was not already in the foreground, so
+    # a controlled window owned by this harness is brought forward first. It is an object this
+    # scenario owns: its handle and its owning process are recorded, and the primary must no longer
+    # be the foreground owner before the second start is allowed. The primary itself is never
+    # activated, clicked or asked to come forward.
+    $controlWindow = & $EstablishNonForeground
+    $controlHandle = [IntPtr] $controlWindow.Handle
+    if ($controlHandle -eq [IntPtr]::Zero) { throw 'single.instance.control_window_missing' }
+    $controlOwnerPid = Get-WindowOwnerProcessId -Handle $controlHandle
+    $preForegroundHandle = Get-ForegroundWindowHandle
+    $preForegroundPid = Get-WindowOwnerProcessId -Handle $preForegroundHandle
+    if ($preForegroundPid -eq $primaryPid) { throw 'single.instance.pre_state_still_foreground' }
+
     $preState = [pscustomobject] @{
-        primaryPid        = $primaryPid
-        primaryWindow     = $primaryWindow.ToInt64()
-        primaryStartedUtc = $primaryStartedUtc
-        observationStatus = [string] $preObservation.Status
+        primaryPid            = $primaryPid
+        primaryWindow         = $primaryWindow.ToInt64()
+        primaryStartedUtc     = $primaryStartedUtc
+        observationStatus     = [string] $preObservation.Status
+        controlWindowHandle   = $controlHandle.ToInt64()
+        controlWindowOwnerPid = $controlOwnerPid
+        preForegroundHandle   = $preForegroundHandle.ToInt64()
+        preForegroundOwnerPid = $preForegroundPid
     }
 
     # --- 2. second start on the same owned root --------------------------------------------------
@@ -253,13 +302,16 @@ try {
     # The foreground is read first and only read: nothing here activates a window, clicks it or
     # asks the driver to bring it forward, because that would manufacture the very fact being
     # proved. An inspect that succeeds later is recorded as observability only.
-    # The foreground check runs first: it is the read-only call that also makes the probe type
-    # available. Nothing here brings a window forward, clicks it or asks the driver to activate it,
-    # because that would manufacture the very fact being proved. The handle is then read from the
-    # same foreground window the check just measured.
-    $foregroundMatches = [bool] (& $ForegroundCheck $primaryPid)
+    # One sample, not two: the foreground handle is read once and the process behind that very handle
+    # is asked for. The primary is the foreground only if that handle is the primary's own window and
+    # that handle's owner is the primary process. Nothing here brings any window forward, clicks it
+    # or asks the driver to activate it, because that would manufacture the fact being proved.
     $foregroundHandle = Get-ForegroundWindowHandle
+    $foregroundOwnerPid = Get-WindowOwnerProcessId -Handle $foregroundHandle
+    $foregroundMatches = ($foregroundOwnerPid -eq $primaryPid)
     $primaryWindowAfter = Get-ProcessWindowHandle -ProcessId $primaryPid
+    if ($primaryWindowAfter -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
+    if ($foregroundHandle.ToInt64() -ne $primaryWindow.ToInt64()) { throw 'single.instance.foreground_window_not_primary' }
     if (-not $foregroundMatches) { throw 'single.instance.primary_not_activated' }
     if ($primaryWindowAfter -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
     if ($primaryWindowAfter.ToInt64() -ne $primaryWindow.ToInt64()) {
@@ -268,6 +320,12 @@ try {
 
     $postObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
     if ([string] $postObservation.Status -cne 'Passed') { throw 'single.instance.primary_unresponsive' }
+
+    # The controlled window has done its job and is closed again, so it cannot be mistaken for part
+    # of the product state under test.
+    $controlWindowClosed = $false
+    try { $controlWindow.Close(); $controlWindow.Dispose(); $controlWindowClosed = $true } catch { $controlWindowClosed = $false }
+    if (-not $controlWindowClosed) { throw 'single.instance.control_window_not_closed' }
 
     # --- 5. legal close, then restart on the same owned root -------------------------------------
     $closeAccepted = $false
@@ -322,6 +380,13 @@ try {
         secondaryExitCode        = $secondaryExit
         foregroundWindowHandle   = $foregroundHandle.ToInt64()
         foregroundMatchesPrimary = $foregroundMatches
+        foregroundOwnerPid       = $foregroundOwnerPid
+        controlWindowHandle      = $preState.controlWindowHandle
+        controlWindowOwnerPid    = $preState.controlWindowOwnerPid
+        controlWindowClosed      = $controlWindowClosed
+        preForegroundHandle      = $preState.preForegroundHandle
+        preForegroundOwnerPid    = $preState.preForegroundOwnerPid
+        preStateNote             = 'a window this harness owns was brought forward first; the primary was required to be out of the foreground before the second start'
         expectedDatabasePath     = $expectedDbPath
         databasesBefore          = @($dbBefore)
         databasesAfter           = @($dbAfter)
@@ -337,7 +402,7 @@ try {
         restartPid               = $restartPid
         restartWindowHandle      = $restartWindow.ToInt64()
         restartObservationStatus = [string] $restartObservation.Status
-        activationProof          = 'controlled foreground read after the second start; the foreground window owner is the primary pid and the primary window handle is unchanged'
+        activationProof          = 'a controlled window owned by this harness took the foreground before the second start; afterwards the foreground handle was read once, that handle owner is the primary pid and the handle is the primary window'
         observabilityNote        = 'the inspect calls show the instance is observable and are not offered as the activation proof'
         databaseScopeNote        = 'only the one expected database and the absence of a second one are asserted; no byte-freeze of the main database, WAL or SHM'
         singleInstanceKeyScope   = 'the product key is a fixed constant without the data root; no machine-wide or cross-session claim is made here'
