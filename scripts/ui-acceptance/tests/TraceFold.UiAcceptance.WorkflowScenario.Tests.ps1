@@ -415,9 +415,43 @@ function Get-TestCases {
                     Assert-True ($source -cmatch ('\$' + $required + '\b')) ('the scenario must accept ' + $required)
                 }
 
-                # The second start must run the same executable against the same owned root and its
-                # exit code must be the product's own: 0 is required and anything else fails.
-                Assert-True ($source -cmatch 'TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT') 'the second start must carry the owned data root'
+                # The second start has to run the same executable against the same canonical owned
+                # root. That fact belongs to the real launch path, so it is proved by driving that path
+                # with a capturing seam instead of by looking for the variable's name in this file's
+                # text: the name lives in the launch path, and the scenario's own adapter only copies
+                # the environment it is handed.
+                $captureBase = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-si-' + [guid]::NewGuid().ToString('N'))
+                $captureRoot = Join-Path $captureBase 'owned'
+                [void] [IO.Directory]::CreateDirectory($captureRoot)
+                $captureExe = Join-Path $captureBase 'TraceFold.Media.exe'
+                [IO.File]::WriteAllBytes($captureExe, [byte[]] @(1))
+                try {
+                    $script:capturedChildRoot = ''
+                    $script:capturedExe = ''
+                    $captureStarter = {
+                        param($path, $childEnvironment)
+                        $script:capturedExe = $path
+                        $script:capturedChildRoot = $childEnvironment.TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT
+                        [pscustomobject] @{ ProcessId = 321; StartUtcTicks = 654; ExecutablePath = $path }
+                    }
+                    $supportFixture = Join-Path $script:uiRoot 'tests/fixtures/fake-support.ps1'
+                    $launched = Start-TraceFoldScenario -ExecutablePath $captureExe -OwnedRoot $captureRoot -RunToken 'test-token' `
+                        -SupportPath $supportFixture -StartProcess $captureStarter
+                    Assert-Equal ([IO.Path]::GetFullPath($captureExe)) ([IO.Path]::GetFullPath($script:capturedExe)) 'the second start must use the same executable'
+                    Assert-Equal ([IO.Path]::GetFullPath($captureRoot)) ([IO.Path]::GetFullPath($script:capturedChildRoot)) 'the second start must carry the canonical owned root as its data root'
+                    Assert-Equal 321 $launched.ProcessId
+                    Assert-Contains (Get-Content -LiteralPath (Join-Path $captureRoot 'owned-processes.txt') -Raw) '321|654|' 'the launched process must be registered in the identity ledger'
+                }
+                finally {
+                    if ([IO.Directory]::Exists($captureBase)) { [IO.Directory]::Delete($captureBase, $true) }
+                }
+
+                # Kept separate from that behaviour, and labelled as what it is: the scenario reaches
+                # that path through its own adapter and hands the environment on. This is a connection
+                # check on the source text, not evidence that the product was started with the root.
+                Assert-True ($source -cmatch 'Start-TraceFoldScenario') 'the second start must go through the launch path'
+                Assert-True ($source -cmatch 'secondaryStartBlock') 'the second start must supply its own start block'
+                Assert-True ($source -cmatch '\$info\.Environment\[\$key\]') 'the adapter must copy the environment it was handed'
                 Assert-True ($source -cmatch 'WaitForExit') 'the second process must be waited for'
                 Assert-True ($source -cmatch 'ExitCode') 'the real exit code must be read'
                 Assert-True ($source -cmatch "secondaryExit -ne 0") 'a non-zero second exit must fail the scenario'
