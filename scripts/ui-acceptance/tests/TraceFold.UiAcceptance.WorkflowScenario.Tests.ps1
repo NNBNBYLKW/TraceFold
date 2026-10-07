@@ -455,13 +455,13 @@ function Get-TestCases {
                 Assert-True ($source -cmatch "return \[pscustomobject\]") 'the scenario must return a result record'
             }
         },
-        @{
+                @{
             Name = 'the single instance inventory helpers keep one array boundary'
             Body = {
                 # The three helpers are driven as they really are: their definitions are taken from
                 # the scenario file by AST and executed here, so this is not a second copy of the
-                # judgement. Only the effects they have outside the process (the file system) are
-                # substituted, by pointing them at real temporary directories.
+                # judgement. Only the file system they read is substituted, by pointing them at real
+                # temporary directories.
                 $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
                 $tokens = $null
                 $errors = $null
@@ -473,100 +473,135 @@ function Get-TestCases {
                 }
                 Assert-Equal 3 $helperText.Count
 
-                # The extracted definitions are brought into this scope, so the helpers below are the
-                # scenario's own functions, not a re-implementation.
                 . ([scriptblock]::Create(($helperText -join [Environment]::NewLine)))
+
+                # [IO.Path]::IsPathFullyQualified does not exist on Windows PowerShell 5.1 (its .NET
+                # Framework has no such member), so the canonical path check uses APIs both runtimes
+                # have. The standard is not relaxed: the value still has to be an absolute path that
+                # is equal to its own full path.
+                $isCanonicalPath = {
+                    param($Value)
+                    if ($Value -isnot [string]) { return $false }
+                    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+                    if (-not [IO.Path]::IsPathRooted($Value)) { return $false }
+                    return ([IO.Path]::GetFullPath($Value) -ceq $Value)
+                }
+                # A JSON count decodes as Int64 on PowerShell 7 and as Int32 on 5.1. Both are
+                # integers and are accepted; null, floats and strings are not read as zero.
+                $isIntegerValue = {
+                    param($Value)
+                    if ($null -eq $Value) { return $false }
+                    return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte])
+                }
 
                 $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('tf61-inventory-' + [guid]::NewGuid().ToString('N'))
                 [void] [IO.Directory]::CreateDirectory($sandbox)
 
                 try {
-                    # Each helper filters differently, so each gets its own four-case layout:
-                    # Db reads *.db under the root, the sidecar reader its own two patterns there,
-                    # and the library reader everything under <root>/library.
+                    # Each helper has its own filter, so each gets the layout that filter implies.
+                    # Db reads *.db under the root; the sidecar reader reads *.db-wal and *.db-shm
+                    # there; the library reader reads every file under <root>/library, so for it the
+                    # only way to have no match is a genuinely empty library directory.
                     $layouts = @(
-                        @{ Name = 'Get-SingleInstanceDbInventory'; Pattern = 'a.db'; Extra = @('a.db-wal', 'a.db-shm', 'note.txt') },
-                        @{ Name = 'Get-SingleInstanceDbSidecarInventory'; Pattern = 'a.db-wal'; Extra = @('a.db', 'a.db-shm', 'note.txt') },
-                        @{ Name = 'Get-SingleInstanceLibraryInventory'; Pattern = 'asset.bin'; Extra = @('other.bin', 'note.txt') }
+                        @{ Name = 'Get-SingleInstanceDbInventory';
+                           InLibrary = $false;
+                           One = @('a.db');
+                           Many = @('a.db', 'b.db', 'c.db');
+                           Other = @('note.txt', 'data.bak') },
+                        @{ Name = 'Get-SingleInstanceDbSidecarInventory';
+                           InLibrary = $false;
+                           One = @('a.db-wal');
+                           Many = @('a.db-wal', 'b.db-shm', 'c.db-wal');
+                           Other = @('a.db', 'note.txt') },
+                        @{ Name = 'Get-SingleInstanceLibraryInventory';
+                           InLibrary = $true;
+                           One = @('asset.bin');
+                           Many = @('asset.bin', 'asset2.bin', 'asset3.bin');
+                           Other = @() }
                     )
 
                     foreach ($layout in $layouts) {
-                        $name = $layout.Name
-                        $inLibrary = ($name -ceq 'Get-SingleInstanceLibraryInventory')
+                        $name = [string] $layout.Name
+                        $inLibrary = [bool] $layout.InLibrary
 
-                        # Case A: the directory does not exist.
-                        $missingRoot = Join-Path $sandbox ($name + '-missing')
-                        $missing = @(& $name -Root $missingRoot)
-                        Assert-Equal 0 $missing.Count ($name + ' must yield nothing when the directory is absent')
+                        foreach ($case in @('missing', 'empty', 'one', 'many')) {
+                            $caseRoot = Join-Path $sandbox ($name + '-' + $case)
+                            $directory = if ($inLibrary) { Join-Path $caseRoot 'library' } else { $caseRoot }
 
-                        # Case B: the directory exists but holds no matching file.
-                        $emptyRoot = Join-Path $sandbox ($name + '-empty')
-                        [void] [IO.Directory]::CreateDirectory($emptyRoot)
-                        $emptyTarget = if ($inLibrary) { Join-Path $emptyRoot 'library' } else { $emptyRoot }
-                        [void] [IO.Directory]::CreateDirectory($emptyTarget)
-                        [IO.File]::WriteAllText((Join-Path $emptyTarget 'unrelated.txt'), 'x')
-                        $empty = @(& $name -Root $emptyRoot)
-                        Assert-Equal 0 $empty.Count ($name + ' must yield nothing for an empty directory')
-
-                        # Case C: exactly one matching file.  Case D: more than one.
-                        foreach ($count in @(1, 3)) {
-                            $caseRoot = Join-Path $sandbox ($name + '-n' + $count)
-                            [void] [IO.Directory]::CreateDirectory($caseRoot)
-                            $target = if ($inLibrary) { Join-Path $caseRoot 'library' } else { $caseRoot }
-                            [void] [IO.Directory]::CreateDirectory($target)
-                            $expectedPaths = New-Object System.Collections.Generic.List[string]
-                            [IO.File]::WriteAllText((Join-Path $target 'match.db'), 'x')
-                            $expectedPaths.Add([IO.Path]::GetFullPath((Join-Path $target 'match.db')))
-                            if ($inLibrary) {
-                                [IO.File]::WriteAllText((Join-Path $target 'asset.bin'), 'x')
-                                $expectedPaths.Add([IO.Path]::GetFullPath((Join-Path $target 'asset.bin')))
-                                for ($i = 2; $i -le $count; $i++) {
-                                    $p = Join-Path $target ('extra' + $i + '.bin')
-                                    [IO.File]::WriteAllText($p, 'x')
-                                    $expectedPaths.Add([IO.Path]::GetFullPath($p))
+                            $expected = New-Object System.Collections.Generic.List[string]
+                            if ($case -cne 'missing') {
+                                [void] [IO.Directory]::CreateDirectory($directory)
+                            }
+                            if ($case -ceq 'one' -or $case -ceq 'many') {
+                                $files = if ($case -ceq 'one') { @($layout.One) } else { @($layout.Many) }
+                                foreach ($fileName in $files) {
+                                    $full = Join-Path $directory $fileName
+                                    [IO.File]::WriteAllText($full, 'x')
+                                    $expected.Add([IO.Path]::GetFullPath($full))
+                                }
+                                # Non-matching files only for a helper that actually filters, and never
+                                # for the library reader whose rule matches every file.
+                                foreach ($other in @($layout.Other)) {
+                                    [IO.File]::WriteAllText((Join-Path $directory $other), 'x')
                                 }
                             }
-                            else {
-                                for ($i = 2; $i -le $count; $i++) {
-                                    $p = Join-Path $target ('match' + $i + '.db')
-                                    [IO.File]::WriteAllText($p, 'x')
-                                    $expectedPaths.Add([IO.Path]::GetFullPath($p))
+                            elseif ($case -ceq 'empty') {
+                                foreach ($other in @($layout.Other)) {
+                                    [IO.File]::WriteAllText((Join-Path $directory $other), 'x')
                                 }
                             }
-                            [IO.File]::WriteAllText((Join-Path $target 'ignored.txt'), 'x')
+
+                            $expectedCount = 0
+                            if ($case -ceq 'one') { $expectedCount = 1 }
+                            elseif ($case -ceq 'many') { $expectedCount = @($layout.Many).Count }
+                            Assert-Equal $expected.Count $expectedCount ($name + '/' + $case + ' fixture must produce ' + $expectedCount + ' matching file(s)')
 
                             $actual = @(& $name -Root $caseRoot)
-                            Assert-Equal $expectedPaths.Count $actual.Count ($name + ' count for ' + $count + ' matching file(s)')
+                            Assert-Equal $expectedCount $actual.Count ($name + '/' + $case + ' count')
                             foreach ($item in $actual) {
-                                Assert-True ($item -is [string]) ($name + ' must yield path strings')
-                                Assert-True ([IO.Path]::IsPathFullyQualified($item)) ($name + ' must yield canonical paths')
+                                Assert-True (& $isCanonicalPath $item) ($name + '/' + $case + ' must yield canonical absolute path strings')
                             }
-                            Assert-Equal 0 @($actual | Where-Object { $_ -isnot [string] }).Count ($name + ' must not nest arrays')
-                            $sortedActual = @($actual | Sort-Object)
-                            $sortedExpected = @($expectedPaths | Sort-Object)
-                            Assert-Equal ($sortedExpected -join '|') ($sortedActual -join '|') ($name + ' exact expected path set')
+                            Assert-Equal 0 @($actual | Where-Object { $_ -isnot [string] }).Count ($name + '/' + $case + ' must not nest arrays')
+                            Assert-Equal (@($expected | Sort-Object) -join '|') (@($actual | Sort-Object) -join '|') ($name + '/' + $case + ' exact expected path set')
 
-                            # The difference sets the scenario relies on must be real paths, not arrays
-                            # or type names: no change, one added, several added.
-                            Assert-Equal 0 @($sortedActual | Where-Object { @($sortedExpected) -cnotcontains $_ }).Count
-                            Assert-Equal 0 @($sortedExpected | Where-Object { @($sortedActual) -cnotcontains $_ }).Count
-                            $grown = @($sortedActual) + @([IO.Path]::GetFullPath((Join-Path $target 'added.db')))
-                            $added = @($grown | Where-Object { @($sortedActual) -cnotcontains $_ })
-                            Assert-Equal 1 $added.Count
-                            Assert-True ($added[0] -is [string]) 'the difference set must contain paths'
+                            if ($case -ceq 'one' -or $case -ceq 'many') {
+                                # The difference the scenario computes has to come from two real calls,
+                                # not a hand-built array: add one real file and read the helper again.
+                                $addedName = if ($inLibrary) { 'added.bin' } else { 'added.db' }
+                                $addedPath = Join-Path $directory $addedName
+                                [IO.File]::WriteAllText($addedPath, 'x')
+                                $after = @(& $name -Root $caseRoot)
+                                Assert-Equal ($expectedCount + 1) $after.Count ($name + '/' + $case + ' must see the added file')
+                                $added = @($after | Where-Object { @($actual) -cnotcontains $_ })
+                                Assert-Equal 1 $added.Count ($name + '/' + $case + ' difference adds exactly one')
+                                Assert-True (& $isCanonicalPath $added[0]) ($name + '/' + $case + ' difference must contain a real path')
+                                Assert-Equal 0 @($actual | Where-Object { @($after) -cnotcontains $_ }).Count ($name + '/' + $case + ' must not lose a path')
 
-                            # The evidence object round-trips: no nested arrays, counts still numbers.
-                            $json = ConvertTo-Json -InputObject ([ordered] @{ paths = @($sortedActual); count = $sortedActual.Count }) -Depth 6
+                                # No change between two real calls must add and lose nothing.
+                                $again = @(& $name -Root $caseRoot)
+                                Assert-Equal 0 @($again | Where-Object { @($after) -cnotcontains $_ }).Count ($name + '/' + $case + ' no change adds nothing')
+                                Assert-Equal 0 @($after | Where-Object { @($again) -cnotcontains $_ }).Count ($name + '/' + $case + ' no change loses nothing')
+
+                                # A second real file must show up as exactly one more.
+                                $secondPath = Join-Path $directory (if ($inLibrary) { 'added2.bin' } else { 'added2.db' })
+                                [IO.File]::WriteAllText($secondPath, 'x')
+                                $grown = @(& $name -Root $caseRoot)
+                                Assert-Equal ($expectedCount + 2) $grown.Count ($name + '/' + $case + ' must see both added files')
+                                $addedTwo = @($grown | Where-Object { @($after) -cnotcontains $_ })
+                                Assert-Equal 1 $addedTwo.Count ($name + '/' + $case + ' second difference adds exactly one')
+                            }
+
+                            # The evidence object must round trip with the same shape and numbers.
+                            $json = ConvertTo-Json -InputObject ([ordered] @{ paths = @($actual); count = $actual.Count }) -Depth 6
                             $back = $json | ConvertFrom-Json
-                            Assert-Equal $sortedActual.Count @($back.paths).Count ($name + ' JSON round trip keeps the count')
-                            Assert-Equal 0 @(@($back.paths) | Where-Object { $_ -isnot [string] }).Count ($name + ' JSON round trip must not nest')
-                            Assert-True ($back.count -is [int]) ($name + ' JSON round trip keeps the count numeric')
+                            Assert-Equal $actual.Count @($back.paths).Count ($name + '/' + $case + ' JSON round trip keeps the count')
+                            Assert-Equal 0 @(@($back.paths) | Where-Object { $_ -isnot [string] }).Count ($name + '/' + $case + ' JSON round trip must not nest')
+                            Assert-True (& $isIntegerValue $back.count) ($name + '/' + $case + ' JSON round trip keeps an integer count')
+                            Assert-True ($back.count -eq $actual.Count) ($name + '/' + $case + ' JSON round trip count equals numerically')
+                            if ($expectedCount -eq 0) {
+                                Assert-Equal 0 @($back.paths).Count ($name + '/' + $case + ' empty JSON round trip stays empty')
+                            }
                         }
-
-                        # The empty case must survive the same round trip as an empty array.
-                        $emptyJson = ConvertTo-Json -InputObject ([ordered] @{ paths = @($empty); count = $empty.Count }) -Depth 6
-                        $emptyBack = $emptyJson | ConvertFrom-Json
-                        Assert-Equal 0 @($emptyBack.paths).Count ($name + ' empty JSON round trip stays empty')
                     }
                 }
                 finally {
@@ -574,6 +609,7 @@ function Get-TestCases {
                 }
             }
         },
+
         @{
             Name = 'the diagnostics scenario reaches the tab, the five groups and one refresh'
             Body = {
