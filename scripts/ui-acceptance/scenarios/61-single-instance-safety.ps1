@@ -78,9 +78,10 @@ function Get-SingleInstanceDbInventory {
     foreach ($file in [IO.Directory]::GetFiles($canonical, '*.db', [IO.SearchOption]::AllDirectories)) {
         $items.Add([IO.Path]::GetFullPath($file))
     }
-    # The comma keeps a single result a one-element array instead of unrolling it to a scalar, so
-    # every consumer can rely on a stable collection shape.
-    return ,@($items | Sort-Object -Unique)
+    # One array boundary, applied once: the helper flattens its paths onto the pipeline (a missing
+    # directory and an empty directory both produce nothing), and the caller materialises the result
+    # with @() exactly once. Nothing wraps a second time.
+    return @($items | Sort-Object -Unique)
 }
 
 # WAL and SHM are the main database's own sidecars, listed separately so they are never mistaken for
@@ -95,9 +96,10 @@ function Get-SingleInstanceDbSidecarInventory {
             $items.Add([IO.Path]::GetFullPath($file))
         }
     }
-    # The comma keeps a single result a one-element array instead of unrolling it to a scalar, so
-    # every consumer can rely on a stable collection shape.
-    return ,@($items | Sort-Object -Unique)
+    # One array boundary, applied once: the helper flattens its paths onto the pipeline (a missing
+    # directory and an empty directory both produce nothing), and the caller materialises the result
+    # with @() exactly once. Nothing wraps a second time.
+    return @($items | Sort-Object -Unique)
 }
 
 function Get-SingleInstanceExpectedDbPath {
@@ -111,7 +113,7 @@ function Get-SingleInstanceLibraryInventory {
     param([Parameter(Mandatory)][string] $Root)
     $library = Join-Path ([IO.Path]::GetFullPath($Root)) 'library'
     if (-not [IO.Directory]::Exists($library)) { return @() }
-    return ,@([IO.Directory]::GetFiles($library, '*', [IO.SearchOption]::AllDirectories) | Sort-Object)
+    return @([IO.Directory]::GetFiles($library, '*', [IO.SearchOption]::AllDirectories) | Sort-Object)
 }
 
 function Get-ForegroundWindowHandle {
