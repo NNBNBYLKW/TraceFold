@@ -234,6 +234,9 @@ $artifacts = New-Object System.Collections.Generic.List[string]
 # Declared before the try so the finally can always see whatever this run owns.
 $controlWindow = $null
 $controlWindowClosed = $false
+# The last stage this run reached. It is assigned as the run advances and can only be read, never
+# decided, by the failure path, so a failure can say where it happened without changing what failed.
+$scenarioStage = 'start'
 
 try {
     if (-not [IO.File]::Exists($ExecutablePath)) { throw 'single.instance.executable_missing' }
@@ -243,11 +246,13 @@ try {
 
     # A host without an interactive desktop cannot exercise activation at all.
     if (-not (& $DesktopCheck)) { throw 'single.instance.desktop_unavailable' }
+    $scenarioStage = 'desktop-verified'
 
     # --- 1. primary instance ---------------------------------------------------------------------
     $primary = Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $RunToken `
         -SupportPath $SupportPath -StartProcess $LaunchProcess
     $primaryPid = [int] $primary.ProcessId
+    $scenarioStage = 'primary-started'
     $primaryWindow = Wait-ForProcessWindow -ProcessId $primaryPid -TimeoutSeconds $InteractiveTimeoutSeconds
     if ($primaryWindow -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
 
@@ -291,6 +296,7 @@ try {
     Assert-SingleInstancePreState -PrimaryPid $primaryPid -ControlHandle $controlHandle.ToInt64() `
         -ControlOwnerPid $controlOwnerPid -PreForegroundHandle $preForegroundHandle.ToInt64() `
         -PreForegroundOwnerPid $preForegroundPid
+    $scenarioStage = 'pre-state-verified'
 
     $preState = [pscustomobject] @{
         primaryPid            = $primaryPid
@@ -344,6 +350,7 @@ try {
     $secondaryExit = [int] $secondaryProc.ExitCode
     $secondaryEndUtc = [DateTime]::UtcNow.ToString('o')
     if ($secondaryExit -ne 0) { throw ('single.instance.secondary_exit_' + $secondaryExit) }
+    $scenarioStage = 'secondary-exited'
 
     # --- 3. no second database, no other library -------------------------------------------------
     $dbAfter = @(Get-SingleInstanceDbInventory -Root $root)
@@ -375,6 +382,7 @@ try {
         throw 'single.instance.primary_window_changed'
     }
     $foregroundMatches = ($foregroundOwnerPid -eq $primaryPid)
+    $scenarioStage = 'activated'
 
     $postObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
     if ([string] $postObservation.Status -cne 'Passed') { throw 'single.instance.primary_unresponsive' }
@@ -418,6 +426,7 @@ try {
         (ConvertTo-Json -InputObject $controlReleaseRecord -Depth 5), [Text.UTF8Encoding]::new($false))
     $artifacts.Add('single-instance-control-release.json')
     if (-not $controlWindowClosed) { throw $controlReleaseFailure }
+    $scenarioStage = 'released'
 
     # --- 5. legal close, then restart on the same owned root -------------------------------------
     $closeAccepted = $false
@@ -444,6 +453,7 @@ try {
     if ($restartWindow -eq [IntPtr]::Zero) { throw 'single.instance.restart_window_missing' }
     $restartObservation = Invoke-SingleInstanceObservation -ProcessId $restartPid
     if ([string] $restartObservation.Status -cne 'Passed') { throw 'single.instance.restart_unresponsive' }
+    $scenarioStage = 'restart-verified'
 
     # The restart is a new process on the same root: a brand new window is expected here, and the
     # earlier window identity is never reused to stand in for it.
@@ -526,6 +536,31 @@ catch {
         if (-not [string]::IsNullOrWhiteSpace($cause)) { $code = $code + '.' + $cause }
     }
     $status = if ($blockedFailureCodes -ccontains $code) { 'Blocked' } else { 'Failed' }
+
+    # Lightweight forensics: scalars only, taken from the ErrorRecord that is actually in flight, so
+    # a failure carries the stage it reached and its own error identity next to the other evidence.
+    # It is guarded on its own and can never change $code or $status: a forensics failure must not
+    # replace the business error and must never turn a failure into a pass. No CLIXML and no session
+    # state are serialised here, and the text goes through the existing redaction.
+    try {
+        $recorded = [ordered] @{
+            stage     = $scenarioStage
+            errorType = $_.Exception.GetType().FullName
+            errorId   = [string] $_.FullyQualifiedErrorId
+            category  = [string] $_.CategoryInfo.Category
+            position  = [string] $_.InvocationInfo.PositionMessage
+            stack     = [string] $_.ScriptStackTrace
+            message   = [string] $_.Exception.Message
+        }
+        foreach ($key in @($recorded.Keys)) {
+            $recorded[$key] = Protect-UiAcceptanceText -Value ([string] $recorded[$key]) -RunToken $RunToken -OwnedRoot $OwnedRoot
+        }
+        [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-stage-error.json'),
+            (ConvertTo-Json -InputObject $recorded -Depth 4), [Text.UTF8Encoding]::new($false))
+        $artifacts.Add('single-instance-stage-error.json')
+    }
+    catch { }
+
     return [pscustomobject] @{ ScenarioId = $ScenarioId; Status = $status; Reason = $code; Artifacts = @($artifacts) }
 }
 finally {
