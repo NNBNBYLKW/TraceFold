@@ -2100,6 +2100,143 @@ function Get-TestCases {
                 Assert-Equal 1 @($tree | Where-Object { $_.offscreen }).Count 'the off screen node has to survive'
                 Assert-Equal 1 @($tree | Where-Object { -not $_.offscreen }).Count 'the visible node has to survive beside it'
             }
+        },
+        @{
+            Name = 'the single instance pre state and activation decisions refuse each counter-example'
+            Body = {
+                # The two decisions are driven as they really are: their definitions are lifted out of
+                # the scenario by AST and executed here, never re-implemented. Only the facts are
+                # injected, so an outcome that should be refused can be shown to be refused without a
+                # live desktop, and the code it is refused with is asserted exactly.
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('Assert-SingleInstancePreState', 'Assert-SingleInstanceActivated')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 2 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                # The code a call was refused with, or 'none' when it was accepted.
+                function Get-RefusalCode {
+                    param([scriptblock] $Body)
+                    try { & $Body } catch { return [string] $_.Exception.Message }
+                    return 'none'
+                }
+
+                # A consistent set of facts is accepted by both decisions. This is the positive case:
+                # the control window is the foreground, the primary is not, and afterwards the primary
+                # is the foreground with its own window and its own owner.
+                $accepted = Get-RefusalCode { Assert-SingleInstancePreState -PrimaryPid 700 -ControlHandle 55 -ControlOwnerPid 900 -PreForegroundHandle 55 -PreForegroundOwnerPid 900 }
+                Assert-Equal 'none' $accepted 'a controlled non foreground state must be accepted'
+                $acceptedActivation = Get-RefusalCode { Assert-SingleInstanceActivated -PrimaryPid 700 -PrimaryWindowHandle 11 -PrimaryWindowAfterHandle 11 -ForegroundHandle 11 -ForegroundOwnerPid 700 }
+                Assert-Equal 'none' $acceptedActivation 'a matched single sample must be accepted'
+
+                # Counter-example: the pre state was never established, because the foreground is some
+                # other window rather than the control window the scenario owns.
+                Assert-Equal 'single.instance.pre_state_not_controlled' (Get-RefusalCode {
+                        Assert-SingleInstancePreState -PrimaryPid 700 -ControlHandle 55 -ControlOwnerPid 900 -PreForegroundHandle 66 -PreForegroundOwnerPid 900
+                    }) 'a foreground that is not the control window must be refused'
+
+                # Counter-example: the control window is in the foreground but is owned by something
+                # else, so the ownership of the controlled object was never verified.
+                Assert-Equal 'single.instance.pre_state_owner_mismatch' (Get-RefusalCode {
+                        Assert-SingleInstancePreState -PrimaryPid 700 -ControlHandle 55 -ControlOwnerPid 900 -PreForegroundHandle 55 -PreForegroundOwnerPid 800
+                    }) 'a control window owned by another process must be refused'
+
+                # Counter-example: another window of the primary's own process is in the foreground, so
+                # the state that was supposed to be established before the second start never was.
+                Assert-Equal 'single.instance.pre_state_still_foreground' (Get-RefusalCode {
+                        Assert-SingleInstancePreState -PrimaryPid 700 -ControlHandle 55 -ControlOwnerPid 700 -PreForegroundHandle 55 -PreForegroundOwnerPid 700
+                    }) 'the primary being the pre state foreground must be refused'
+
+                # Counter-example: after the second start the foreground is another window of the same
+                # process, which is not the primary window even though the owner matches.
+                Assert-Equal 'single.instance.foreground_window_not_primary' (Get-RefusalCode {
+                        Assert-SingleInstanceActivated -PrimaryPid 700 -PrimaryWindowHandle 11 -PrimaryWindowAfterHandle 11 -ForegroundHandle 22 -ForegroundOwnerPid 700
+                    }) 'another window of the same process must not count as activation'
+
+                # Counter-example: the foreground is not activated at all: the handle is the primary's
+                # window but the process behind that handle is not the primary.
+                Assert-Equal 'single.instance.primary_not_activated' (Get-RefusalCode {
+                        Assert-SingleInstanceActivated -PrimaryPid 700 -PrimaryWindowHandle 11 -PrimaryWindowAfterHandle 11 -ForegroundHandle 11 -ForegroundOwnerPid 800
+                    }) 'a foreground owned by another process must not count as activation'
+
+                # Counter-example: the primary window could not be read after the second start.
+                Assert-Equal 'single.instance.primary_window_missing' (Get-RefusalCode {
+                        Assert-SingleInstanceActivated -PrimaryPid 700 -PrimaryWindowHandle 11 -PrimaryWindowAfterHandle 0 -ForegroundHandle 11 -ForegroundOwnerPid 700
+                    }) 'a missing primary window must be refused'
+            }
+        },
+        @{
+            Name = 'the single instance control window release is driveable and a factory failure is rethrown unchanged'
+            Body = {
+                # The release unit and the factory are driven as they really are, lifted out of the
+                # scenario by AST. The release is exercised on a real disposable object and on a stub
+                # that refuses to be released, and the factory is driven with an injected step that
+                # fails, so the failure paths are covered without a live desktop.
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('Complete-SingleInstanceControlRelease', 'New-NonForegroundControlWindow')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 2 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                # Normal release: a real window object, built directly so that no window has to be
+                # shown for this case, released and read back as disposed.
+                if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
+                $form = New-Object System.Windows.Forms.Form
+                $normal = Complete-SingleInstanceControlRelease -ControlWindow $form
+                Assert-Equal 'True' ([string] $normal.closed) 'a real window must be released'
+                Assert-Equal 'disposed' ([string] $normal.releaseReadBack) 'the released fact must be read back'
+                Assert-Equal '' ([string] $normal.releaseFailure) 'a clean release must record no failure'
+                Assert-Equal 'True' ([string] $normal.isDisposedReadBack) 'the read back must be the disposed state'
+
+                # Release failing on its own: the calls throw and the object stays undisposed, so the
+                # unit must report a failure rather than treat the attempt as a release.
+                $throwing = New-Object psobject -Property @{ IsDisposed = $false }
+                $throwing | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
+                $throwing | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                $failed = Complete-SingleInstanceControlRelease -ControlWindow $throwing
+                Assert-Equal 'False' ([string] $failed.closed) 'a throwing release must not count as released'
+                Assert-Equal 'unknown' ([string] $failed.releaseReadBack) 'a throwing release leaves the read back unknown'
+                Assert-True ($failed.releaseFailure -clike 'single.instance.control_window_not_closed*') 'the failure must carry the release code'
+
+                # Release doing nothing: the calls do not throw but the object is not disposed, which is
+                # the case that used to be mistaken for a successful release.
+                $silent = New-Object psobject -Property @{ IsDisposed = $false }
+                $silent | Add-Member -MemberType ScriptMethod -Name Close -Value { }
+                $silent | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                $notReleased = Complete-SingleInstanceControlRelease -ControlWindow $silent
+                Assert-Equal 'False' ([string] $notReleased.closed) 'an object that is still not disposed must not count as released'
+                Assert-Equal 'single.instance.control_window_not_released' ([string] $notReleased.releaseFailure) 'the silent case must be refused by name'
+
+                # The factory failing on its own: the injected step throws before a window can be
+                # handed back, so the factory must rethrow that very failure and not a release error.
+                $factoryMessage = ''
+                try {
+                    $null = New-NonForegroundControlWindow -CreateForm { throw 'single.instance.control_window_show_failed' }
+                }
+                catch { $factoryMessage = [string] $_.Exception.Message }
+                Assert-Equal 'single.instance.control_window_show_failed' $factoryMessage 'a construction failure must be rethrown unchanged'
+
+                # A construction failure inside the injected step must not be reported as a release
+                # failure, and the object must not be released twice: the failure is the fact kept.
+                $again = ''
+                try { $null = New-NonForegroundControlWindow -ShowAction { throw 'single.instance.control_window_activate_failed' } }
+                catch { $again = [string] $_.Exception.Message }
+                Assert-Equal 'single.instance.control_window_activate_failed' $again 'a step failure after the object exists must still be rethrown unchanged'
+            }
         }
     )
 }
