@@ -167,6 +167,41 @@ function New-NonForegroundControlWindow {
     return $form
 }
 
+# The pre-state decision as its own unit, so it can be driven with facts instead of a live desktop.
+# It takes the handles and owner pids that were sampled and decides whether a controlled
+# non-foreground state really exists. The counter-examples all reduce to different failures here: a
+# state that was never established, another window of the same process, and a non-control foreground.
+function Assert-SingleInstancePreState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int] $PrimaryPid,
+        [Parameter(Mandatory)][long] $ControlHandle,
+        [Parameter(Mandatory)][int] $ControlOwnerPid,
+        [Parameter(Mandatory)][long] $PreForegroundHandle,
+        [Parameter(Mandatory)][int] $PreForegroundOwnerPid
+    )
+    if ($PreForegroundHandle -ne $ControlHandle) { throw 'single.instance.pre_state_not_controlled' }
+    if ($PreForegroundOwnerPid -ne $ControlOwnerPid) { throw 'single.instance.pre_state_owner_mismatch' }
+    if ($PreForegroundOwnerPid -eq $PrimaryPid) { throw 'single.instance.pre_state_still_foreground' }
+}
+
+# The activation decision as its own unit, driven by the ONE sample that was taken: the foreground
+# handle and the owner of that very handle. Two independent samples can never be substituted here,
+# and an inspect that succeeded plays no part in it.
+function Assert-SingleInstanceActivated {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int] $PrimaryPid,
+        [Parameter(Mandatory)][long] $PrimaryWindowHandle,
+        [Parameter(Mandatory)][long] $PrimaryWindowAfterHandle,
+        [Parameter(Mandatory)][long] $ForegroundHandle,
+        [Parameter(Mandatory)][int] $ForegroundOwnerPid
+    )
+    if ($PrimaryWindowAfterHandle -le 0) { throw 'single.instance.primary_window_missing' }
+    if ($ForegroundHandle -ne $PrimaryWindowHandle) { throw 'single.instance.foreground_window_not_primary' }
+    if ($ForegroundOwnerPid -ne $PrimaryPid) { throw 'single.instance.primary_not_activated' }
+}
+
 function Get-ProcessWindowHandle {
     param([Parameter(Mandatory)][int] $ProcessId)
     $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
@@ -252,10 +287,10 @@ try {
     # process, and the recorded owner is therefore cross checked against the running process id.
     if ($controlOwnerPid -ne $PID) { throw 'single.instance.control_window_not_harness_owned' }
     $preForegroundHandle = Get-ForegroundWindowHandle
-    if ($preForegroundHandle.ToInt64() -ne $controlHandle.ToInt64()) { throw 'single.instance.pre_state_not_controlled' }
     $preForegroundPid = Get-WindowOwnerProcessId -Handle $preForegroundHandle
-    if ($preForegroundPid -ne $controlOwnerPid) { throw 'single.instance.pre_state_owner_mismatch' }
-    if ($preForegroundPid -eq $primaryPid) { throw 'single.instance.pre_state_still_foreground' }
+    Assert-SingleInstancePreState -PrimaryPid $primaryPid -ControlHandle $controlHandle.ToInt64() `
+        -ControlOwnerPid $controlOwnerPid -PreForegroundHandle $preForegroundHandle.ToInt64() `
+        -PreForegroundOwnerPid $preForegroundPid
 
     $preState = [pscustomobject] @{
         primaryPid            = $primaryPid
@@ -332,15 +367,14 @@ try {
     # or asks the driver to activate it, because that would manufacture the fact being proved.
     $foregroundHandle = Get-ForegroundWindowHandle
     $foregroundOwnerPid = Get-WindowOwnerProcessId -Handle $foregroundHandle
-    $foregroundMatches = ($foregroundOwnerPid -eq $primaryPid)
     $primaryWindowAfter = Get-ProcessWindowHandle -ProcessId $primaryPid
-    if ($primaryWindowAfter -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
-    if ($foregroundHandle.ToInt64() -ne $primaryWindow.ToInt64()) { throw 'single.instance.foreground_window_not_primary' }
-    if (-not $foregroundMatches) { throw 'single.instance.primary_not_activated' }
-    if ($primaryWindowAfter -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
+    Assert-SingleInstanceActivated -PrimaryPid $primaryPid -PrimaryWindowHandle $primaryWindow.ToInt64() `
+        -PrimaryWindowAfterHandle $primaryWindowAfter.ToInt64() `
+        -ForegroundHandle $foregroundHandle.ToInt64() -ForegroundOwnerPid $foregroundOwnerPid
     if ($primaryWindowAfter.ToInt64() -ne $primaryWindow.ToInt64()) {
         throw 'single.instance.primary_window_changed'
     }
+    $foregroundMatches = ($foregroundOwnerPid -eq $primaryPid)
 
     $postObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
     if ([string] $postObservation.Status -cne 'Passed') { throw 'single.instance.primary_unresponsive' }
