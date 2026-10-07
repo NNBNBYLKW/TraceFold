@@ -185,6 +185,9 @@ function Invoke-SingleInstanceObservation {
 }
 
 $artifacts = New-Object System.Collections.Generic.List[string]
+# Declared before the try so the finally can always see whatever this run owns.
+$controlWindow = $null
+$controlWindowClosed = $false
 
 try {
     if (-not [IO.File]::Exists($ExecutablePath)) { throw 'single.instance.executable_missing' }
@@ -220,17 +223,23 @@ try {
     $preObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
 
     # --- controlled non-foreground pre-state ----------------------------------------------------
-    # The activation proof only means something if the primary was not already in the foreground, so
-    # a controlled window owned by this harness is brought forward first. It is an object this
-    # scenario owns: its handle and its owning process are recorded, and the primary must no longer
-    # be the foreground owner before the second start is allowed. The primary itself is never
-    # activated, clicked or asked to come forward.
+    # The probe type is created by the driver's foreground check when that check runs, so it is
+    # brought into existence here, before any handle is sampled. This initialisation call is not the
+    # pre-state and not the activation evidence; its result is deliberately discarded.
+    $null = & $ForegroundCheck $primaryPid
+    if (-not ('TraceFoldUiForegroundProbe' -as [type])) { throw 'single.instance.foreground_probe_unavailable' }
+
+    # The pre-state is positively bound, not merely "not the primary": the foreground handle must be
+    # exactly the control window that this scenario owns, and that handle's owner must be the control
+    # window's own verified owner. Any other window, including one of the primary's own, is rejected.
     $controlWindow = & $EstablishNonForeground
     $controlHandle = [IntPtr] $controlWindow.Handle
     if ($controlHandle -eq [IntPtr]::Zero) { throw 'single.instance.control_window_missing' }
     $controlOwnerPid = Get-WindowOwnerProcessId -Handle $controlHandle
     $preForegroundHandle = Get-ForegroundWindowHandle
+    if ($preForegroundHandle.ToInt64() -ne $controlHandle.ToInt64()) { throw 'single.instance.pre_state_not_controlled' }
     $preForegroundPid = Get-WindowOwnerProcessId -Handle $preForegroundHandle
+    if ($preForegroundPid -ne $controlOwnerPid) { throw 'single.instance.pre_state_owner_mismatch' }
     if ($preForegroundPid -eq $primaryPid) { throw 'single.instance.pre_state_still_foreground' }
 
     $preState = [pscustomobject] @{
@@ -321,11 +330,21 @@ try {
     $postObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
     if ([string] $postObservation.Status -cne 'Passed') { throw 'single.instance.primary_unresponsive' }
 
-    # The controlled window has done its job and is closed again, so it cannot be mistaken for part
-    # of the product state under test.
+    # The controlled window has done its job. On the success path its release is performed and
+    # checked here, so a release failure is a failure of this scenario and can never be reported as
+    # Passed. The outer finally repeats the attempt as a safety net for every other path, where a
+    # release failure must not replace the original business error.
     $controlWindowClosed = $false
-    try { $controlWindow.Close(); $controlWindow.Dispose(); $controlWindowClosed = $true } catch { $controlWindowClosed = $false }
-    if (-not $controlWindowClosed) { throw 'single.instance.control_window_not_closed' }
+    $controlReleaseFailure = ''
+    try {
+        $controlWindow.Close()
+        $controlWindow.Dispose()
+        $controlWindowClosed = $true
+    }
+    catch {
+        $controlReleaseFailure = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
+    }
+    if (-not $controlWindowClosed) { throw $controlReleaseFailure }
 
     # --- 5. legal close, then restart on the same owned root -------------------------------------
     $closeAccepted = $false
@@ -432,4 +451,20 @@ catch {
     }
     $status = if ($blockedFailureCodes -ccontains $code) { 'Blocked' } else { 'Failed' }
     return [pscustomobject] @{ ScenarioId = $ScenarioId; Status = $status; Reason = $code; Artifacts = @($artifacts) }
+}
+finally {
+    # The safety net: whatever this run owns is released on every path, including a failure of the
+    # pre-state, of the second start or of an observation. A release failure here is kept separate
+    # from the business error, never replaces the original ErrorRecord, and is only used when the
+    # success path did not already release the object and report the failure itself.
+    if ($null -ne $controlWindow) {
+        try {
+            $controlWindow.Close()
+            $controlWindow.Dispose()
+            $controlWindowClosed = $true
+        }
+        catch {
+            $controlReleaseFailure = 'single.instance.control_window_not_closed (finally): ' + $_.Exception.GetType().Name
+        }
+    }
 }
