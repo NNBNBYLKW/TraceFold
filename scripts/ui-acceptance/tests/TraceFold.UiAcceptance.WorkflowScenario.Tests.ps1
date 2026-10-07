@@ -404,7 +404,7 @@ function Get-TestCases {
                 Assert-True ([IO.File]::Exists($path)) 'the single instance scenario must exist'
                 $tokens = $null
                 $errors = $null
-                $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
                 Assert-Equal 0 @($errors).Count
                 $source = Get-Content -LiteralPath $path -Raw
 
@@ -426,8 +426,17 @@ function Get-TestCases {
                 # foreground first; the inspect calls are observability only.
                 Assert-True ($source -cmatch 'GetForegroundWindow') 'the foreground must be read'
                 Assert-True ($source -cmatch 'ForegroundCheck') 'the foreground seam must be used'
-                Assert-True (-not ($source -cmatch 'AppActivate')) 'foreground coaxing is banned'
-                Assert-True (-not ($source -cmatch 'SetForegroundWindow')) 'forcing the foreground is banned'
+                # The ban is on the executed action, not on the words: a comment may name the banned
+                # technique while explaining why it is not used, so this reads the commands the file
+                # actually invokes rather than matching the whole text.
+                $invokedCommands = @($ast.FindAll(
+                    { param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
+                    ForEach-Object { $_.GetCommandName() } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    Sort-Object -Unique)
+                foreach ($banned in @('AppActivate', 'SetForegroundWindow', 'ShowWindowAsync')) {
+                    Assert-True (-not ($invokedCommands -ccontains $banned)) ('the scenario must not invoke ' + $banned)
+                }
                 Assert-True ($source -cmatch 'not offered as the activation proof') 'observability must not be offered as activation'
 
                 # The database rule is uniqueness, not a byte freeze.

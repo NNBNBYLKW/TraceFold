@@ -62,31 +62,56 @@ $blockedFailureCodes = @('single.instance.desktop_unavailable')
 
 function Get-SingleInstanceDbInventory {
     param([Parameter(Mandatory)][string] $Root)
-    $dataRoot = Join-Path $Root 'data'
-    if (-not [IO.Directory]::Exists($dataRoot)) { return @() }
+    # The product resolves its database as <canonical root>/media-desktop.db
+    # (LocalAppDataPathProvider.GetPaths: Path.Combine(canonicalRoot, "media-desktop.db")), so the
+    # root itself is the data directory. There is no 'data' subdirectory in that contract, and this
+    # function does not go looking for one.
+    $canonical = [IO.Path]::GetFullPath($Root)
+    if (-not [IO.Directory]::Exists($canonical)) { return @() }
     $items = New-Object System.Collections.Generic.List[string]
-    foreach ($file in [IO.Directory]::GetFiles($dataRoot, '*.db', [IO.SearchOption]::AllDirectories)) {
-        $items.Add([IO.Path]::GetFullPath($file))
-    }
-    foreach ($file in [IO.Directory]::GetFiles($dataRoot, '*.db-wal', [IO.SearchOption]::AllDirectories)) {
-        $items.Add([IO.Path]::GetFullPath($file))
-    }
-    foreach ($file in [IO.Directory]::GetFiles($dataRoot, '*.db-shm', [IO.SearchOption]::AllDirectories)) {
+    foreach ($file in [IO.Directory]::GetFiles($canonical, '*.db', [IO.SearchOption]::AllDirectories)) {
         $items.Add([IO.Path]::GetFullPath($file))
     }
     return @($items | Sort-Object -Unique)
 }
 
+# WAL and SHM are the main database's own sidecars, listed separately so they are never mistaken for
+# a second database, and never frozen: the product writes them while it runs.
+function Get-SingleInstanceDbSidecarInventory {
+    param([Parameter(Mandatory)][string] $Root)
+    $canonical = [IO.Path]::GetFullPath($Root)
+    if (-not [IO.Directory]::Exists($canonical)) { return @() }
+    $items = New-Object System.Collections.Generic.List[string]
+    foreach ($pattern in @('*.db-wal', '*.db-shm')) {
+        foreach ($file in [IO.Directory]::GetFiles($canonical, $pattern, [IO.SearchOption]::AllDirectories)) {
+            $items.Add([IO.Path]::GetFullPath($file))
+        }
+    }
+    return @($items | Sort-Object -Unique)
+}
+
+function Get-SingleInstanceExpectedDbPath {
+    param([Parameter(Mandatory)][string] $Root)
+    # Derived from the same contract the product uses, never guessed from whatever the inventory
+    # happened to return first.
+    return [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetFullPath($Root)) 'media-desktop.db'))
+}
+
 function Get-SingleInstanceLibraryInventory {
     param([Parameter(Mandatory)][string] $Root)
-    $library = Join-Path $Root 'library'
+    $library = Join-Path ([IO.Path]::GetFullPath($Root)) 'library'
     if (-not [IO.Directory]::Exists($library)) { return @() }
     return @([IO.Directory]::GetFiles($library, '*', [IO.SearchOption]::AllDirectories) | Sort-Object)
 }
 
 function Get-ForegroundWindowHandle {
-    if (-not ('TraceFoldUiForegroundProbe' -as [type])) { return [IntPtr]::Zero }
-    return [TraceFoldUiForegroundProbe]::GetForegroundWindow()
+    # The probe type is created by the driver's foreground check on first use. The caller therefore
+    # runs that check before reading a handle; if the type is still absent the handle is reported as
+    # unavailable instead of being returned as a zero that would look like a measurement.
+    if (-not ('TraceFoldUiForegroundProbe' -as [type])) { throw 'single.instance.foreground_probe_unavailable' }
+    $handle = [TraceFoldUiForegroundProbe]::GetForegroundWindow()
+    if ($handle -eq [IntPtr]::Zero) { throw 'single.instance.no_foreground_window' }
+    return $handle
 }
 
 function Get-ProcessWindowHandle {
@@ -135,15 +160,24 @@ try {
     $primaryWindow = Wait-ForProcessWindow -ProcessId $primaryPid -TimeoutSeconds $InteractiveTimeoutSeconds
     if ($primaryWindow -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
 
+    # The expected database comes from the product's own path contract, not from whatever the
+    # inventory happened to return first, and the primary instance has to have created it.
+    $expectedDbPath = Get-SingleInstanceExpectedDbPath -Root $root
     $dbBefore = Get-SingleInstanceDbInventory -Root $root
+    $dbSidecarBefore = Get-SingleInstanceDbSidecarInventory -Root $root
     $libraryBefore = Get-SingleInstanceLibraryInventory -Root $root
-    $expectedDbPath = if ($dbBefore.Count -gt 0) { [string] $dbBefore[0] } else { '' }
+    if (@($dbBefore).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($dbBefore).Count) }
+    if (@($dbBefore) -cnotcontains $expectedDbPath) { throw 'single.instance.expected_database_missing' }
+
+    # The identity ledger already carries the launched process's real creation time, so the scenario
+    # reports that value rather than the moment it sampled its own clock.
+    $primaryStartedUtc = [DateTime]::new([long] $primary.StartUtcTicks, [DateTimeKind]::Utc).ToString('o')
 
     $preObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
     $preState = [pscustomobject] @{
         primaryPid        = $primaryPid
         primaryWindow     = $primaryWindow.ToInt64()
-        primaryStartedUtc = [DateTime]::UtcNow.ToString('o')
+        primaryStartedUtc = $primaryStartedUtc
         observationStatus = [string] $preObservation.Status
     }
 
@@ -151,40 +185,66 @@ try {
     # The second process gets the same executable and the same owned data root, and nothing else:
     # the point is that the product itself decides to redirect it. Its exit code is the product's,
     # not a wrapper's.
-    $secondaryInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $secondaryInfo.FileName = $exe
-    $secondaryInfo.UseShellExecute = $false
-    $secondaryInfo.Environment['TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT'] = $root
+    # The second start goes through the same ownership path as the first: it is registered in the
+    # ledger with its pid, creation time and executable path, so a second process that fails to exit
+    # on its own is owned by the existing verified cleanup chain. Nothing is killed directly here and
+    # an unverified pid is never terminated.
+    $script:singleInstanceSecondary = $null
+    $secondaryStartBlock = {
+        param($launchExe, $launchEnv)
+        $info = New-Object System.Diagnostics.ProcessStartInfo
+        $info.FileName = $launchExe
+        $info.UseShellExecute = $false
+        foreach ($key in $launchEnv.Keys) { $info.Environment[$key] = [string] $launchEnv[$key] }
+        $proc = [Diagnostics.Process]::Start($info)
+        $script:singleInstanceSecondary = $proc
+        return [pscustomobject] @{
+            ProcessId      = $proc.Id
+            StartUtcTicks  = $proc.StartTime.ToUniversalTime().Ticks
+            ExecutablePath = $launchExe
+        }
+    }
     $secondaryArgv = @($exe)
-    $secondary = [Diagnostics.Process]::Start($secondaryInfo)
-    $secondaryPid = [int] $secondary.Id
-    $secondaryStartUtc = $secondary.StartTime.ToUniversalTime().ToString('o')
-    $exited = $secondary.WaitForExit($SecondaryTimeoutSeconds * 1000)
+    $secondary = Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $RunToken `
+        -SupportPath $SupportPath -StartProcess $secondaryStartBlock
+    $secondaryPid = [int] $secondary.ProcessId
+    $secondaryStartUtc = [DateTime]::new([long] $secondary.StartUtcTicks, [DateTimeKind]::Utc).ToString('o')
+    $secondaryProc = $script:singleInstanceSecondary
+    $exited = $false
+    if ($null -ne $secondaryProc) {
+        try { $exited = $secondaryProc.WaitForExit($SecondaryTimeoutSeconds * 1000) } catch { $exited = $false }
+    }
     if (-not $exited) {
-        try { $secondary.Kill() } catch { }
+        # The process is in the ledger, so the scenario does not stop it itself: the verified cleanup
+        # chain re-checks pid, creation time and path before anything is stopped.
         throw 'single.instance.secondary_resident'
     }
-    $secondaryExit = [int] $secondary.ExitCode
+    $secondaryExit = [int] $secondaryProc.ExitCode
     $secondaryEndUtc = [DateTime]::UtcNow.ToString('o')
     if ($secondaryExit -ne 0) { throw ('single.instance.secondary_exit_' + $secondaryExit) }
 
     # --- 3. no second database, no other library -------------------------------------------------
     $dbAfter = Get-SingleInstanceDbInventory -Root $root
+    $dbSidecarAfter = Get-SingleInstanceDbSidecarInventory -Root $root
     $libraryAfter = Get-SingleInstanceLibraryInventory -Root $root
+    # Still exactly the one expected database: a second file, or a different one, is the failure.
+    if (@($dbAfter).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($dbAfter).Count) }
+    if (@($dbAfter) -cnotcontains $expectedDbPath) { throw 'single.instance.second_database_used' }
     $dbCreated = @($dbAfter | Where-Object { $dbBefore -cnotcontains $_ })
     if ($dbCreated.Count -gt 0) { throw 'single.instance.second_database_created' }
     $libraryCreated = @($libraryAfter | Where-Object { $libraryBefore -cnotcontains $_ })
     if ($libraryCreated.Count -gt 0) { throw 'single.instance.second_library_used' }
-    if ($expectedDbPath.Length -gt 0 -and @($dbAfter | Where-Object { $_ -ceq $expectedDbPath }).Count -eq 0) {
-        throw 'single.instance.expected_database_missing'
-    }
 
     # --- 4. the primary window was activated -----------------------------------------------------
     # The foreground is read first and only read: nothing here activates a window, clicks it or
     # asks the driver to bring it forward, because that would manufacture the very fact being
     # proved. An inspect that succeeds later is recorded as observability only.
-    $foregroundHandle = Get-ForegroundWindowHandle
+    # The foreground check runs first: it is the read-only call that also makes the probe type
+    # available. Nothing here brings a window forward, clicks it or asks the driver to activate it,
+    # because that would manufacture the very fact being proved. The handle is then read from the
+    # same foreground window the check just measured.
     $foregroundMatches = [bool] (& $ForegroundCheck $primaryPid)
+    $foregroundHandle = Get-ForegroundWindowHandle
     $primaryWindowAfter = Get-ProcessWindowHandle -ProcessId $primaryPid
     if (-not $foregroundMatches) { throw 'single.instance.primary_not_activated' }
     if ($primaryWindowAfter -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
