@@ -9,14 +9,20 @@
 #      real exit code - the product's single instance coordinator returns 0 when it redirected the
 #      activation and 1 when it failed or timed out, so 0 is required and 1 is a failure;
 #   3. prove the second start created no second database and used no other library;
-#   4. prove the primary window was brought to the foreground: a controlled non-foreground state is
-#      established first, then the foreground window is checked to belong to the primary process.
-#      An inspect that succeeds only shows the instance is observable; it is never offered as the
-#      activation proof;
+#   4. read the foreground after the second start and require the foreground window's owner to be
+#      the primary process with the primary window handle unchanged. An inspect that succeeds only
+#      shows the instance is observable; it is never offered as the activation proof;
 #   5. close the primary through the product's own window, prove no leftovers, and start it again on
-#      the same owned root;
-#   6. the negative case for an outside instance runs as a pre-dispatch check and never starts a
-#      product, never terminates the outside process and never redirects it.
+#      the same owned root.
+#
+# NOT yet implemented, and therefore not claimed by this file:
+#   * establishing a controlled non-foreground pre-state before the second start. The foreground is
+#     currently only read, so the activation step proves the post-state without having set up the
+#     pre-state, and the counter-examples for that (already foreground, another window of the same
+#     process, non-foreground and not activated) are not covered here;
+#   * the negative case for an outside instance. It is not implemented in this file at all: proving
+#     Blocked with zero dispatches and zero new starts needs a separate controlled fixture with its
+#     own ownership ledger, which lives outside this scenario.
 #
 # Bans: no coordinates, no fixed sleeps, no termination by process name, no direct database access,
 # no AppActivate-style foreground coaxing, and no reuse of another scenario's root.
@@ -72,7 +78,9 @@ function Get-SingleInstanceDbInventory {
     foreach ($file in [IO.Directory]::GetFiles($canonical, '*.db', [IO.SearchOption]::AllDirectories)) {
         $items.Add([IO.Path]::GetFullPath($file))
     }
-    return @($items | Sort-Object -Unique)
+    # The comma keeps a single result a one-element array instead of unrolling it to a scalar, so
+    # every consumer can rely on a stable collection shape.
+    return ,@($items | Sort-Object -Unique)
 }
 
 # WAL and SHM are the main database's own sidecars, listed separately so they are never mistaken for
@@ -87,7 +95,9 @@ function Get-SingleInstanceDbSidecarInventory {
             $items.Add([IO.Path]::GetFullPath($file))
         }
     }
-    return @($items | Sort-Object -Unique)
+    # The comma keeps a single result a one-element array instead of unrolling it to a scalar, so
+    # every consumer can rely on a stable collection shape.
+    return ,@($items | Sort-Object -Unique)
 }
 
 function Get-SingleInstanceExpectedDbPath {
@@ -101,7 +111,7 @@ function Get-SingleInstanceLibraryInventory {
     param([Parameter(Mandatory)][string] $Root)
     $library = Join-Path ([IO.Path]::GetFullPath($Root)) 'library'
     if (-not [IO.Directory]::Exists($library)) { return @() }
-    return @([IO.Directory]::GetFiles($library, '*', [IO.SearchOption]::AllDirectories) | Sort-Object)
+    return ,@([IO.Directory]::GetFiles($library, '*', [IO.SearchOption]::AllDirectories) | Sort-Object)
 }
 
 function Get-ForegroundWindowHandle {
@@ -163,9 +173,11 @@ try {
     # The expected database comes from the product's own path contract, not from whatever the
     # inventory happened to return first, and the primary instance has to have created it.
     $expectedDbPath = Get-SingleInstanceExpectedDbPath -Root $root
-    $dbBefore = Get-SingleInstanceDbInventory -Root $root
-    $dbSidecarBefore = Get-SingleInstanceDbSidecarInventory -Root $root
-    $libraryBefore = Get-SingleInstanceLibraryInventory -Root $root
+    # Each inventory is wrapped, so a single-element result keeps a stable collection shape and the
+    # counts below are safe to read under strict mode.
+    $dbBefore = @(Get-SingleInstanceDbInventory -Root $root)
+    $dbSidecarBefore = @(Get-SingleInstanceDbSidecarInventory -Root $root)
+    $libraryBefore = @(Get-SingleInstanceLibraryInventory -Root $root)
     if (@($dbBefore).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($dbBefore).Count) }
     if (@($dbBefore) -cnotcontains $expectedDbPath) { throw 'single.instance.expected_database_missing' }
 
@@ -224,15 +236,15 @@ try {
     if ($secondaryExit -ne 0) { throw ('single.instance.secondary_exit_' + $secondaryExit) }
 
     # --- 3. no second database, no other library -------------------------------------------------
-    $dbAfter = Get-SingleInstanceDbInventory -Root $root
-    $dbSidecarAfter = Get-SingleInstanceDbSidecarInventory -Root $root
-    $libraryAfter = Get-SingleInstanceLibraryInventory -Root $root
+    $dbAfter = @(Get-SingleInstanceDbInventory -Root $root)
+    $dbSidecarAfter = @(Get-SingleInstanceDbSidecarInventory -Root $root)
+    $libraryAfter = @(Get-SingleInstanceLibraryInventory -Root $root)
     # Still exactly the one expected database: a second file, or a different one, is the failure.
     if (@($dbAfter).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($dbAfter).Count) }
     if (@($dbAfter) -cnotcontains $expectedDbPath) { throw 'single.instance.second_database_used' }
-    $dbCreated = @($dbAfter | Where-Object { $dbBefore -cnotcontains $_ })
+    $dbCreated = @($dbAfter | Where-Object { @($dbBefore) -cnotcontains $_ })
     if ($dbCreated.Count -gt 0) { throw 'single.instance.second_database_created' }
-    $libraryCreated = @($libraryAfter | Where-Object { $libraryBefore -cnotcontains $_ })
+    $libraryCreated = @($libraryAfter | Where-Object { @($libraryBefore) -cnotcontains $_ })
     if ($libraryCreated.Count -gt 0) { throw 'single.instance.second_library_used' }
 
     # --- 4. the primary window was activated -----------------------------------------------------
@@ -312,8 +324,11 @@ try {
         databasesBefore          = @($dbBefore)
         databasesAfter           = @($dbAfter)
         databasesCreated         = @($dbCreated)
-        libraryFilesBefore       = $libraryBefore.Count
-        libraryFilesAfter        = $libraryAfter.Count
+        dbSidecarsBefore         = @($dbSidecarBefore)
+        dbSidecarsAfter          = @($dbSidecarAfter)
+        dbSidecarNote            = 'the wal and shm files are the main database sidecars; they are listed separately, are not counted as a second database, and are not frozen'
+        libraryFilesBefore       = @($libraryBefore).Count
+        libraryFilesAfter        = @($libraryAfter).Count
         libraryFilesCreated      = @($libraryCreated)
         closeAccepted            = $closeAccepted
         residueAfterClose        = $residue.Count
