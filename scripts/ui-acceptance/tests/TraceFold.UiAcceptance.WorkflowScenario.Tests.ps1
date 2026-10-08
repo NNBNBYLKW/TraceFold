@@ -462,6 +462,11 @@ function Get-TestCases {
                 Assert-True ($source -cmatch '\[Environment\]::SetEnvironmentVariable\(\$key, \[string\] \$launchEnv\[\$key\], ''Process''\)') 'the adapter must hand the environment it was given to the child'
                 Assert-True ($source -cmatch 'GetEnvironmentVariable\(\$key, ''Process''\)') 'the previous value must be read so it can be restored'
                 Assert-True (-not $source.Contains('$info.Environment[')) 'the legacy member that fails on the older runtime must not be used'
+                # The primary and the restart start through this scenario's own launch seam with a
+                # default, so they still go through Start-TraceFoldScenario while only the process
+                # start itself is supplied; a dispatcher that passes its own seam replaces exactly it.
+                Assert-True ($source -cmatch '\[scriptblock\] \$LaunchProcess = \{') 'the launch seam must have a default'
+                Assert-True ($source -cmatch '\[Environment\]::SetEnvironmentVariable\(\$key, \[string\] \$childEnvironment\[\$key\], ''Process''\)') 'the default launch must hand the environment over through this process block'
                 Assert-True ($source -cmatch 'WaitForExit') 'the second process must be waited for'
                 Assert-True ($source -cmatch 'ExitCode') 'the real exit code must be read'
                 # The exit decision itself is a unit, and the scenario has to go through it: the value
@@ -2261,29 +2266,48 @@ function Get-TestCases {
                 Assert-Equal '' ([string] $normal.releaseFailure) 'a clean release must record no failure'
                 Assert-Equal 'True' ([string] $normal.isDisposedReadBack) 'the read back must be the disposed state'
                 Assert-Equal '' ([string] $normal.actionError) 'a clean release must record no action error'
+                Assert-Equal '' ([string] $normal.closeError) 'a clean release must record no close error'
+                Assert-Equal '' ([string] $normal.disposeError) 'a clean release must record no dispose error'
                 Assert-Equal '' ([string] $normal.readBackError) 'a clean release must record no read back error'
                 Assert-True ($null -eq $normal.actionErrorRecord) 'a clean release must carry no action error record'
 
-                # Release action throwing: the read back still runs as its own fact, the action error
-                # is kept for the evidence, and the unit does not treat the attempt as a release.
+                # A Close that throws must not skip the Dispose that can still release the object: the
+                # dispose counter is the proof that the second call really happened.
+                $script:probeDisposeCalls = 0
                 $throwing = New-Object psobject -Property @{ IsDisposed = $false }
                 $throwing | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
-                $throwing | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                $throwing | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $script:probeDisposeCalls = $script:probeDisposeCalls + 1 }
                 $failed = Complete-SingleInstanceControlRelease -ControlWindow $throwing
+                Assert-Equal 1 $script:probeDisposeCalls 'Dispose must still be attempted after Close threw'
                 Assert-Equal 'False' ([string] $failed.closed) 'a throwing release must not count as released'
                 Assert-Equal 'not-disposed' ([string] $failed.releaseReadBack) 'the read back still runs after an action error and reports the real state'
+                Assert-True ($failed.closeError -clike 'single.instance.control_window_not_closed*') 'the close error must be named'
+                Assert-Equal '' ([string] $failed.disposeError) 'a dispose that did not fail must record no error'
                 Assert-True ($failed.releaseFailure -clike 'single.instance.control_window_not_closed*') 'the failure must carry the release code'
                 Assert-Equal '' ([string] $failed.readBackError) 'the read back itself did not fail'
                 Assert-True ($null -ne $failed.actionErrorRecord) 'the action error record must be kept for the facts'
 
+                # A Dispose that throws is its own action error: the close error stays empty and the
+                # standing failure is the dispose.
+                $disposeThrowing = New-Object psobject -Property @{ IsDisposed = $false }
+                $disposeThrowing | Add-Member -MemberType ScriptMethod -Name Close -Value { }
+                $disposeThrowing | Add-Member -MemberType ScriptMethod -Name Dispose -Value { throw 'stub dispose failed' }
+                $disposeFailed = Complete-SingleInstanceControlRelease -ControlWindow $disposeThrowing
+                Assert-Equal 'False' ([string] $disposeFailed.closed) 'a throwing dispose must not count as released'
+                Assert-Equal '' ([string] $disposeFailed.closeError) 'a close that did not fail must record no error'
+                Assert-True ($disposeFailed.disposeError -clike 'single.instance.control_window_not_disposed*') 'the dispose error must be named'
+                Assert-True ($disposeFailed.releaseFailure -clike 'single.instance.control_window_not_disposed*') 'the standing failure is the dispose error'
+                Assert-True ($null -ne $disposeFailed.disposeErrorRecord) 'the dispose error record must be kept for the facts'
+
                 # An object that claims to be disposed can never mask a failed action: released means
-                # both that the calls did not fail and that the object really is disposed.
+                # all of the calls did not fail and the object really is disposed.
                 $disposedThrowing = New-Object psobject -Property @{ IsDisposed = $true }
                 $disposedThrowing | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
                 $disposedThrowing | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
                 $masked = Complete-SingleInstanceControlRelease -ControlWindow $disposedThrowing
                 Assert-Equal 'False' ([string] $masked.closed) 'a disposed object must not turn a failed action into a release'
                 Assert-Equal 'disposed' ([string] $masked.releaseReadBack) 'the read back reports the disposed state as its own fact'
+                Assert-True ($masked.closeError -clike 'single.instance.control_window_not_closed*') 'the close error stays on record'
                 Assert-True ($masked.releaseFailure -clike 'single.instance.control_window_not_closed*') 'the standing failure remains the action error'
 
                 # A read back that cannot answer is its own failure: the stub has no IsDisposed member
@@ -2306,6 +2330,8 @@ function Get-TestCases {
                 $bothFailed = Complete-SingleInstanceControlRelease -ControlWindow $both
                 Assert-Equal 'False' ([string] $bothFailed.closed) 'two failures cannot add up to a release'
                 Assert-True ($bothFailed.actionError -clike 'single.instance.control_window_not_closed*') 'the action error must be kept'
+                Assert-True ($bothFailed.closeError -clike 'single.instance.control_window_not_closed*') 'the close error is named on its own'
+                Assert-Equal '' ([string] $bothFailed.disposeError) 'the dispose did not fail and stays empty'
                 Assert-True ($bothFailed.readBackError -clike 'single.instance.control_window_read_back_failed*') 'the read back error must be kept beside it'
                 Assert-True ($bothFailed.releaseFailure -clike 'single.instance.control_window_not_closed*') 'the standing failure is the first cause'
                 Assert-True ($null -ne $bothFailed.actionErrorRecord) 'the action record survives a later read back failure'
@@ -2376,9 +2402,213 @@ function Get-TestCases {
                 Assert-Equal 'False' ([string] $bothReport.attempt.closed) 'the failed release must not be reported as closed'
                 Assert-True ($bothReport.attempt.releaseFailure -clike 'single.instance.control_window_not_closed*') 'the release failure must be kept beside the original error'
 
-                # A confirmed release is never repeated: the safety net only takes an object that was
-                # not confirmed released.
-                Assert-True ($source -cmatch '\$null -ne \$controlWindow -and -not \$controlWindowClosed') 'a confirmed release must not be repeated by the safety net'
+                # A confirmed release is never repeated: the safety net unit only takes an object that
+                # was not already confirmed released, and the scenario calls it with exactly that
+                # state. Its behaviour is driven by its own case; this is the connection.
+                Assert-True ($source -cmatch 'if \(\$null -eq \$ControlWindow -or \$AlreadyClosed\) \{ return \$outcome \}') 'the safety net must skip a confirmed release and a missing object'
+                Assert-True ($source -cmatch '\$safety = Invoke-SingleInstanceSafetyNet -ControlWindow \$controlWindow -AlreadyClosed \$controlWindowClosed') 'the scenario must pass its own confirmed state to the safety net'
+            }
+        },
+        @{
+            Name = 'the failure fact conversion has a last resort that cannot throw and never leaks'
+            Body = {
+                # The safe wrapper and the fallback are driven as they really are. The conversion is
+                # its own seam, so one conversion failure can be injected: even then the wrapper must
+                # answer with a redacted fallback instead of throwing a new error or recursing into
+                # the converter that just failed.
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('ConvertTo-SingleInstanceErrorFact', 'New-SingleInstanceFallbackErrorFact', 'New-SingleInstanceErrorFactSafe')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 3 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                $record = $null
+                try { throw 'single.instance.safe_fact_probe' } catch { $record = $_ }
+                # The default path is the real converter.
+                $fact = New-SingleInstanceErrorFactSafe -ErrorRecord $record -Stage 'probe-stage'
+                Assert-Equal 'probe-stage' ([string] $fact.stage)
+                Assert-True ($fact.message -like '*safe_fact_probe*') 'the default path must use the real converter'
+                Assert-Equal 'System.Management.Automation.RuntimeException' ([string] $fact.errorType)
+
+                # The injected conversion is driven once and fails: the wrapper still answers.
+                $token = 'probe-token-4321'
+                $root = 'C:\temp\tracefold-safe-probe'
+                $leaky = $null
+                try { throw ('single.instance.safe_fact_leak at ' + $root + ' with ' + $token) } catch { $leaky = $_ }
+                $fallback = New-SingleInstanceErrorFactSafe -ErrorRecord $leaky -Stage 'probe-stage-2' -RunToken $token -OwnedRoot $root `
+                    -Convert { param($errorRecord, $stage, $runToken, $ownedRoot) throw 'converter exploded' }
+                Assert-Equal 'probe-stage-2' ([string] $fallback.stage) 'the fallback keeps the stage it was asked about'
+                Assert-Equal 'unavailable' ([string] $fallback.errorType) 'the fallback uses static fields only'
+                Assert-Equal 'fact-conversion-failed' ([string] $fallback.errorId)
+                Assert-True ($fallback.message -like '*fact-conversion-failed*') 'the fallback announces the conversion failure'
+                Assert-True ($fallback.message -notlike ('*' + $token + '*')) 'the fallback message must be redacted'
+                Assert-True ($fallback.message -notlike ('*' + $root + '*')) 'the fallback message must be redacted'
+
+                # The injected conversion is its own seam in the working direction too.
+                $seamFact = New-SingleInstanceErrorFactSafe -ErrorRecord $record -Stage 'probe-stage-3' `
+                    -Convert { param($errorRecord, $stage, $runToken, $ownedRoot) [pscustomobject] @{ stage = $stage; errorType = 'seam'; errorId = ''; category = ''; position = ''; stack = ''; message = '' } }
+                Assert-Equal 'seam' ([string] $seamFact.errorType) 'the seam is used when it is supplied'
+            }
+        },
+        @{
+            Name = 'the factory hand over is read through its own unit and carries the confirmed fact'
+            Body = {
+                # The hand over a failing factory leaves beside its original error is read by the unit
+                # the scenario itself calls: the attempt joins the list, a confirmed release is
+                # reported as confirmed, a record without a hand over changes nothing, and a hand
+                # over that cannot be read becomes its own fact instead of an exception.
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('Complete-SingleInstanceControlRelease', 'New-SingleInstanceReleaseAttempt',
+                    'ConvertTo-SingleInstanceErrorFact', 'New-SingleInstanceFallbackErrorFact',
+                    'New-SingleInstanceErrorFactSafe', 'Import-SingleInstanceFactoryReleaseReport',
+                    'New-NonForegroundControlWindow')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 7 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
+
+                function New-HandoverProbeRecord {
+                    param([string] $Message)
+                    try { throw $Message } catch { return $_ }
+                }
+
+                # A record with no hand over at all: nothing joins the list and nothing is recorded.
+                $plainAttempts = New-Object System.Collections.Generic.List[object]
+                $plainFailures = New-Object System.Collections.Generic.List[object]
+                $plain = New-HandoverProbeRecord 'single.instance.plain_probe_failure'
+                $plainReceived = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $plain -ReleaseAttempts $plainAttempts -Failures $plainFailures
+                Assert-True ($null -eq $plainReceived.report) 'a record without a hand over reports nothing'
+                Assert-True ($null -eq $plainReceived.attempt)
+                Assert-Equal 0 $plainAttempts.Count
+                Assert-Equal 0 $plainFailures.Count
+
+                # A real factory failure whose release failed: the attempt joins the list with its
+                # own failure, and the hand over is reported as it is.
+                $stub = [pscustomobject] @{
+                    Text = ''; Width = 0; Height = 0; StartPosition = $null; Location = $null
+                    ShowInTaskbar = $true; IsDisposed = $false
+                }
+                $stub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
+                $stub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                $failedRecord = $null
+                try { $null = New-NonForegroundControlWindow -CreateForm { $stub } -ShowAction { throw 'single.instance.factory_probe_failure' } } catch { $failedRecord = $_ }
+                $failedAttempts = New-Object System.Collections.Generic.List[object]
+                $failedFailures = New-Object System.Collections.Generic.List[object]
+                $failedReceived = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $failedRecord -ReleaseAttempts $failedAttempts -Failures $failedFailures
+                Assert-True ($null -ne $failedReceived.report) 'the hand over must be reported'
+                Assert-True ($null -ne $failedReceived.attempt)
+                Assert-Equal 1 $failedAttempts.Count
+                Assert-Equal 'factory' ([string] $failedAttempts[0].source)
+                Assert-Equal 'False' ([string] $failedAttempts[0].closed)
+                Assert-True ([string] $failedAttempts[0].releaseFailure -clike 'single.instance.control_window_not_closed*')
+                Assert-Equal 0 $failedFailures.Count 'a readable hand over records no failure'
+
+                # A real factory failure whose release succeeded: the attempt is confirmed and that
+                # confirmation travels with it.
+                $releasedRecord = $null
+                try { $null = New-NonForegroundControlWindow -ShowAction { throw 'single.instance.factory_released_probe' } } catch { $releasedRecord = $_ }
+                $releasedAttempts = New-Object System.Collections.Generic.List[object]
+                $releasedFailures = New-Object System.Collections.Generic.List[object]
+                $releasedReceived = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $releasedRecord -ReleaseAttempts $releasedAttempts -Failures $releasedFailures
+                Assert-True ($null -ne $releasedReceived.attempt)
+                Assert-Equal 'True' ([string] $releasedReceived.attempt.closed) 'a release the factory confirmed is confirmed'
+                Assert-Equal '' ([string] $releasedReceived.attempt.releaseFailure)
+
+                # A hand over that cannot be read: recorded as its own fact, never thrown, nothing
+                # joins the attempt list.
+                $badAttempts = New-Object System.Collections.Generic.List[object]
+                $badFailures = New-Object System.Collections.Generic.List[object]
+                $badRecord = New-HandoverProbeRecord 'single.instance.bad_handover_probe'
+                $badRecord.Exception.Data['TraceFold.ControlWindowRelease'] = 'not-a-report'
+                $badReceived = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $badRecord -ReleaseAttempts $badAttempts -Failures $badFailures
+                Assert-True ($null -eq $badReceived.report) 'an unreadable hand over reports nothing'
+                Assert-True ($null -eq $badReceived.attempt)
+                Assert-Equal 0 $badAttempts.Count
+                Assert-Equal 1 $badFailures.Count 'the unreadable hand over must be recorded'
+                Assert-Equal 'factory-release-report-read' ([string] $badFailures[0].stage)
+            }
+        },
+        @{
+            Name = 'the safety net releases only an unconfirmed object and never throws'
+            Body = {
+                # The safety net is driven as the scenario runs it: a missing object does nothing, a
+                # confirmed release is never repeated (the close counter proves the object is not
+                # touched at all), an open object goes through the shared release unit and records
+                # its attempt, and a release that fails records the failure without throwing.
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('Complete-SingleInstanceControlRelease', 'New-SingleInstanceReleaseAttempt',
+                    'ConvertTo-SingleInstanceErrorFact', 'New-SingleInstanceFallbackErrorFact',
+                    'New-SingleInstanceErrorFactSafe', 'Invoke-SingleInstanceSafetyNet')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 6 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
+
+                $attempts = New-Object System.Collections.Generic.List[object]
+                $failures = New-Object System.Collections.Generic.List[object]
+
+                # Nothing to release.
+                $none = Invoke-SingleInstanceSafetyNet -ControlWindow $null -AlreadyClosed $false -ReleaseAttempts $attempts -Failures $failures
+                Assert-Equal 'False' ([string] $none.attempted)
+                Assert-Equal 'False' ([string] $none.closed)
+                Assert-Equal 0 $attempts.Count
+                Assert-Equal 0 $failures.Count
+
+                # A confirmed release is never repeated: the object would count a Close if it were.
+                $script:safetyCloseCalls = 0
+                $counted = [pscustomobject] @{ IsDisposed = $true }
+                $counted | Add-Member -MemberType ScriptMethod -Name Close -Value { $script:safetyCloseCalls = $script:safetyCloseCalls + 1 }
+                $counted | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                $repeat = Invoke-SingleInstanceSafetyNet -ControlWindow $counted -AlreadyClosed $true -ReleaseAttempts $attempts -Failures $failures
+                Assert-Equal 'False' ([string] $repeat.attempted) 'a confirmed release must not be repeated'
+                Assert-Equal 0 $script:safetyCloseCalls 'the object must not be touched at all'
+                Assert-Equal 0 $attempts.Count
+
+                # An open object: released through the shared unit and its attempt is recorded.
+                $openForm = New-Object System.Windows.Forms.Form
+                $released = Invoke-SingleInstanceSafetyNet -ControlWindow $openForm -AlreadyClosed $false -ReleaseAttempts $attempts -Failures $failures
+                Assert-Equal 'True' ([string] $released.attempted)
+                Assert-Equal 'True' ([string] $released.closed)
+                Assert-Equal 'disposed' ([string] $released.readBack)
+                Assert-Equal '' ([string] $released.failure)
+                Assert-Equal 1 $attempts.Count
+                Assert-Equal 'safety-net' ([string] $attempts[0].source)
+                Assert-Equal 'release-safety-net' ([string] $attempts[0].stage)
+                Assert-Equal 0 $failures.Count
+
+                # A release that fails: recorded, not thrown, and the object stays unconfirmed.
+                $silent = New-Object psobject -Property @{ IsDisposed = $false }
+                $silent | Add-Member -MemberType ScriptMethod -Name Close -Value { }
+                $silent | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                $failed = Invoke-SingleInstanceSafetyNet -ControlWindow $silent -AlreadyClosed $false -ReleaseAttempts $attempts -Failures $failures
+                Assert-Equal 'True' ([string] $failed.attempted)
+                Assert-Equal 'False' ([string] $failed.closed)
+                Assert-Equal 'single.instance.control_window_not_released' ([string] $failed.failure)
+                Assert-Equal 2 $attempts.Count
+                Assert-Equal 0 $failures.Count 'a release that was attempted and failed is an attempt, not a guard failure'
             }
         },
         @{
@@ -2624,12 +2854,13 @@ function Get-TestCases {
                 $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
                 Assert-Equal 0 @($errors).Count
                 $wanted = @('Complete-SingleInstanceControlRelease', 'New-SingleInstanceReleaseAttempt',
-                    'ConvertTo-SingleInstanceErrorFact', 'Write-SingleInstanceExitEvidence')
+                    'ConvertTo-SingleInstanceErrorFact', 'New-SingleInstanceFallbackErrorFact',
+                    'New-SingleInstanceErrorFactSafe', 'Write-SingleInstanceExitEvidence')
                 $text = New-Object System.Collections.Generic.List[string]
                 foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
                     if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
                 }
-                Assert-Equal 4 $text.Count
+                Assert-Equal 6 $text.Count
                 . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
 
                 if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
@@ -2672,6 +2903,7 @@ function Get-TestCases {
                     $releaseText = [IO.File]::ReadAllText((Join-Path $okOut 'single-instance-control-release.json'))
                     $releaseDoc = $releaseText | ConvertFrom-Json
                     Assert-Equal 'True' ([string] $releaseDoc.releaseAttempted)
+                    Assert-Equal 'True' ([string] $releaseDoc.confirmed) 'the confirmed fact is the record of record'
                     Assert-Equal 1 ([int] $releaseDoc.attemptCount)
                     Assert-Equal 'success-path' ([string] @($releaseDoc.attempts)[0].source)
                     Assert-Equal 'release-after-second-start' ([string] $releaseDoc.stage)
@@ -2692,10 +2924,15 @@ function Get-TestCases {
                     $stub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
                     $bothAttempt = New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
                         -Release (Complete-SingleInstanceControlRelease -ControlWindow $stub)
+                    # The writer only reads the two flags of this node; the real hand over path into
+                    # the writer is driven by the factory hand over and connection cases.
                     $factoryReport = [pscustomobject] @{ objectObtained = $true; releaseAttempted = $true; attempt = $bothAttempt }
+                    # Two attempts, so the record must keep the earlier one beside the standing one:
+                    # the silent first attempt keeps no fact nodes, the failing last attempt does, and
+                    # the standing facts come from that last attempt.
                     $outcome2 = Write-SingleInstanceExitEvidence -OutputDirectory $badOut -Artifacts $artifacts2 -Failures $failures2 `
                         -SuccessEvidence $null -BusinessErrorRecord $business -BusinessStage 'secondary-exited' `
-                        -ReleaseAttempts @($bothAttempt) -FactoryReleaseReport $factoryReport
+                        -ReleaseAttempts @($failedAttempt, $bothAttempt) -FactoryReleaseReport $factoryReport
                     Assert-Equal 'True' ([string] $outcome2.stageErrorWritten)
                     Assert-Equal 'True' ([string] $outcome2.controlReleaseWritten)
                     Assert-Equal 'True' ([string] $outcome2.requiredComplete)
@@ -2712,6 +2949,16 @@ function Get-TestCases {
                     Assert-Equal 'True' ([string] $errorDoc.factoryRelease.objectObtained)
                     Assert-Equal 'False' ([string] $errorDoc.release.confirmed) 'the failed release must not be confirmed'
                     Assert-True ($errorText -match '"exitFailures"') 'the exit failure list must be part of the forensics'
+                    # Both attempts are kept: the earlier silent one is still in the record beside the
+                    # failing one, and each attempt keeps its own fact nodes.
+                    $badReleaseText = [IO.File]::ReadAllText((Join-Path $badOut 'single-instance-control-release.json'))
+                    $badReleaseDoc = $badReleaseText | ConvertFrom-Json
+                    Assert-Equal 2 ([int] $badReleaseDoc.attemptCount) 'both attempts must be kept'
+                    Assert-Equal 'safety-net' ([string] @($badReleaseDoc.attempts)[0].source) 'the earlier attempt stays first'
+                    Assert-Equal 'success-path' ([string] @($badReleaseDoc.attempts)[1].source) 'the standing attempt stays last'
+                    Assert-True ($null -eq @($badReleaseDoc.attempts)[0].closeErrorFact) 'the silent attempt has no close fact'
+                    Assert-True ($null -ne @($badReleaseDoc.attempts)[1].closeErrorFact) 'the failing attempt keeps its close fact'
+                    Assert-Equal 'False' ([string] $badReleaseDoc.confirmed) 'a failed last attempt is not confirmed'
 
                     # 3. a document that cannot be written: the write is recorded as its own fact, the
                     # other required document still lands, and the required state goes incomplete.
@@ -2837,6 +3084,9 @@ function Get-TestCases {
                         'Assert-SingleInstanceSecondStartDatabase',
                         'Assert-SingleInstanceSecondaryExit',
                         'Get-SingleInstanceFinalVerdict',
+                        'Invoke-SingleInstanceCloseAndRestart',
+                        'Import-SingleInstanceFactoryReleaseReport',
+                        'Invoke-SingleInstanceSafetyNet',
                         'Write-SingleInstanceExitEvidence')) {
                     Assert-Equal 1 @($invocations | Where-Object { $_ -ceq $unit }).Count ($unit + ' must be called exactly once by the main flow')
                 }
@@ -2844,15 +3094,22 @@ function Get-TestCases {
                 # three call sites, one unit.
                 Assert-Equal 3 @($invocations | Where-Object { $_ -ceq 'Complete-SingleInstanceControlRelease' }).Count 'the release unit must run from the factory, the success path and the safety net'
                 Assert-Equal 3 @($invocations | Where-Object { $_ -ceq 'New-SingleInstanceReleaseAttempt' }).Count 'every release path must record its attempt'
-                Assert-True (@($invocations | Where-Object { $_ -ceq 'ConvertTo-SingleInstanceErrorFact' }).Count -ge 8) 'every error kind must go through the shared fact converter'
+                Assert-True (@($invocations | Where-Object { $_ -ceq 'ConvertTo-SingleInstanceErrorFact' }).Count -ge 6) 'every error kind must go through the shared fact converter'
+                # The safe wrapper is the only conversion used inside any failure path: six call sites
+                # (the hand over read, the safety net guard, the exit evidence guard and the three
+                # document writes), and no catch converts through the raw converter.
+                Assert-Equal 6 @($invocations | Where-Object { $_ -ceq 'New-SingleInstanceErrorFactSafe' }).Count 'every catch context must convert through the fallback backed wrapper'
+                Assert-True (-not $source.Contains('ConvertTo-SingleInstanceErrorFact -ErrorRecord $_')) 'no catch context may call the raw converter'
 
-                # The order is the contract: the release happens, then the exit evidence is written,
-                # then the single result is decided.
+                # The order is the contract: the release happens, the safety net follows it, then the
+                # exit evidence is written, then the single result is decided.
                 $releaseCall = $source.IndexOf('$release = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow')
+                $safetyCall = $source.IndexOf('$safety = Invoke-SingleInstanceSafetyNet -ControlWindow $controlWindow')
                 $writerCall = $source.IndexOf('$exitEvidence = Write-SingleInstanceExitEvidence')
                 $verdictCall = $source.IndexOf('$verdict = Get-SingleInstanceFinalVerdict')
                 Assert-True ($releaseCall -gt 0) 'the release must stay a simple call site'
-                Assert-True ($writerCall -gt $releaseCall) 'the exit evidence must be written after the release'
+                Assert-True ($safetyCall -gt $releaseCall) 'the safety net must run after the release attempt'
+                Assert-True ($writerCall -gt $safetyCall) 'the exit evidence must be written after the release'
                 Assert-True ($verdictCall -gt $writerCall) 'the result must be decided after the exit evidence'
                 # Every guarded failure in the finally and every write failure is named as its own fact.
                 foreach ($stage in @('release-safety-net-guard', 'exit-evidence', 'control-release-write', 'stage-error-write', 'success-evidence-write')) {
@@ -2864,6 +3121,273 @@ function Get-TestCases {
                 foreach ($forbidden in @('@($releaseAttempts)', '@($exitFailures)', '@($ReleaseAttempts)', '@($Failures)')) {
                     Assert-True (-not $source.Contains($forbidden)) ($forbidden + ' must not wrap a generic object list')
                 }
+            }
+        },
+        @{
+            Name = 'the production failure connection decides its final facts through the real units'
+            Body = {
+                # The scenario's catch -> finally -> result order runs here through the very units the
+                # scenario calls, in the same order: the factory hand over is read, the safety net
+                # releases what is still open, the exit evidence is written, and the verdict decides
+                # the single result. Nothing is hand fed to the writer and no verdict boolean is
+                # fabricated: every case asserts the final status, the final reason, the confirmed
+                # facts and the persisted documents together.
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('Complete-SingleInstanceControlRelease', 'New-SingleInstanceReleaseAttempt',
+                    'ConvertTo-SingleInstanceErrorFact', 'New-SingleInstanceFallbackErrorFact',
+                    'New-SingleInstanceErrorFactSafe', 'New-NonForegroundControlWindow',
+                    'Import-SingleInstanceFactoryReleaseReport', 'Invoke-SingleInstanceSafetyNet',
+                    'Write-SingleInstanceExitEvidence', 'Get-SingleInstanceFinalVerdict')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 10 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
+
+                function New-ConnectionRecord {
+                    param([string] $Message)
+                    try { throw $Message } catch { return $_ }
+                }
+
+                function Invoke-ConnectionProbe {
+                    param(
+                        $BusinessRecord,
+                        [string] $BusinessOutcome,
+                        [string] $BusinessReason,
+                        $ControlWindow,
+                        [bool] $AlreadyClosed,
+                        $Attempts,
+                        $Failures,
+                        [string] $OutDirectory,
+                        $SuccessEvidence
+                    )
+                    $factoryReport = $null
+                    $closed = [bool] $AlreadyClosed
+                    $failure = ''
+                    # The catch reads the hand over only when there is a failure to hand over from.
+                    if ($null -ne $BusinessRecord) {
+                        $received = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $BusinessRecord -ReleaseAttempts $Attempts -Failures $Failures
+                        $factoryReport = $received.report
+                        if ($null -ne $received.attempt) {
+                            $failure = [string] $received.attempt.releaseFailure
+                            if ([bool] $received.attempt.closed) { $closed = $true }
+                        }
+                    }
+                    $safety = Invoke-SingleInstanceSafetyNet -ControlWindow $ControlWindow -AlreadyClosed $closed -ReleaseAttempts $Attempts -Failures $Failures
+                    if ([bool] $safety.attempted) { $failure = [string] $safety.failure }
+                    $closed = [bool] $safety.closed
+                    $artifacts = New-Object System.Collections.Generic.List[string]
+                    $evidence = Write-SingleInstanceExitEvidence -OutputDirectory $OutDirectory -Artifacts $artifacts -Failures $Failures `
+                        -SuccessEvidence $SuccessEvidence -BusinessErrorRecord $BusinessRecord -BusinessStage 'connection-probe' `
+                        -ReleaseAttempts $Attempts -FactoryReleaseReport $factoryReport
+                    $requiredComplete = $false
+                    if ($null -ne $evidence) { $requiredComplete = [bool] $evidence.requiredComplete }
+                    $verdict = Get-SingleInstanceFinalVerdict -BusinessOutcome $BusinessOutcome -BusinessReason $BusinessReason `
+                        -ReleaseConfirmed $closed -RequiredEvidenceComplete $requiredComplete -ReleaseAttempts $Attempts
+                    return [pscustomobject] @{
+                        Status           = [string] $verdict.Status
+                        Reason           = [string] $verdict.Reason
+                        ReleaseConfirmed = [bool] $closed
+                        ReleaseFailure   = [string] $failure
+                    }
+                }
+
+                $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-si-connection-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    [void] [IO.Directory]::CreateDirectory($sandbox)
+
+                    # 1. the factory original error with a release that really succeeded: the business
+                    # failure and its code are kept, and the confirmed release reaches the final
+                    # field, the release record and the forensics alike.
+                    $releasedRecord = $null
+                    try { $null = New-NonForegroundControlWindow -ShowAction { throw 'single.instance.connection_factory_failure' } } catch { $releasedRecord = $_ }
+                    $attempts1 = New-Object System.Collections.Generic.List[object]
+                    $failures1 = New-Object System.Collections.Generic.List[object]
+                    $out1 = Join-Path $sandbox 'factory-released'
+                    [void] [IO.Directory]::CreateDirectory($out1)
+                    $result1 = Invoke-ConnectionProbe -BusinessRecord $releasedRecord -BusinessOutcome 'Failed' `
+                        -BusinessReason 'single.instance.connection_factory_failure' -ControlWindow $null -AlreadyClosed $false `
+                        -Attempts $attempts1 -Failures $failures1 -OutDirectory $out1 -SuccessEvidence $null
+                    Assert-Equal 'Failed' ([string] $result1.Status) 'the original factory error must stay a business failure'
+                    Assert-Equal 'single.instance.connection_factory_failure' ([string] $result1.Reason) 'the business code must be kept'
+                    Assert-Equal 'True' ([string] $result1.ReleaseConfirmed) 'the release the factory confirmed must reach the final field'
+                    Assert-Equal '' ([string] $result1.ReleaseFailure) 'a confirmed release records no failure'
+                    Assert-Equal 1 $attempts1.Count
+                    Assert-Equal 0 $failures1.Count
+                    $releaseDoc1 = [IO.File]::ReadAllText((Join-Path $out1 'single-instance-control-release.json')) | ConvertFrom-Json
+                    $errorDoc1 = [IO.File]::ReadAllText((Join-Path $out1 'single-instance-stage-error.json')) | ConvertFrom-Json
+                    Assert-Equal 'True' ([string] $releaseDoc1.confirmed) 'the record must agree about the confirmed release'
+                    Assert-Equal 'True' ([string] $errorDoc1.release.confirmed) 'the forensics must agree about it too'
+                    Assert-Equal ([string] $releaseDoc1.confirmed) ([string] $result1.ReleaseConfirmed) 'the record and the final field must agree'
+                    Assert-Equal ([string] $errorDoc1.release.confirmed) ([string] $result1.ReleaseConfirmed) 'the forensics and the final field must agree'
+
+                    # 2. a business error with a release that fails in the safety net: the business
+                    # code is kept, the release stays unconfirmed, and the action error is its own
+                    # fact in the forensics.
+                    $plainRecord = New-ConnectionRecord 'single.instance.connection_business_failure'
+                    $stub = [pscustomobject] @{ Note = 'x' }
+                    $stub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
+                    $stub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                    $attempts2 = New-Object System.Collections.Generic.List[object]
+                    $failures2 = New-Object System.Collections.Generic.List[object]
+                    $out2 = Join-Path $sandbox 'action-error'
+                    [void] [IO.Directory]::CreateDirectory($out2)
+                    $result2 = Invoke-ConnectionProbe -BusinessRecord $plainRecord -BusinessOutcome 'Failed' `
+                        -BusinessReason 'single.instance.connection_business_failure' -ControlWindow $stub -AlreadyClosed $false `
+                        -Attempts $attempts2 -Failures $failures2 -OutDirectory $out2 -SuccessEvidence $null
+                    Assert-Equal 'Failed' ([string] $result2.Status)
+                    Assert-Equal 'single.instance.connection_business_failure' ([string] $result2.Reason)
+                    Assert-Equal 'False' ([string] $result2.ReleaseConfirmed) 'a failed safety net release is not confirmed'
+                    Assert-True ($result2.ReleaseFailure -clike 'single.instance.control_window_not_closed*') 'the close error is the standing failure'
+                    Assert-Equal 1 $attempts2.Count
+                    Assert-Equal 'safety-net' ([string] $attempts2[0].source)
+                    Assert-Equal 0 $failures2.Count
+                    $errorDoc2 = [IO.File]::ReadAllText((Join-Path $out2 'single-instance-stage-error.json')) | ConvertFrom-Json
+                    Assert-Equal 'False' ([string] $errorDoc2.release.confirmed)
+                    Assert-True ($errorDoc2.releaseActionError.errorType -like '*MethodInvocationException') 'the action error kind must be retained'
+
+                    # 3. a read back that cannot answer: unknown stays unknown, its own fact is kept,
+                    # and the business failure is untouched.
+                    $noRead = [pscustomobject] @{ Note = 'x' }
+                    $noRead | Add-Member -MemberType ScriptMethod -Name Close -Value { }
+                    $noRead | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                    $attempts3 = New-Object System.Collections.Generic.List[object]
+                    $failures3 = New-Object System.Collections.Generic.List[object]
+                    $out3 = Join-Path $sandbox 'read-back-error'
+                    [void] [IO.Directory]::CreateDirectory($out3)
+                    $result3 = Invoke-ConnectionProbe -BusinessRecord $plainRecord -BusinessOutcome 'Failed' `
+                        -BusinessReason 'single.instance.connection_business_failure' -ControlWindow $noRead -AlreadyClosed $false `
+                        -Attempts $attempts3 -Failures $failures3 -OutDirectory $out3 -SuccessEvidence $null
+                    Assert-Equal 'Failed' ([string] $result3.Status)
+                    Assert-Equal 'single.instance.connection_business_failure' ([string] $result3.Reason)
+                    Assert-Equal 'False' ([string] $result3.ReleaseConfirmed)
+                    Assert-Equal 'unknown' ([string] $attempts3[0].releaseReadBack) 'an unreadable read back stays unknown'
+                    Assert-True ($attempts3[0].readBackError -clike 'single.instance.control_window_read_back_failed*') 'the read back error is named'
+                    $errorDoc3 = [IO.File]::ReadAllText((Join-Path $out3 'single-instance-stage-error.json')) | ConvertFrom-Json
+                    Assert-True ($errorDoc3.releaseReadBackError.errorType -like '*PropertyNotFoundException') 'the read back error kind must be retained'
+
+                    # 4. a passed run whose success document cannot be written: the pass is spoiled by
+                    # the named evidence failure, the release stays confirmed, and the write failure
+                    # is listed in the caller's failure list.
+                    $attempts4 = New-Object System.Collections.Generic.List[object]
+                    $goodForm = New-Object System.Windows.Forms.Form
+                    $attempts4.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
+                                -Release (Complete-SingleInstanceControlRelease -ControlWindow $goodForm)))
+                    $failures4 = New-Object System.Collections.Generic.List[object]
+                    $out4 = Join-Path $sandbox 'success-write-failure'
+                    [void] [IO.Directory]::CreateDirectory($out4)
+                    [void] [IO.Directory]::CreateDirectory((Join-Path $out4 'single-instance-safety.json'))
+                    $result4 = Invoke-ConnectionProbe -BusinessRecord $null -BusinessOutcome 'Passed' `
+                        -BusinessReason 'single.instance.verified' -ControlWindow $null -AlreadyClosed $true `
+                        -Attempts $attempts4 -Failures $failures4 -OutDirectory $out4 -SuccessEvidence ([ordered] @{ scenarioId = 'single-instance' })
+                    Assert-Equal 'Failed' ([string] $result4.Status) 'a missing required document must spoil the pass'
+                    Assert-Equal 'single.instance.required_evidence_write_failed' ([string] $result4.Reason)
+                    Assert-Equal 'True' ([string] $result4.ReleaseConfirmed)
+                    Assert-Equal 1 $failures4.Count
+                    Assert-Equal 'success-evidence-write' ([string] $failures4[0].stage)
+                }
+                finally {
+                    Remove-UiTestTree -Path $sandbox
+                }
+            }
+        },
+        @{
+            Name = 'the close and restart unit drives the real sequence and refuses every bounded counterexample'
+            Body = {
+                # The unit the scenario runs is driven with its seams: the order of the real calls is
+                # read off an event trace, the restart is checked to carry the same executable and
+                # the same owned root with the same timeout, and each refusal of the finite matrix
+                # is reached by name.
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('Invoke-SingleInstanceCloseAndRestart')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 1 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                $liveProcess = [pscustomobject] @{ Note = 'live' }
+                $liveProcess | Add-Member -MemberType ScriptMethod -Name CloseMainWindow -Value { return $true }
+                $rejectProcess = [pscustomobject] @{ Note = 'reject' }
+                $rejectProcess | Add-Member -MemberType ScriptMethod -Name CloseMainWindow -Value { return $false }
+
+                $script:crEvents = New-Object System.Collections.Generic.List[string]
+                $script:crRestartArgs = ''
+                $script:crFindCalls = 0
+                $okFind = {
+                    param($id)
+                    $script:crFindCalls = $script:crFindCalls + 1
+                    $script:crEvents.Add('find:' + $id)
+                    if ($script:crFindCalls -eq 1) { return $liveProcess }
+                    return $null
+                }
+                $okInventory = { $script:crEvents.Add('inventory'); return @() }
+                $okStart = {
+                    param($exe, $root, $token, $support)
+                    $script:crEvents.Add('start')
+                    $script:crRestartArgs = @($exe, $root, $token, $support) -join '|'
+                    return [pscustomobject] @{ ProcessId = 4242 }
+                }
+                $okWindow = { param($id, $timeout) $script:crEvents.Add('window:' + $id + ':' + $timeout); return [IntPtr] 99 }
+                $okObserve = { param($id) $script:crEvents.Add('observe:' + $id); return [pscustomobject] @{ Status = 'Passed' } }
+
+                $facts = Invoke-SingleInstanceCloseAndRestart -PrimaryPid 7331 -ExecutablePath 'C:\probe\TraceFold.Media.exe' `
+                    -OwnedRoot 'C:\probe\owned' -RunToken 'probe-token' -SupportPath 'C:\probe\support' `
+                    -WaitTimeoutSeconds 5 -InteractiveTimeoutSeconds 7 `
+                    -FindProcess $okFind -ProcessInventory $okInventory -StartScenario $okStart -WaitWindow $okWindow -Observe $okObserve -Sleep { param($milliseconds) }
+                Assert-Equal 'True' ([string] $facts.closeAccepted)
+                Assert-Equal 0 ([int] $facts.residueCount)
+                Assert-Equal 4242 ([int] $facts.restartPid)
+                Assert-Equal 99 ([long] $facts.restartWindowHandle)
+                Assert-Equal 'Passed' ([string] $facts.restartObservationStatus)
+                Assert-Equal 'C:\probe\TraceFold.Media.exe' ([string] $facts.restartExecutable)
+                Assert-Equal 'C:\probe\owned' ([string] $facts.restartOwnedRoot)
+                Assert-Equal 'find:7331|find:7331|inventory|start|window:4242:7|observe:4242' ($script:crEvents -join '|') 'the sequence must close, wait, check residue and then restart'
+                Assert-Equal 'C:\probe\TraceFold.Media.exe|C:\probe\owned|probe-token|C:\probe\support' $script:crRestartArgs 'the restart must carry the same executable, root, token and support'
+
+                function Get-CRRefusalCode {
+                    param(
+                        [scriptblock] $Find = $null,
+                        [scriptblock] $Inventory = $null,
+                        [scriptblock] $Start = $null,
+                        [scriptblock] $Window = $null,
+                        [scriptblock] $Observe = $null,
+                        [int] $Wait = 5
+                    )
+                    if ($null -eq $Find) { $Find = $okFind }
+                    if ($null -eq $Inventory) { $Inventory = $okInventory }
+                    if ($null -eq $Start) { $Start = $okStart }
+                    if ($null -eq $Window) { $Window = $okWindow }
+                    if ($null -eq $Observe) { $Observe = $okObserve }
+                    $script:crFindCalls = 0
+                    try {
+                        $null = Invoke-SingleInstanceCloseAndRestart -PrimaryPid 7331 -ExecutablePath 'C:\probe\TraceFold.Media.exe' `
+                            -OwnedRoot 'C:\probe\owned' -RunToken 'probe-token' -SupportPath 'C:\probe\support' `
+                            -WaitTimeoutSeconds $Wait -InteractiveTimeoutSeconds 7 `
+                            -FindProcess $Find -ProcessInventory $Inventory -StartScenario $Start -WaitWindow $Window -Observe $Observe -Sleep { param($milliseconds) }
+                    }
+                    catch { return [string] $_.Exception.Message }
+                    return 'none'
+                }
+
+                Assert-Equal 'single.instance.primary_close_rejected' (Get-CRRefusalCode -Find { param($id) $rejectProcess }) 'a rejected close must refuse by name'
+                Assert-Equal 'single.instance.primary_close_rejected' (Get-CRRefusalCode -Find { param($id) $null }) 'a missing process cannot be closed'
+                Assert-Equal 'single.instance.primary_close_timeout' (Get-CRRefusalCode -Wait 1 -Find { param($id) $liveProcess }) 'a close that never completes must time out'
+                Assert-Equal 'single.instance.residue_after_close' (Get-CRRefusalCode -Inventory { @([pscustomobject] @{ Id = 1 }) }) 'residue after the close must refuse'
+                Assert-Equal 'single.instance.restart_window_missing' (Get-CRRefusalCode -Window { param($id, $timeout) return [IntPtr]::Zero }) 'a restart without a window must refuse'
+                Assert-Equal 'single.instance.restart_unresponsive' (Get-CRRefusalCode -Observe { param($id) return [pscustomobject] @{ Status = 'Failed' } }) 'a restart that does not respond must refuse'
             }
         },
         @{
@@ -2921,12 +3445,13 @@ function Get-TestCases {
             }
         },
         @{
-            Name = 'the close and restart connections are ordered and carry the same root'
+            Name = 'the close and restart connections are ordered and carry the same root (auxiliary source check)'
             Body = {
-                # A source connection check, labelled as one: without a live desktop the close and
-                # restart behaviour cannot be driven from here, so this pins the order of the real
-                # connection points and the arguments they carry. The behaviour itself is proved by
-                # the coordinator's real run.
+                # An AUXILIARY source connection check, labelled as one: the close and restart
+                # behaviour itself is driven by the unit case above, which runs the very unit the
+                # scenario calls. This case only pins that the unit is wired into the main flow with
+                # the same executable and the same owned root, and that the refusals it can produce
+                # are reachable in that unit. It is not offered as the behaviour proof.
                 $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
                 $source = Get-Content -LiteralPath $path -Raw
                 foreach ($code in @('single.instance.primary_close_rejected', 'single.instance.primary_close_timeout',
@@ -2934,16 +3459,18 @@ function Get-TestCases {
                         'single.instance.restart_unresponsive')) {
                     Assert-True ($source -cmatch $code) ($code + ' must be a reachable refusal')
                 }
-                # The primary is closed through its own window, and the restart is a new start through
-                # the same launch path with the same executable and the same owned root.
+                # The unit closes the primary through its own window, and the restart goes through the
+                # scenario's own launch seam with the same executable and the same owned root.
                 Assert-True ($source -cmatch '\$primaryProcess\.CloseMainWindow\(\)') 'the primary must be closed through its own window'
-                Assert-True ($source -cmatch '\$restart = Start-TraceFoldScenario -ExecutablePath \$exe -OwnedRoot \$root -RunToken \$RunToken') 'the restart must carry the same executable and the same owned root'
-                # The order: the close decision precedes the wait, the residue check follows the
-                # confirmed exit, and the restart only starts after the root is clean.
+                Assert-True ($source -cmatch '\$restartFacts = Invoke-SingleInstanceCloseAndRestart -PrimaryPid \$primaryPid -ExecutablePath \$exe -OwnedRoot \$root') 'the main flow must drive the unit with the same executable and the same owned root'
+                Assert-True ($source -cmatch 'Start-TraceFoldScenario -ExecutablePath \$restartExe -OwnedRoot \$restartRoot -RunToken \$restartToken -SupportPath \$restartSupport -StartProcess \$LaunchProcess') 'the restart must start through the launch seam with the same root'
+                # The order inside the unit: the close decision precedes the wait, the residue check
+                # follows the confirmed exit, and the restart only starts after the root is clean; the
+                # restart stage in the main flow is only claimed after the unit answered.
                 $rejected = $source.IndexOf('single.instance.primary_close_rejected')
                 $timeout = $source.IndexOf('single.instance.primary_close_timeout')
                 $residue = $source.IndexOf('single.instance.residue_after_close')
-                $restartCall = $source.IndexOf('$restart = Start-TraceFoldScenario')
+                $restartCall = $source.IndexOf('$restart = & $StartScenario')
                 $restartVerified = $source.IndexOf("`$scenarioStage = 'restart-verified'")
                 Assert-True ($rejected -gt 0 -and $timeout -gt $rejected) 'the close rejection must be decided before the wait'
                 Assert-True ($residue -gt $timeout) 'the residue check must follow the confirmed exit'

@@ -43,7 +43,39 @@ param(
     [int] $SecondaryTimeoutSeconds = 45,
     [int] $ObservationTimeoutSeconds = 20,
     [int] $InspectDepth = 20,
-    [scriptblock] $LaunchProcess,
+    # The default launch seam: the primary and the restart still go through Start-TraceFoldScenario,
+    # which validates the owned root and writes the identity ledger, and only the process start
+    # itself is supplied here. The environment it is handed reaches the child through this process's
+    # own block for the duration of the start and is restored immediately afterwards: the process
+    # start info's Environment member does not exist on the older runtime and its EnvironmentVariables
+    # member reads back as null on a first access there. A dispatcher that supplies its own seam
+    # replaces exactly this step and nothing else.
+    [scriptblock] $LaunchProcess = {
+        param($path, $childEnvironment)
+        $info = New-Object System.Diagnostics.ProcessStartInfo
+        $info.FileName = $path
+        $info.UseShellExecute = $false
+        $restore = @{}
+        foreach ($key in $childEnvironment.Keys) {
+            $restore[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+            [Environment]::SetEnvironmentVariable($key, [string] $childEnvironment[$key], 'Process')
+        }
+        try {
+            $proc = [Diagnostics.Process]::Start($info)
+        }
+        finally {
+            foreach ($key in $restore.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $restore[$key], 'Process')
+            }
+        }
+        $record = [pscustomobject] @{
+            ProcessId      = $proc.Id
+            StartUtcTicks  = $proc.StartTime.ToUniversalTime().Ticks
+            ExecutablePath = $path
+        }
+        $proc.Dispose()
+        return $record
+    },
     [scriptblock] $DesktopCheck = { Test-UiInteractiveDesktop },
     [scriptblock] $ForegroundCheck = { param($id) Test-UiForegroundProcess -ProcessId $id },
     # The controlled object that takes the foreground away from the primary before the second start.
@@ -283,21 +315,32 @@ function Assert-SingleInstanceActivated {
 function Complete-SingleInstanceControlRelease {
     [CmdletBinding()]
     param([Parameter(Mandatory)] $ControlWindow)
-    # The action and the read back are two separate facts and are kept separate. An action that threw
-    # is an error even when the object turns out to be disposed, so it can never be reported as a
-    # clean release, and a read back that throws or is unavailable is not a release either. Released
-    # means both: the calls did not fail and the object really is disposed.
-    $actionError = ''
-    $actionErrorRecord = $null
+    # Close, Dispose and the single disposed read back are three separate facts with their own
+    # guards. A Close that throws must not skip the Dispose that could still release the object, so
+    # Dispose is attempted on its own; each action keeps its own error, and an action error can
+    # never be reported as a clean release even when the object turns out to be disposed. Released
+    # means all of them: neither call failed and the object really is disposed.
+    $closeError = ''
+    $closeErrorRecord = $null
     try {
         $ControlWindow.Close()
+    }
+    catch {
+        # The record is kept beside the code, so the failure can later be materialised as its own
+        # lightweight fact with its type, id, position and stack.
+        $closeErrorRecord = $_
+        $closeError = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
+    }
+
+    # Attempted whether or not Close threw: releasing the object is the point of this unit.
+    $disposeError = ''
+    $disposeErrorRecord = $null
+    try {
         $ControlWindow.Dispose()
     }
     catch {
-        # The record is kept beside the code, so the action failure can later be materialised as its
-        # own lightweight fact with its type, id, position and stack.
-        $actionErrorRecord = $_
-        $actionError = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
+        $disposeErrorRecord = $_
+        $disposeError = 'single.instance.control_window_not_disposed: ' + $_.Exception.GetType().Name
     }
 
     # The read back has its own guard, so an object that refuses to answer is reported as unreadable
@@ -315,9 +358,23 @@ function Complete-SingleInstanceControlRelease {
         $readBackError = 'single.instance.control_window_read_back_failed: ' + $_.Exception.GetType().Name
     }
 
-    $closed = ($isDisposed -and [string]::IsNullOrWhiteSpace($actionError) -and [string]::IsNullOrWhiteSpace($readBackError))
+    # The standing action error is the first action that failed; the specific ones stay beside it.
+    $actionError = ''
+    $actionErrorRecord = $null
+    if (-not [string]::IsNullOrWhiteSpace($closeError)) {
+        $actionError = $closeError
+        $actionErrorRecord = $closeErrorRecord
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($disposeError)) {
+        $actionError = $disposeError
+        $actionErrorRecord = $disposeErrorRecord
+    }
+
+    $closed = ($isDisposed -and [string]::IsNullOrWhiteSpace($closeError) -and
+        [string]::IsNullOrWhiteSpace($disposeError) -and [string]::IsNullOrWhiteSpace($readBackError))
     $releaseFailure = ''
-    if (-not [string]::IsNullOrWhiteSpace($actionError)) { $releaseFailure = $actionError }
+    if (-not [string]::IsNullOrWhiteSpace($closeError)) { $releaseFailure = $closeError }
+    elseif (-not [string]::IsNullOrWhiteSpace($disposeError)) { $releaseFailure = $disposeError }
     elseif (-not [string]::IsNullOrWhiteSpace($readBackError)) { $releaseFailure = $readBackError }
     elseif (-not $isDisposed) { $releaseFailure = 'single.instance.control_window_not_released' }
 
@@ -326,11 +383,15 @@ function Complete-SingleInstanceControlRelease {
         releaseReadBack     = $releaseReadBack
         releaseFailure      = $releaseFailure
         actionError         = $actionError
+        closeError          = $closeError
+        disposeError        = $disposeError
         readBackError       = $readBackError
         isDisposedReadBack  = $isDisposed
         # The raw records travel beside the codes; they are never serialised directly and are what
         # the exit evidence turns into lightweight scalar facts.
         actionErrorRecord   = $actionErrorRecord
+        closeErrorRecord    = $closeErrorRecord
+        disposeErrorRecord  = $disposeErrorRecord
         readBackErrorRecord = $readBackErrorRecord
     }
 }
@@ -352,9 +413,13 @@ function New-SingleInstanceReleaseAttempt {
         releaseReadBack     = [string] $Release.releaseReadBack
         releaseFailure      = [string] $Release.releaseFailure
         actionError         = [string] $Release.actionError
+        closeError          = [string] $Release.closeError
+        disposeError        = [string] $Release.disposeError
         readBackError       = [string] $Release.readBackError
         isDisposedReadBack  = [bool] $Release.isDisposedReadBack
         actionErrorRecord   = $Release.actionErrorRecord
+        closeErrorRecord    = $Release.closeErrorRecord
+        disposeErrorRecord  = $Release.disposeErrorRecord
         readBackErrorRecord = $Release.readBackErrorRecord
     }
 }
@@ -383,6 +448,117 @@ function ConvertTo-SingleInstanceErrorFact {
         $fact.$property = Protect-UiAcceptanceText -Value ([string] $fact.$property) -RunToken $RunToken -OwnedRoot $OwnedRoot
     }
     return $fact
+}
+
+# The last resort for a failure fact: no record machinery, no conversion and no second attempt at
+# the converter, just fixed scalar fields with the message redacted through the existing redaction.
+# A redaction that is itself unavailable is never an excuse to publish the raw text.
+function New-SingleInstanceFallbackErrorFact {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Stage,
+        [Parameter(Mandatory)][string] $Message,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = ''
+    )
+    $redacted = ''
+    try { $redacted = Protect-UiAcceptanceText -Value $Message -RunToken $RunToken -OwnedRoot $OwnedRoot }
+    catch { $redacted = '[redaction-unavailable]' }
+    return [pscustomobject] [ordered] @{
+        stage     = $Stage
+        errorType = 'unavailable'
+        errorId   = 'fact-conversion-failed'
+        category  = ''
+        position  = ''
+        stack     = ''
+        message   = 'fact-conversion-failed: ' + $redacted
+    }
+}
+
+# The conversion used inside the failure paths. The conversion itself is a seam, so a failure of the
+# fact materialisation can be driven once; whatever happens, this function never throws, and its
+# fallback never recurses into the same converter that just failed.
+function New-SingleInstanceErrorFactSafe {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $ErrorRecord,
+        [Parameter(Mandatory)][string] $Stage,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        [scriptblock] $Convert = $null
+    )
+    try {
+        if ($null -ne $Convert) { return & $Convert $ErrorRecord $Stage $RunToken $OwnedRoot }
+        return ConvertTo-SingleInstanceErrorFact -ErrorRecord $ErrorRecord -Stage $Stage -RunToken $RunToken -OwnedRoot $OwnedRoot
+    }
+    catch {
+        return New-SingleInstanceFallbackErrorFact -Stage $Stage -Message ([string] $ErrorRecord.Exception.Message) -RunToken $RunToken -OwnedRoot $OwnedRoot
+    }
+}
+
+# The hand over a failing factory leaves beside its original error, read as its own unit: the report
+# is validated by shape, its release attempt joins the attempt list, and a hand over that cannot be
+# read is recorded rather than thrown. The caller stays responsible for its own business error.
+function Import-SingleInstanceFactoryReleaseReport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $ErrorRecord,
+        [Parameter(Mandatory)] $ReleaseAttempts,
+        [Parameter(Mandatory)] $Failures,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = ''
+    )
+    $received = [pscustomobject] @{ report = $null; attempt = $null }
+    try {
+        $handedOver = $ErrorRecord.Exception.Data['TraceFold.ControlWindowRelease']
+        if ($null -ne $handedOver) {
+            # A hand over has to look like a report before anything is claimed from it; anything else
+            # is an unreadable hand over, recorded rather than read.
+            if ($null -eq $handedOver.PSObject.Properties['releaseAttempted'] -or
+                $null -eq $handedOver.PSObject.Properties['attempt']) {
+                throw 'single.instance.factory_handover_unreadable'
+            }
+            $received.report = $handedOver
+            if ([bool] $handedOver.releaseAttempted -and $null -ne $handedOver.attempt) {
+                $received.attempt = $handedOver.attempt
+                [void] $ReleaseAttempts.Add($handedOver.attempt)
+            }
+        }
+    }
+    catch {
+        $Failures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'factory-release-report-read' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+    }
+    return $received
+}
+
+# The safety net as its own unit, so the paths that never reached the release step are drivable as
+# they really run. It takes an object only when it was not already confirmed released - a confirmed
+# release is never repeated - and every call is guarded: a failure here is recorded as its own fact
+# and never replaces the business error.
+function Invoke-SingleInstanceSafetyNet {
+    [CmdletBinding()]
+    param(
+        $ControlWindow,
+        [Parameter(Mandatory)][bool] $AlreadyClosed,
+        [Parameter(Mandatory)] $ReleaseAttempts,
+        [Parameter(Mandatory)] $Failures,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = ''
+    )
+    $outcome = [pscustomobject] @{ closed = [bool] $AlreadyClosed; attempted = $false; readBack = ''; failure = '' }
+    if ($null -eq $ControlWindow -or $AlreadyClosed) { return $outcome }
+    try {
+        $safety = Complete-SingleInstanceControlRelease -ControlWindow $ControlWindow
+        [void] $ReleaseAttempts.Add((New-SingleInstanceReleaseAttempt -Source 'safety-net' -Stage 'release-safety-net' -Release $safety))
+        $outcome.attempted = $true
+        $outcome.readBack = [string] $safety.releaseReadBack
+        $outcome.failure = [string] $safety.releaseFailure
+        if ([bool] $safety.closed) { $outcome.closed = $true }
+    }
+    catch {
+        $Failures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'release-safety-net-guard' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+    }
+    return $outcome
 }
 
 # The second start's exit decision as one unit. A zero exit is the redirect the product promises; a
@@ -472,9 +648,13 @@ function Write-SingleInstanceExitEvidence {
     if ($attempts.Count -gt 0) {
         $attemptDocuments = @()
         foreach ($attempt in $attempts) {
-            $actionFact = $null
-            if ($null -ne $attempt.actionErrorRecord) {
-                $actionFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.actionErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            $closeFact = $null
+            if ($null -ne $attempt.closeErrorRecord) {
+                $closeFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.closeErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            }
+            $disposeFact = $null
+            if ($null -ne $attempt.disposeErrorRecord) {
+                $disposeFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.disposeErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
             }
             $readBackFact = $null
             if ($null -ne $attempt.readBackErrorRecord) {
@@ -487,15 +667,21 @@ function Write-SingleInstanceExitEvidence {
                 releaseReadBack     = [string] $attempt.releaseReadBack
                 releaseFailure      = [string] $attempt.releaseFailure
                 actionError         = [string] $attempt.actionError
+                closeError          = [string] $attempt.closeError
+                disposeError        = [string] $attempt.disposeError
                 readBackError       = [string] $attempt.readBackError
                 isDisposedReadBack  = [bool] $attempt.isDisposedReadBack
-                actionErrorFact     = $actionFact
+                closeErrorFact      = $closeFact
+                disposeErrorFact    = $disposeFact
                 readBackErrorFact   = $readBackFact
             }
         }
         $lastAttempt = $attempts[$attempts.Count - 1]
         $record = [ordered] @{
             stage                  = [string] $lastAttempt.stage
+            # The confirmed fact every other reader derives its answer from: the disposition of the
+            # last attempt, which is what the final result's ReleaseConfirmed carries too.
+            confirmed              = [bool] $lastAttempt.closed
             releaseAttempted       = $true
             releaseReadBack        = [string] $lastAttempt.releaseReadBack
             releaseFailure         = [string] $lastAttempt.releaseFailure
@@ -511,7 +697,7 @@ function Write-SingleInstanceExitEvidence {
             $Artifacts.Add('single-instance-control-release.json')
         }
         catch {
-            $Failures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'control-release-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+            $Failures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'control-release-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
             $outcome.requiredComplete = $false
         }
     }
@@ -565,7 +751,7 @@ function Write-SingleInstanceExitEvidence {
             $Artifacts.Add('single-instance-stage-error.json')
         }
         catch {
-            $Failures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'stage-error-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+            $Failures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'stage-error-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
             $outcome.requiredComplete = $false
         }
     }
@@ -579,7 +765,7 @@ function Write-SingleInstanceExitEvidence {
             $Artifacts.Add('single-instance-safety.json')
         }
         catch {
-            $Failures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'success-evidence-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+            $Failures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'success-evidence-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
             $outcome.requiredComplete = $false
         }
     }
@@ -613,6 +799,63 @@ function Invoke-SingleInstanceObservation {
     return Invoke-WinAppObservation -Arguments @('ui', 'inspect', '--depth', ([string] $InspectDepth)) `
         -ProcessId $ProcessId -TimeoutSeconds $ObservationTimeoutSeconds -WinAppPath $WinAppPath `
         -RunToken $RunToken -OwnedRoot $OwnedRoot
+}
+
+# The legal close and the same-root restart as one unit, so every branch of it can be driven without
+# a live desktop while the scenario still runs this very unit. It closes the primary through its own
+# window, waits for the exit, refuses any residue, starts the restart through the same launch path
+# with the same executable and the same owned root, waits for its window and requires it to respond.
+# Neither the order nor the arguments are decided anywhere else.
+function Invoke-SingleInstanceCloseAndRestart {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int] $PrimaryPid,
+        [Parameter(Mandatory)][string] $ExecutablePath,
+        [Parameter(Mandatory)][string] $OwnedRoot,
+        [Parameter(Mandatory)][string] $RunToken,
+        [Parameter(Mandatory)][string] $SupportPath,
+        [Parameter(Mandatory)][int] $WaitTimeoutSeconds,
+        [Parameter(Mandatory)][int] $InteractiveTimeoutSeconds,
+        # Every step is a seam so the refusals can be driven; the defaults are the real calls.
+        [scriptblock] $FindProcess = { param($id) Get-Process -Id $id -ErrorAction SilentlyContinue },
+        [scriptblock] $ProcessInventory = { @(Get-Process -Name 'TraceFold.Media' -ErrorAction SilentlyContinue) },
+        [scriptblock] $StartScenario = { param($exe, $root, $token, $support) Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $token -SupportPath $support },
+        [scriptblock] $WaitWindow = { param($id, $timeout) Wait-ForProcessWindow -ProcessId $id -TimeoutSeconds $timeout },
+        [scriptblock] $Observe = { param($id) Invoke-SingleInstanceObservation -ProcessId $id },
+        [scriptblock] $Sleep = { param($milliseconds) Start-Sleep -Milliseconds $milliseconds }
+    )
+    $closeAccepted = $false
+    $primaryProcess = & $FindProcess $PrimaryPid
+    if ($null -ne $primaryProcess) {
+        try { $closeAccepted = $primaryProcess.CloseMainWindow() } catch { $closeAccepted = $false }
+    }
+    if (-not $closeAccepted) { throw 'single.instance.primary_close_rejected' }
+    $closed = $false
+    $deadline = [DateTime]::UtcNow.AddSeconds($WaitTimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $still = & $FindProcess $PrimaryPid
+        if ($null -eq $still) { $closed = $true; break }
+        & $Sleep 250
+    }
+    if (-not $closed) { throw 'single.instance.primary_close_timeout' }
+    $residue = @(& $ProcessInventory)
+    if ($residue.Count -gt 0) { throw 'single.instance.residue_after_close' }
+
+    $restart = & $StartScenario $ExecutablePath $OwnedRoot $RunToken $SupportPath
+    $restartPid = [int] $restart.ProcessId
+    $restartWindow = & $WaitWindow $restartPid $InteractiveTimeoutSeconds
+    if ([IntPtr] $restartWindow -eq [IntPtr]::Zero) { throw 'single.instance.restart_window_missing' }
+    $restartObservation = & $Observe $restartPid
+    if ([string] $restartObservation.Status -cne 'Passed') { throw 'single.instance.restart_unresponsive' }
+    return [pscustomobject] @{
+        closeAccepted            = $closeAccepted
+        residueCount             = $residue.Count
+        restartPid               = $restartPid
+        restartWindowHandle      = ([IntPtr] $restartWindow).ToInt64()
+        restartObservationStatus = [string] $restartObservation.Status
+        restartExecutable        = $ExecutablePath
+        restartOwnedRoot         = $OwnedRoot
+    }
 }
 
 $artifacts = New-Object System.Collections.Generic.List[string]
@@ -831,30 +1074,17 @@ try {
     $scenarioStage = 'released'
 
     # --- 5. legal close, then restart on the same owned root -------------------------------------
-    $closeAccepted = $false
-    $primaryProcess = Get-Process -Id $primaryPid -ErrorAction SilentlyContinue
-    if ($null -ne $primaryProcess) {
-        try { $closeAccepted = $primaryProcess.CloseMainWindow() } catch { $closeAccepted = $false }
-    }
-    if (-not $closeAccepted) { throw 'single.instance.primary_close_rejected' }
-    $closed = $false
-    $deadline = [DateTime]::UtcNow.AddSeconds($WaitTimeoutSeconds)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $still = Get-Process -Id $primaryPid -ErrorAction SilentlyContinue
-        if ($null -eq $still) { $closed = $true; break }
-        Start-Sleep -Milliseconds 250
-    }
-    if (-not $closed) { throw 'single.instance.primary_close_timeout' }
-    $residue = @(Get-Process -Name 'TraceFold.Media' -ErrorAction SilentlyContinue)
-    if ($residue.Count -gt 0) { throw 'single.instance.residue_after_close' }
-
-    $restart = Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $RunToken `
-        -SupportPath $SupportPath -StartProcess $LaunchProcess
-    $restartPid = [int] $restart.ProcessId
-    $restartWindow = Wait-ForProcessWindow -ProcessId $restartPid -TimeoutSeconds $InteractiveTimeoutSeconds
-    if ($restartWindow -eq [IntPtr]::Zero) { throw 'single.instance.restart_window_missing' }
-    $restartObservation = Invoke-SingleInstanceObservation -ProcessId $restartPid
-    if ([string] $restartObservation.Status -cne 'Passed') { throw 'single.instance.restart_unresponsive' }
+    # The whole sequence runs as its own unit, so every branch of it can be driven; the unit keeps
+    # the real calls as its defaults and the restart still starts through this scenario's own launch
+    # seam, on the same executable and the same owned root.
+    $restartFacts = Invoke-SingleInstanceCloseAndRestart -PrimaryPid $primaryPid -ExecutablePath $exe -OwnedRoot $root `
+        -RunToken $RunToken -SupportPath $SupportPath -WaitTimeoutSeconds $WaitTimeoutSeconds `
+        -InteractiveTimeoutSeconds $InteractiveTimeoutSeconds `
+        -StartScenario { param($restartExe, $restartRoot, $restartToken, $restartSupport) Start-TraceFoldScenario -ExecutablePath $restartExe -OwnedRoot $restartRoot -RunToken $restartToken -SupportPath $restartSupport -StartProcess $LaunchProcess }
+    $closeAccepted = [bool] $restartFacts.closeAccepted
+    $restartPid = [int] $restartFacts.restartPid
+    $restartWindow = [IntPtr] $restartFacts.restartWindowHandle
+    $restartObservationStatus = [string] $restartFacts.restartObservationStatus
     # Only now, with the restart actually verified, may a stage name say so.
     $scenarioStage = 'restart-verified'
 
@@ -908,10 +1138,10 @@ try {
         libraryFilesAfter        = @($libraryAfter).Count
         libraryFilesCreated      = @($libraryCreated)
         closeAccepted            = $closeAccepted
-        residueAfterClose        = $residue.Count
+        residueAfterClose        = [int] $restartFacts.residueCount
         restartPid               = $restartPid
-        restartWindowHandle      = $restartWindow.ToInt64()
-        restartObservationStatus = [string] $restartObservation.Status
+        restartWindowHandle      = ([IntPtr] $restartWindow).ToInt64()
+        restartObservationStatus = $restartObservationStatus
         activationProof          = 'a controlled window owned by this harness took the foreground before the second start; afterwards the foreground handle was read once, that handle owner is the primary pid and the handle is the primary window'
         observabilityNote        = 'the inspect calls show the instance is observable and are not offered as the activation proof'
         databaseScopeNote        = 'only the one expected database and the absence of a second one are asserted; no byte-freeze of the main database, WAL or SHM'
@@ -941,22 +1171,19 @@ catch {
     $businessReason = $code
     $businessOutcome = if ($blockedFailureCodes -ccontains $code) { 'Blocked' } else { 'Failed' }
 
-    # The factory hands its release facts over beside the original failure. They are read here so the
-    # exit evidence can list them; a report that is absent is simply absent and never changes the
-    # business error. The read is guarded, and a read that fails is recorded rather than swallowed.
-    try {
-        $handedOver = $_.Exception.Data['TraceFold.ControlWindowRelease']
-        if ($null -ne $handedOver) {
-            $factoryReleaseReport = $handedOver
-            if ([bool] $handedOver.releaseAttempted -and $null -ne $handedOver.attempt) {
-                [void] $releaseAttempts.Add($handedOver.attempt)
-                $releaseReadBack = [string] $handedOver.attempt.releaseReadBack
-                $releaseFailure = [string] $handedOver.attempt.releaseFailure
-            }
-        }
-    }
-    catch {
-        $exitFailures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'factory-release-report-read' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+    # The factory hands its release facts over beside the original failure. They are read through
+    # their own unit: the attempt joins the list, a release the factory confirmed is carried into
+    # the same field every other path uses - so the final field, the persisted record and the
+    # evidence all agree about it - and a hand over that cannot be read is recorded rather than
+    # swallowed. None of this can change the business error, and a confirmed release never turns a
+    # business failure green.
+    $received = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $_ -ReleaseAttempts $releaseAttempts `
+        -Failures $exitFailures -RunToken $RunToken -OwnedRoot $OwnedRoot
+    $factoryReleaseReport = $received.report
+    if ($null -ne $received.attempt) {
+        $releaseReadBack = [string] $received.attempt.releaseReadBack
+        $releaseFailure = [string] $received.attempt.releaseFailure
+        if ([bool] $received.attempt.closed) { $controlWindowClosed = $true }
     }
 }
 finally {
@@ -965,18 +1192,13 @@ finally {
     # was not already confirmed released, so a confirmed release is never repeated, and it reads the
     # released fact back rather than assuming the call was enough. Every call in the finally carries
     # its own guard: a failure here must never replace the business error saved above.
-    if ($null -ne $controlWindow -and -not $controlWindowClosed) {
-        try {
-            $safety = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow
-            [void] $releaseAttempts.Add((New-SingleInstanceReleaseAttempt -Source 'safety-net' -Stage 'release-safety-net' -Release $safety))
-            $releaseReadBack = [string] $safety.releaseReadBack
-            $releaseFailure = [string] $safety.releaseFailure
-            if ([bool] $safety.closed) { $controlWindowClosed = $true }
-        }
-        catch {
-            $exitFailures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'release-safety-net-guard' -RunToken $RunToken -OwnedRoot $OwnedRoot))
-        }
+    $safety = Invoke-SingleInstanceSafetyNet -ControlWindow $controlWindow -AlreadyClosed $controlWindowClosed `
+        -ReleaseAttempts $releaseAttempts -Failures $exitFailures -RunToken $RunToken -OwnedRoot $OwnedRoot
+    if ([bool] $safety.attempted) {
+        $releaseReadBack = [string] $safety.readBack
+        $releaseFailure = [string] $safety.failure
     }
+    $controlWindowClosed = [bool] $safety.closed
     # The required exit evidence is written after the release and before the result is built. This
     # call is guarded as well; a failure here is recorded as a fact and leaves the required state
     # incomplete, so the final result cannot claim a pass.
@@ -987,7 +1209,7 @@ finally {
             -BusinessStage $scenarioStage -ReleaseAttempts $releaseAttempts -FactoryReleaseReport $factoryReleaseReport
     }
     catch {
-        $exitFailures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'exit-evidence' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+        $exitFailures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'exit-evidence' -RunToken $RunToken -OwnedRoot $OwnedRoot))
     }
 }
 
