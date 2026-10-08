@@ -117,6 +117,42 @@ function Get-SingleInstanceLibraryInventory {
     return @([IO.Directory]::GetFiles($library, '*', [IO.SearchOption]::AllDirectories) | Sort-Object)
 }
 
+# The freshness rule as its own unit: exactly the one database the product's path contract names,
+# and nothing else. It is driven with real inventories taken by the real helper over real
+# temporary files, so the rule is exercised instead of being restated here.
+function Assert-SingleInstanceDatabaseState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $ExpectedDatabasePath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Databases
+    )
+    if (@($Databases).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($Databases).Count) }
+    if (@($Databases) -cnotcontains $ExpectedDatabasePath) { throw 'single.instance.expected_database_missing' }
+}
+
+# The second start must reuse the very database the first one created: still exactly one, still
+# the expected one, and nothing new in the root or in the library. The differences are computed
+# from the inventories that were really taken and returned, so the evidence carries what the
+# rule actually saw.
+function Assert-SingleInstanceSecondStartDatabase {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $ExpectedDatabasePath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $DatabasesBefore,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $DatabasesAfter,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $LibraryBefore,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $LibraryAfter
+    )
+    # Still exactly the one expected database: a second file, or a different one, is the failure.
+    if (@($DatabasesAfter).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($DatabasesAfter).Count) }
+    if (@($DatabasesAfter) -cnotcontains $ExpectedDatabasePath) { throw 'single.instance.second_database_used' }
+    $databasesCreated = @($DatabasesAfter | Where-Object { @($DatabasesBefore) -cnotcontains $_ })
+    if ($databasesCreated.Count -gt 0) { throw 'single.instance.second_database_created' }
+    $libraryCreated = @($LibraryAfter | Where-Object { @($LibraryBefore) -cnotcontains $_ })
+    if ($libraryCreated.Count -gt 0) { throw 'single.instance.second_library_used' }
+    return [pscustomobject] @{ DatabasesCreated = @($databasesCreated); LibraryCreated = @($libraryCreated) }
+}
+
 function Get-ForegroundWindowHandle {
     # The probe type is created by the driver's foreground check on first use. The caller therefore
     # runs that check before reading a handle; if the type is still absent the handle is reported as
@@ -137,6 +173,24 @@ function Get-WindowOwnerProcessId {
     [void] [TraceFoldUiForegroundProbe]::GetWindowThreadProcessId($Handle, [ref] $owner)
     if ($owner -le 0) { throw 'single.instance.window_owner_unknown' }
     return [int] $owner
+}
+
+# The foreground probe type is created by the driver's own check when that check runs, so the check
+# really has to run before any handle is sampled. The failure that matters is "the check had no
+# effect": when the type is still missing afterwards the scenario is refused, and a check that
+# throws leaves with its own exception unchanged. This read produces nothing and is never offered
+# as the pre-state or as the activation proof.
+function Initialize-SingleInstanceForegroundProbe {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int] $ProcessId,
+        [Parameter(Mandatory)][scriptblock] $ForegroundCheck,
+        # The lookup is a seam of its own, so the refusal can be driven without depending on whether
+        # an earlier case in the same session already caused the type to exist.
+        [scriptblock] $ResolveProbeType = { return ('TraceFoldUiForegroundProbe' -as [type]) }
+    )
+    $null = & $ForegroundCheck $ProcessId
+    if ($null -eq (& $ResolveProbeType)) { throw 'single.instance.foreground_probe_unavailable' }
 }
 
 # The controlled object used to take the foreground away from the primary before the second start.
@@ -164,14 +218,24 @@ function New-NonForegroundControlWindow {
         & $ShowAction $form
     }
     catch {
-        # The object is created but never handed back, so the factory owns it: it is released here
-        # before the failure leaves this function and the caller's finally never sees a half built
-        # window. The construction failure is the fact the caller has to report, so it is rethrown
+        # Two failures that must stay apart. If no object was ever obtained there is nothing to
+        # release, and that is recorded as exactly that. If the object exists it belongs to the same
+        # lifecycle owner as every other path - the shared release unit - so it is released through
+        # that unit, and the release action and read back facts are handed to the caller beside the
+        # original error instead of being lost in an empty catch. The failure itself is rethrown
         # unchanged rather than replaced by a release error.
-        if ($null -ne $form) {
-            try { $form.Close() } catch { }
-            try { $form.Dispose() } catch { }
+        $factoryError = $_
+        $factoryReport = [pscustomobject] @{
+            objectObtained   = ($null -ne $form)
+            releaseAttempted = $false
+            attempt          = $null
         }
+        if ($null -ne $form) {
+            $release = Complete-SingleInstanceControlRelease -ControlWindow $form
+            $factoryReport.releaseAttempted = $true
+            $factoryReport.attempt = New-SingleInstanceReleaseAttempt -Source 'factory' -Stage 'factory' -Release $release
+        }
+        $factoryError.Exception.Data['TraceFold.ControlWindowRelease'] = $factoryReport
         throw
     }
     return $form
@@ -224,17 +288,22 @@ function Complete-SingleInstanceControlRelease {
     # clean release, and a read back that throws or is unavailable is not a release either. Released
     # means both: the calls did not fail and the object really is disposed.
     $actionError = ''
+    $actionErrorRecord = $null
     try {
         $ControlWindow.Close()
         $ControlWindow.Dispose()
     }
     catch {
+        # The record is kept beside the code, so the action failure can later be materialised as its
+        # own lightweight fact with its type, id, position and stack.
+        $actionErrorRecord = $_
         $actionError = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
     }
 
     # The read back has its own guard, so an object that refuses to answer is reported as unreadable
     # rather than letting the failure escape the unit.
     $readBackError = ''
+    $readBackErrorRecord = $null
     $isDisposed = $false
     $releaseReadBack = 'unknown'
     try {
@@ -242,6 +311,7 @@ function Complete-SingleInstanceControlRelease {
         if ($isDisposed) { $releaseReadBack = 'disposed' } else { $releaseReadBack = 'not-disposed' }
     }
     catch {
+        $readBackErrorRecord = $_
         $readBackError = 'single.instance.control_window_read_back_failed: ' + $_.Exception.GetType().Name
     }
 
@@ -252,13 +322,269 @@ function Complete-SingleInstanceControlRelease {
     elseif (-not $isDisposed) { $releaseFailure = 'single.instance.control_window_not_released' }
 
     return [pscustomobject] @{
-        closed             = $closed
-        releaseReadBack    = $releaseReadBack
-        releaseFailure     = $releaseFailure
-        actionError        = $actionError
-        readBackError      = $readBackError
-        isDisposedReadBack = $isDisposed
+        closed              = $closed
+        releaseReadBack     = $releaseReadBack
+        releaseFailure      = $releaseFailure
+        actionError         = $actionError
+        readBackError       = $readBackError
+        isDisposedReadBack  = $isDisposed
+        # The raw records travel beside the codes; they are never serialised directly and are what
+        # the exit evidence turns into lightweight scalar facts.
+        actionErrorRecord   = $actionErrorRecord
+        readBackErrorRecord = $readBackErrorRecord
     }
+}
+
+# One release attempt as its own record: the action error and the read back error stay beside each
+# other, so no caller has to flatten them into a single flag. The raw records are kept for the exit
+# evidence, which materialises them as facts; nothing else reads them.
+function New-SingleInstanceReleaseAttempt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Source,
+        [Parameter(Mandatory)][string] $Stage,
+        [Parameter(Mandatory)] $Release
+    )
+    return [pscustomobject] @{
+        source              = $Source
+        stage               = $Stage
+        closed              = [bool] $Release.closed
+        releaseReadBack     = [string] $Release.releaseReadBack
+        releaseFailure      = [string] $Release.releaseFailure
+        actionError         = [string] $Release.actionError
+        readBackError       = [string] $Release.readBackError
+        isDisposedReadBack  = [bool] $Release.isDisposedReadBack
+        actionErrorRecord   = $Release.actionErrorRecord
+        readBackErrorRecord = $Release.readBackErrorRecord
+    }
+}
+
+# One error materialised as a lightweight fact: scalars only, taken from the ErrorRecord that is
+# actually in flight, with the existing redaction applied. It is deliberately not the ErrorRecord:
+# no CLIXML, no session state and no deep serialisation of InvocationInfo ever reach the evidence.
+function ConvertTo-SingleInstanceErrorFact {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $ErrorRecord,
+        [Parameter(Mandatory)][string] $Stage,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = ''
+    )
+    $fact = [pscustomobject] [ordered] @{
+        stage     = [string] $Stage
+        errorType = [string] $ErrorRecord.Exception.GetType().FullName
+        errorId   = [string] $ErrorRecord.FullyQualifiedErrorId
+        category  = [string] $ErrorRecord.CategoryInfo.Category
+        position  = [string] $ErrorRecord.InvocationInfo.PositionMessage
+        stack     = [string] $ErrorRecord.ScriptStackTrace
+        message   = [string] $ErrorRecord.Exception.Message
+    }
+    foreach ($property in @('stage', 'errorType', 'errorId', 'category', 'position', 'stack', 'message')) {
+        $fact.$property = Protect-UiAcceptanceText -Value ([string] $fact.$property) -RunToken $RunToken -OwnedRoot $OwnedRoot
+    }
+    return $fact
+}
+
+# The second start's exit decision as one unit. A zero exit is the redirect the product promises; a
+# non zero exit is its own failure code; an exit that cannot be read is unknown, and the cast that
+# would turn a missing value into a zero never happens.
+function Assert-SingleInstanceSecondaryExit {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowNull()] $ExitCode)
+    if ($null -eq $ExitCode) { throw 'single.instance.secondary_exit_unknown' }
+    $value = 0
+    try { $value = [int] $ExitCode } catch { throw 'single.instance.secondary_exit_unknown' }
+    if ($value -ne 0) { throw ('single.instance.secondary_exit_' + $value) }
+}
+
+# The final decision as its own unit, taken only after the release and the required forensics have
+# completed: a business pass stays a pass only when the release was confirmed and every required
+# document was really written. The business outcome and its code are never rewritten; a release or
+# evidence problem turns a pass into its own named failure instead.
+function Get-SingleInstanceFinalVerdict {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $BusinessOutcome,
+        [Parameter(Mandatory)][string] $BusinessReason,
+        [Parameter(Mandatory)][bool] $ReleaseConfirmed,
+        [Parameter(Mandatory)][bool] $RequiredEvidenceComplete,
+        $ReleaseAttempts
+    )
+    # A generic object list is never wrapped in @(): on both engines the array subexpression over a
+    # List[object] fails with "Argument types do not match", so the collection is used exactly as it
+    # was handed over, with a null fallback, and a caller may pass an array, a list or nothing.
+    $attempts = $ReleaseAttempts
+    if ($null -eq $attempts) { $attempts = @() }
+    $status = $BusinessOutcome
+    $reason = $BusinessReason
+    if ($BusinessOutcome -ceq 'Passed') {
+        if (-not $ReleaseConfirmed) {
+            $standing = ''
+            foreach ($attempt in $attempts) {
+                if ($null -eq $attempt) { continue }
+                if (-not [string]::IsNullOrWhiteSpace([string] $attempt.releaseFailure)) { $standing = [string] $attempt.releaseFailure }
+            }
+            if ([string]::IsNullOrWhiteSpace($standing)) { $standing = 'single.instance.control_window_not_released' }
+            $status = 'Failed'
+            $reason = $standing
+        }
+        elseif (-not $RequiredEvidenceComplete) {
+            $status = 'Failed'
+            $reason = 'single.instance.required_evidence_write_failed'
+        }
+    }
+    return [pscustomobject] @{ Status = $status; Reason = $reason }
+}
+
+# The exit evidence, written after the release and only on the way out. Each document is guarded on
+# its own: a write that fails becomes its own lightweight fact and leaves the required state
+# incomplete instead of being swallowed, and there is no retry, no substitute file and no second
+# observation that could turn a failed write into a pass. The failure forensics keep the original
+# error at the top level and list the release action error, the read back error and every exit
+# failure as their own facts.
+function Write-SingleInstanceExitEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)] $Artifacts,
+        [Parameter(Mandatory)] $Failures,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        $SuccessEvidence,
+        $BusinessErrorRecord,
+        [string] $BusinessStage = '',
+        $ReleaseAttempts,
+        $FactoryReleaseReport
+    )
+    $outcome = [pscustomobject] @{
+        controlReleaseWritten  = $false
+        stageErrorWritten      = $false
+        successEvidenceWritten = $false
+        requiredComplete       = $true
+    }
+    # Handed over as it is, never wrapped in @(): the array subexpression over a List[object] fails
+    # with "Argument types do not match" on both engines. An array, a list or nothing all work.
+    $attempts = $ReleaseAttempts
+    if ($null -eq $attempts) { $attempts = @() }
+
+    # 1. the release record, whenever a release really was attempted. Every attempt keeps its own
+    # action and read back facts, so a later attempt never erases an earlier failure.
+    if ($attempts.Count -gt 0) {
+        $attemptDocuments = @()
+        foreach ($attempt in $attempts) {
+            $actionFact = $null
+            if ($null -ne $attempt.actionErrorRecord) {
+                $actionFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.actionErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            }
+            $readBackFact = $null
+            if ($null -ne $attempt.readBackErrorRecord) {
+                $readBackFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.readBackErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            }
+            $attemptDocuments += [ordered] @{
+                source              = [string] $attempt.source
+                stage               = [string] $attempt.stage
+                closed              = [bool] $attempt.closed
+                releaseReadBack     = [string] $attempt.releaseReadBack
+                releaseFailure      = [string] $attempt.releaseFailure
+                actionError         = [string] $attempt.actionError
+                readBackError       = [string] $attempt.readBackError
+                isDisposedReadBack  = [bool] $attempt.isDisposedReadBack
+                actionErrorFact     = $actionFact
+                readBackErrorFact   = $readBackFact
+            }
+        }
+        $lastAttempt = $attempts[$attempts.Count - 1]
+        $record = [ordered] @{
+            stage                  = [string] $lastAttempt.stage
+            releaseAttempted       = $true
+            releaseReadBack        = [string] $lastAttempt.releaseReadBack
+            releaseFailure         = [string] $lastAttempt.releaseFailure
+            isDisposedReadBack     = [bool] $lastAttempt.isDisposedReadBack
+            finalStatusFromRelease = $(if ([bool] $lastAttempt.closed) { 'Passed' } else { 'Failed' })
+            attemptCount           = $attempts.Count
+            attempts               = $attemptDocuments
+        }
+        try {
+            [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-control-release.json'),
+                (ConvertTo-Json -InputObject $record -Depth 6), [Text.UTF8Encoding]::new($false))
+            $outcome.controlReleaseWritten = $true
+            $Artifacts.Add('single-instance-control-release.json')
+        }
+        catch {
+            $Failures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'control-release-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+            $outcome.requiredComplete = $false
+        }
+    }
+
+    # 2. the failure forensics, whenever the run did not pass.
+    if ($null -ne $BusinessErrorRecord) {
+        $business = ConvertTo-SingleInstanceErrorFact -ErrorRecord $BusinessErrorRecord -Stage $BusinessStage -RunToken $RunToken -OwnedRoot $OwnedRoot
+        $document = [ordered] @{
+            stage                = [string] $business.stage
+            errorType            = [string] $business.errorType
+            errorId              = [string] $business.errorId
+            category             = [string] $business.category
+            position             = [string] $business.position
+            stack                = [string] $business.stack
+            message              = [string] $business.message
+            release              = $null
+            factoryRelease       = $null
+            releaseActionError   = $null
+            releaseReadBackError = $null
+            # Cast, not wrapped: the shared failure list is a generic object list and @() over one
+            # fails on both engines.
+            exitFailures         = [object[]] $Failures
+        }
+        if ($attempts.Count -gt 0) {
+            $lastAttempt = $attempts[$attempts.Count - 1]
+            $document.release = [ordered] @{
+                attempted    = $true
+                attemptCount = $attempts.Count
+                confirmed    = [bool] $lastAttempt.closed
+                lastStage    = [string] $lastAttempt.stage
+                lastReadBack = [string] $lastAttempt.releaseReadBack
+                lastFailure  = [string] $lastAttempt.releaseFailure
+            }
+            if ($null -ne $lastAttempt.actionErrorRecord) {
+                $document.releaseActionError = ConvertTo-SingleInstanceErrorFact -ErrorRecord $lastAttempt.actionErrorRecord -Stage ([string] $lastAttempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            }
+            if ($null -ne $lastAttempt.readBackErrorRecord) {
+                $document.releaseReadBackError = ConvertTo-SingleInstanceErrorFact -ErrorRecord $lastAttempt.readBackErrorRecord -Stage ([string] $lastAttempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+            }
+        }
+        if ($null -ne $FactoryReleaseReport) {
+            $document.factoryRelease = [ordered] @{
+                objectObtained   = [bool] $FactoryReleaseReport.objectObtained
+                releaseAttempted = [bool] $FactoryReleaseReport.releaseAttempted
+            }
+        }
+        try {
+            [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-stage-error.json'),
+                (ConvertTo-Json -InputObject $document -Depth 8), [Text.UTF8Encoding]::new($false))
+            $outcome.stageErrorWritten = $true
+            $Artifacts.Add('single-instance-stage-error.json')
+        }
+        catch {
+            $Failures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'stage-error-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+            $outcome.requiredComplete = $false
+        }
+    }
+    elseif ($null -ne $SuccessEvidence) {
+        # 3. the success evidence. A failure here is the difference between a run that proved
+        # something and a run that did not, so it is named as its own required document.
+        try {
+            [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-safety.json'),
+                (ConvertTo-Json -InputObject $SuccessEvidence -Depth 10), [Text.UTF8Encoding]::new($false))
+            $outcome.successEvidenceWritten = $true
+            $Artifacts.Add('single-instance-safety.json')
+        }
+        catch {
+            $Failures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'success-evidence-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+            $outcome.requiredComplete = $false
+        }
+    }
+
+    return $outcome
 }
 
 function Get-ProcessWindowHandle {
@@ -293,9 +619,34 @@ $artifacts = New-Object System.Collections.Generic.List[string]
 # Declared before the try so the finally can always see whatever this run owns.
 $controlWindow = $null
 $controlWindowClosed = $false
-# The last stage this run reached. It is assigned as the run advances and can only be read, never
-# decided, by the failure path, so a failure can say where it happened without changing what failed.
+# The last stage the business flow reached. It is assigned as the run advances and can only be read,
+# never decided, by the failure path, so a failure can say where it happened without changing what
+# failed. The cleanup sequence records its own stages inside the release attempts; the two are never
+# mixed, and no stage name is used to claim an action that has not happened.
 $scenarioStage = 'start'
+# The business outcome and the original ErrorRecord are saved by the catch and only read afterwards,
+# so neither the release nor the forensics can overwrite them.
+$businessOutcome = 'NotRun'
+$businessReason = ''
+$businessErrorRecord = $null
+# Every release attempt that really ran, in order. The record and the evidence are built from this
+# list rather than from a single value that a later attempt would overwrite, and a confirmed release
+# is never repeated.
+$releaseAttempts = New-Object System.Collections.Generic.List[object]
+$releaseReadBack = ''
+$releaseFailure = ''
+# The release facts a failing factory hands over beside its own original error.
+$factoryReleaseReport = $null
+# The failures of the exit evidence, each recorded as its own lightweight fact. This is what makes a
+# failed write visible: it is listed in the returned record and it decides that the run cannot pass.
+$exitFailures = New-Object System.Collections.Generic.List[object]
+# What the exit evidence step really achieved. A missing outcome leaves the required state
+# incomplete rather than assumed.
+$exitEvidence = $null
+$successEvidence = $null
+$primaryPidOut = $null
+$secondaryExitOut = $null
+$restartPidOut = $null
 
 try {
     if (-not [IO.File]::Exists($ExecutablePath)) { throw 'single.instance.executable_missing' }
@@ -311,6 +662,7 @@ try {
     $primary = Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $RunToken `
         -SupportPath $SupportPath -StartProcess $LaunchProcess
     $primaryPid = [int] $primary.ProcessId
+    $primaryPidOut = $primaryPid
     $scenarioStage = 'primary-started'
     $primaryWindow = Wait-ForProcessWindow -ProcessId $primaryPid -TimeoutSeconds $InteractiveTimeoutSeconds
     if ($primaryWindow -eq [IntPtr]::Zero) { throw 'single.instance.primary_window_missing' }
@@ -323,8 +675,7 @@ try {
     $dbBefore = @(Get-SingleInstanceDbInventory -Root $root)
     $dbSidecarBefore = @(Get-SingleInstanceDbSidecarInventory -Root $root)
     $libraryBefore = @(Get-SingleInstanceLibraryInventory -Root $root)
-    if (@($dbBefore).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($dbBefore).Count) }
-    if (@($dbBefore) -cnotcontains $expectedDbPath) { throw 'single.instance.expected_database_missing' }
+    Assert-SingleInstanceDatabaseState -ExpectedDatabasePath $expectedDbPath -Databases $dbBefore
 
     # The identity ledger already carries the launched process's real creation time, so the scenario
     # reports that value rather than the moment it sampled its own clock.
@@ -333,11 +684,10 @@ try {
     $preObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
 
     # --- controlled non-foreground pre-state ----------------------------------------------------
-    # The probe type is created by the driver's foreground check when that check runs, so it is
-    # brought into existence here, before any handle is sampled. This initialisation call is not the
-    # pre-state and not the activation evidence; its result is deliberately discarded.
-    $null = & $ForegroundCheck $primaryPid
-    if (-not ('TraceFoldUiForegroundProbe' -as [type])) { throw 'single.instance.foreground_probe_unavailable' }
+    # The probe type is created by the driver's foreground check when that check runs, so the check
+    # is driven before any handle is sampled. This initialisation is not the pre-state and not the
+    # activation evidence, and it produces nothing.
+    Initialize-SingleInstanceForegroundProbe -ProcessId $primaryPid -ForegroundCheck $ForegroundCheck
 
     # The pre-state is positively bound, not merely "not the primary": the foreground handle must be
     # exactly the control window that this scenario owns, and that handle's owner must be the control
@@ -382,8 +732,24 @@ try {
         $info = New-Object System.Diagnostics.ProcessStartInfo
         $info.FileName = $launchExe
         $info.UseShellExecute = $false
-        foreach ($key in $launchEnv.Keys) { $info.Environment[$key] = [string] $launchEnv[$key] }
-        $proc = [Diagnostics.Process]::Start($info)
+        # The environment this block was handed reaches the child through this process's own block
+        # for the duration of the start and is restored immediately afterwards. The process start
+        # info's Environment member does not exist on the older runtime and its EnvironmentVariables
+        # member reads back as null on a first access there, so the child inherits the values
+        # instead, and nothing is left modified after the start.
+        $restore = @{}
+        foreach ($key in $launchEnv.Keys) {
+            $restore[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+            [Environment]::SetEnvironmentVariable($key, [string] $launchEnv[$key], 'Process')
+        }
+        try {
+            $proc = [Diagnostics.Process]::Start($info)
+        }
+        finally {
+            foreach ($key in $restore.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $restore[$key], 'Process')
+            }
+        }
         $script:singleInstanceSecondary = $proc
         return [pscustomobject] @{
             ProcessId      = $proc.Id
@@ -406,22 +772,24 @@ try {
         # chain re-checks pid, creation time and path before anything is stopped.
         throw 'single.instance.secondary_resident'
     }
-    $secondaryExit = [int] $secondaryProc.ExitCode
+    # The exit value is taken as a fact first and only turned into a number once it really is one: a
+    # value that is missing or unreadable is unknown, never a zero produced by a cast.
+    $secondaryExitValue = $null
+    try { $secondaryExitValue = $secondaryProc.ExitCode } catch { $secondaryExitValue = $null }
+    Assert-SingleInstanceSecondaryExit -ExitCode $secondaryExitValue
+    $secondaryExit = [int] $secondaryExitValue
+    $secondaryExitOut = $secondaryExit
     $secondaryEndUtc = [DateTime]::UtcNow.ToString('o')
-    if ($secondaryExit -ne 0) { throw ('single.instance.secondary_exit_' + $secondaryExit) }
     $scenarioStage = 'secondary-exited'
 
     # --- 3. no second database, no other library -------------------------------------------------
     $dbAfter = @(Get-SingleInstanceDbInventory -Root $root)
     $dbSidecarAfter = @(Get-SingleInstanceDbSidecarInventory -Root $root)
     $libraryAfter = @(Get-SingleInstanceLibraryInventory -Root $root)
-    # Still exactly the one expected database: a second file, or a different one, is the failure.
-    if (@($dbAfter).Count -ne 1) { throw ('single.instance.expected_database_count_' + [string] @($dbAfter).Count) }
-    if (@($dbAfter) -cnotcontains $expectedDbPath) { throw 'single.instance.second_database_used' }
-    $dbCreated = @($dbAfter | Where-Object { @($dbBefore) -cnotcontains $_ })
-    if ($dbCreated.Count -gt 0) { throw 'single.instance.second_database_created' }
-    $libraryCreated = @($libraryAfter | Where-Object { @($libraryBefore) -cnotcontains $_ })
-    if ($libraryCreated.Count -gt 0) { throw 'single.instance.second_library_used' }
+    $secondStartDatabase = Assert-SingleInstanceSecondStartDatabase -ExpectedDatabasePath $expectedDbPath `
+        -DatabasesBefore $dbBefore -DatabasesAfter $dbAfter -LibraryBefore $libraryBefore -LibraryAfter $libraryAfter
+    $dbCreated = @($secondStartDatabase.DatabasesCreated)
+    $libraryCreated = @($secondStartDatabase.LibraryCreated)
 
     # --- 4. the primary window was activated -----------------------------------------------------
     # The foreground is read first and only read: nothing here activates a window, clicks it or
@@ -446,35 +814,20 @@ try {
     $postObservation = Invoke-SingleInstanceObservation -ProcessId $primaryPid
     if ([string] $postObservation.Status -cne 'Passed') { throw 'single.instance.primary_unresponsive' }
 
-    # The controlled window has done its job. Its release is performed and its result is READ BACK,
-    # not assumed from the absence of an exception: the object is asked whether it is really
-    # disposed. A release that did not take effect is unknown and fails this scenario, so a release
-    # problem can never be reported as Passed. Because this runs before the result record is built,
-    # the final status is decided by this fact rather than by a status written earlier.
-    # This stage must not claim the restart: the restart has not been verified yet at this point, and
-    # a stage name that says otherwise is a claim about an action that has not happened. The name
-    # that mentions the restart is only set once the restart really has been verified.
-    $controlStage = 'release-after-second-start'
+    # The controlled window has done its job. Its release is performed through the same unit every
+    # other path uses and its result is READ BACK, not assumed from the absence of an exception: the
+    # object is asked whether it is really disposed. A release that did not take effect is unknown
+    # and this scenario cannot pass. The attempt is recorded here; the record file itself is written
+    # on the way out, after the release, together with the other exit evidence.
+    # The stage name belongs to the cleanup sequence and must not claim the restart: the restart has
+    # not been verified yet at this point. The business stage is tracked separately and is only moved
+    # once the restart really has been verified.
     $release = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow
+    [void] $releaseAttempts.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' -Release $release))
     $controlWindowClosed = [bool] $release.closed
-    $controlReleaseFailure = [string] $release.releaseFailure
-    $controlReleaseReadBack = [string] $release.releaseReadBack
-
-    # The release fact, the stage it happened at and the status it decides are written to their own
-    # record beside the other evidence, so a cleanup problem is delivered as its own fact and never
-    # replaces the business result or the original error record.
-    $controlReleaseRecord = [ordered] @{
-        stage                  = $controlStage
-        releaseAttempted       = $true
-        releaseReadBack        = $controlReleaseReadBack
-        releaseFailure         = $controlReleaseFailure
-        isDisposedReadBack     = [bool] $release.isDisposedReadBack
-        finalStatusFromRelease = $(if ($controlWindowClosed) { 'Passed' } else { 'Failed' })
-    }
-    [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-control-release.json'),
-        (ConvertTo-Json -InputObject $controlReleaseRecord -Depth 5), [Text.UTF8Encoding]::new($false))
-    $artifacts.Add('single-instance-control-release.json')
-    if (-not $controlWindowClosed) { throw $controlReleaseFailure }
+    $releaseReadBack = [string] $release.releaseReadBack
+    $releaseFailure = [string] $release.releaseFailure
+    if (-not $controlWindowClosed) { throw $releaseFailure }
     $scenarioStage = 'released'
 
     # --- 5. legal close, then restart on the same owned root -------------------------------------
@@ -502,8 +855,7 @@ try {
     if ($restartWindow -eq [IntPtr]::Zero) { throw 'single.instance.restart_window_missing' }
     $restartObservation = Invoke-SingleInstanceObservation -ProcessId $restartPid
     if ([string] $restartObservation.Status -cne 'Passed') { throw 'single.instance.restart_unresponsive' }
-    # Only now, with the restart actually verified, may a stage say so.
-    $controlStage = 'primary-and-restart-verified'
+    # Only now, with the restart actually verified, may a stage name say so.
     $scenarioStage = 'restart-verified'
 
     # The restart is a new process on the same root: a brand new window is expected here, and the
@@ -537,9 +889,11 @@ try {
         controlWindowHandle      = $preState.controlWindowHandle
         controlWindowOwnerPid    = $preState.controlWindowOwnerPid
         controlWindowClosed      = $controlWindowClosed
-        controlReleaseReadBack   = $controlReleaseReadBack
-        controlReleaseFailure    = $controlReleaseFailure
-        controlReleaseStage      = $controlStage
+        controlReleaseReadBack   = $releaseReadBack
+        controlReleaseFailure    = $releaseFailure
+        # The stage the release itself ran at; the business stage is a separate fact.
+        controlReleaseStage      = [string] $releaseAttempts[$releaseAttempts.Count - 1].stage
+        businessStage            = $scenarioStage
         preForegroundHandle      = $preState.preForegroundHandle
         preForegroundOwnerPid    = $preState.preForegroundOwnerPid
         preStateNote             = 'a window this harness owns was brought forward first; the primary was required to be out of the foreground before the second start'
@@ -563,22 +917,20 @@ try {
         databaseScopeNote        = 'only the one expected database and the absence of a second one are asserted; no byte-freeze of the main database, WAL or SHM'
         singleInstanceKeyScope   = 'the product key is a fixed constant without the data root; no machine-wide or cross-session claim is made here'
     }
-    $evidenceJson = ConvertTo-Json -InputObject $evidence -Depth 10
-    $evidenceName = 'single-instance-safety.json'
-    [IO.File]::WriteAllText((Join-Path $OutputDirectory $evidenceName), $evidenceJson, [Text.UTF8Encoding]::new($false))
-    $artifacts.Add($evidenceName)
-
-    return [pscustomobject] @{
-        ScenarioId        = $ScenarioId
-        Status            = 'Passed'
-        Reason            = 'single.instance.verified'
-        PrimaryPid        = $primaryPid
-        SecondaryExitCode = $secondaryExit
-        RestartPid        = $restartPid
-        Artifacts         = @($artifacts)
-    }
+    # The document is prepared here and written on the way out, after the release, beside the other
+    # exit evidence: the result is only built once every required write really happened.
+    $successEvidence = $evidence
+    $primaryPidOut = $primaryPid
+    $secondaryExitOut = $secondaryExit
+    $restartPidOut = $restartPid
+    $businessOutcome = 'Passed'
+    $businessReason = 'single.instance.verified'
 }
 catch {
+    # The business outcome and the original ErrorRecord are saved; nothing is written and no result
+    # is built here. The release and the exit evidence happen in the finally, each guarded on its
+    # own, and the single final result is only built after they really completed.
+    $businessErrorRecord = $_
     $code = $_.Exception.Message
     if ([string]::IsNullOrWhiteSpace($code) -or $code -notlike 'single.instance.*') {
         $cause = ConvertTo-UiAcceptanceSlug -Value ([string] $code)
@@ -586,45 +938,80 @@ catch {
         $code = 'single.instance.unexpected'
         if (-not [string]::IsNullOrWhiteSpace($cause)) { $code = $code + '.' + $cause }
     }
-    $status = if ($blockedFailureCodes -ccontains $code) { 'Blocked' } else { 'Failed' }
+    $businessReason = $code
+    $businessOutcome = if ($blockedFailureCodes -ccontains $code) { 'Blocked' } else { 'Failed' }
 
-    # Lightweight forensics: scalars only, taken from the ErrorRecord that is actually in flight, so
-    # a failure carries the stage it reached and its own error identity next to the other evidence.
-    # It is guarded on its own and can never change $code or $status: a forensics failure must not
-    # replace the business error and must never turn a failure into a pass. No CLIXML and no session
-    # state are serialised here, and the text goes through the existing redaction.
+    # The factory hands its release facts over beside the original failure. They are read here so the
+    # exit evidence can list them; a report that is absent is simply absent and never changes the
+    # business error. The read is guarded, and a read that fails is recorded rather than swallowed.
     try {
-        $recorded = [ordered] @{
-            stage     = $scenarioStage
-            errorType = $_.Exception.GetType().FullName
-            errorId   = [string] $_.FullyQualifiedErrorId
-            category  = [string] $_.CategoryInfo.Category
-            position  = [string] $_.InvocationInfo.PositionMessage
-            stack     = [string] $_.ScriptStackTrace
-            message   = [string] $_.Exception.Message
+        $handedOver = $_.Exception.Data['TraceFold.ControlWindowRelease']
+        if ($null -ne $handedOver) {
+            $factoryReleaseReport = $handedOver
+            if ([bool] $handedOver.releaseAttempted -and $null -ne $handedOver.attempt) {
+                [void] $releaseAttempts.Add($handedOver.attempt)
+                $releaseReadBack = [string] $handedOver.attempt.releaseReadBack
+                $releaseFailure = [string] $handedOver.attempt.releaseFailure
+            }
         }
-        foreach ($key in @($recorded.Keys)) {
-            $recorded[$key] = Protect-UiAcceptanceText -Value ([string] $recorded[$key]) -RunToken $RunToken -OwnedRoot $OwnedRoot
-        }
-        [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-stage-error.json'),
-            (ConvertTo-Json -InputObject $recorded -Depth 4), [Text.UTF8Encoding]::new($false))
-        $artifacts.Add('single-instance-stage-error.json')
     }
-    catch { }
-
-    return [pscustomobject] @{ ScenarioId = $ScenarioId; Status = $status; Reason = $code; Artifacts = @($artifacts) }
+    catch {
+        $exitFailures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'factory-release-report-read' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+    }
 }
 finally {
     # The safety net: whatever this run owns is released on every path, including a failure of the
-    # pre-state, of the second start or of an observation. A release failure here is kept separate
-    # from the business error, never replaces the original ErrorRecord, and is only used when the
-    # success path did not already release the object and report the failure itself.
-    # The safety net for the paths that never reached the release step. It runs only when the object
-    # exists and was not already confirmed released, so a confirmed release is never repeated, and it
-    # reads the released fact back the same way rather than assuming the call was enough.
+    # pre-state, of the second start or of an observation. It runs only when the object exists and
+    # was not already confirmed released, so a confirmed release is never repeated, and it reads the
+    # released fact back rather than assuming the call was enough. Every call in the finally carries
+    # its own guard: a failure here must never replace the business error saved above.
     if ($null -ne $controlWindow -and -not $controlWindowClosed) {
-        $safety = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow
-        if ([bool] $safety.closed) { $controlWindowClosed = $true }
-        else { $controlReleaseFailure = [string] $safety.releaseFailure + ' (finally)' }
+        try {
+            $safety = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow
+            [void] $releaseAttempts.Add((New-SingleInstanceReleaseAttempt -Source 'safety-net' -Stage 'release-safety-net' -Release $safety))
+            $releaseReadBack = [string] $safety.releaseReadBack
+            $releaseFailure = [string] $safety.releaseFailure
+            if ([bool] $safety.closed) { $controlWindowClosed = $true }
+        }
+        catch {
+            $exitFailures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'release-safety-net-guard' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+        }
     }
+    # The required exit evidence is written after the release and before the result is built. This
+    # call is guarded as well; a failure here is recorded as a fact and leaves the required state
+    # incomplete, so the final result cannot claim a pass.
+    try {
+        $exitEvidence = Write-SingleInstanceExitEvidence -OutputDirectory $OutputDirectory -Artifacts $artifacts `
+            -Failures $exitFailures -RunToken $RunToken -OwnedRoot $OwnedRoot `
+            -SuccessEvidence $successEvidence -BusinessErrorRecord $businessErrorRecord `
+            -BusinessStage $scenarioStage -ReleaseAttempts $releaseAttempts -FactoryReleaseReport $factoryReleaseReport
+    }
+    catch {
+        $exitFailures.Add((ConvertTo-SingleInstanceErrorFact -ErrorRecord $_ -Stage 'exit-evidence' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+    }
+}
+
+# --- the single final result ---------------------------------------------------------------------
+# Built only here, after the release and the required forensics really completed: the saved business
+# outcome, the release facts and the write failures are decided together, and the release and exit
+# facts are announced beside the business code instead of replacing it.
+$requiredEvidenceComplete = $false
+if ($null -ne $exitEvidence) { $requiredEvidenceComplete = [bool] $exitEvidence.requiredComplete }
+$verdict = Get-SingleInstanceFinalVerdict -BusinessOutcome $businessOutcome -BusinessReason $businessReason `
+    -ReleaseConfirmed $controlWindowClosed -RequiredEvidenceComplete $requiredEvidenceComplete `
+    -ReleaseAttempts $releaseAttempts
+return [pscustomobject] @{
+    ScenarioId        = $ScenarioId
+    Status            = [string] $verdict.Status
+    Reason            = [string] $verdict.Reason
+    Artifacts         = @($artifacts)
+    PrimaryPid        = $primaryPidOut
+    SecondaryExitCode = $secondaryExitOut
+    RestartPid        = $restartPidOut
+    ReleaseAttempted  = ($releaseAttempts.Count -gt 0)
+    ReleaseConfirmed  = [bool] $controlWindowClosed
+    ReleaseFailure    = [string] $releaseFailure
+    EvidenceComplete  = $requiredEvidenceComplete
+    # Cast, not wrapped: this is a generic object list and @() over one fails on both engines.
+    ExitFailures      = [object[]] $exitFailures
 }
