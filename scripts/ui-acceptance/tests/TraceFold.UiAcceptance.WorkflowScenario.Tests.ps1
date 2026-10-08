@@ -2455,6 +2455,22 @@ function Get-TestCases {
                 $seamFact = New-SingleInstanceErrorFactSafe -ErrorRecord $record -Stage 'probe-stage-3' `
                     -Convert { param($errorRecord, $stage, $runToken, $ownedRoot) [pscustomobject] @{ stage = $stage; errorType = 'seam'; errorId = ''; category = ''; position = ''; stack = ''; message = '' } }
                 Assert-Equal 'seam' ([string] $seamFact.errorType) 'the seam is used when it is supplied'
+
+                # An exception message may legally be empty. The real converter accepts it, and when
+                # the conversion behind the wrapper is also failing, the fallback must still answer:
+                # an empty message must never turn the last resort itself into a new error.
+                $emptyRecord = $null
+                try { throw (New-Object System.Exception('')) } catch { $emptyRecord = $_ }
+                Assert-Equal '' ([string] $emptyRecord.Exception.Message) 'the probe needs a genuinely empty message'
+                $emptyFact = New-SingleInstanceErrorFactSafe -ErrorRecord $emptyRecord -Stage 'probe-stage-empty'
+                Assert-Equal 'probe-stage-empty' ([string] $emptyFact.stage)
+                Assert-Equal '' ([string] $emptyFact.message) 'the real converter carries an empty message through'
+                $emptyFallback = New-SingleInstanceErrorFactSafe -ErrorRecord $emptyRecord -Stage 'probe-stage-empty-2' `
+                    -Convert { param($errorRecord, $stage, $runToken, $ownedRoot) throw 'converter exploded' }
+                Assert-Equal 'probe-stage-empty-2' ([string] $emptyFallback.stage) 'the empty message must still produce the fallback'
+                Assert-Equal 'fact-conversion-failed' ([string] $emptyFallback.errorId)
+                Assert-Equal 'fact-conversion-failed' ([string] $emptyFallback.message) 'an empty message leaves the static reason only'
+                Assert-Equal 'unavailable' ([string] $emptyFallback.errorType)
             }
         },
         @{
@@ -2877,10 +2893,14 @@ function Get-TestCases {
                         -Release (Complete-SingleInstanceControlRelease -ControlWindow $goodForm)
                     $listAttempts = New-Object System.Collections.Generic.List[object]
                     $listAttempts.Add($closedAttempt)
+                    # The earlier attempt belongs to the success path and fails by doing nothing; the
+                    # standing one belongs to the safety net's retry. That is the order the production
+                    # path records its attempts in, and the earlier attempt keeps no fact nodes while
+                    # the standing one does.
                     $silent = New-Object psobject -Property @{ IsDisposed = $false }
                     $silent | Add-Member -MemberType ScriptMethod -Name Close -Value { }
                     $silent | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
-                    $failedAttempt = New-SingleInstanceReleaseAttempt -Source 'safety-net' -Stage 'release-safety-net' `
+                    $failedAttempt = New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
                         -Release (Complete-SingleInstanceControlRelease -ControlWindow $silent)
 
                     # 1. a passed run: the release record and the success evidence are both required
@@ -2922,14 +2942,15 @@ function Get-TestCases {
                     $stub = [pscustomobject] @{ Note = 'x' }
                     $stub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
                     $stub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
-                    $bothAttempt = New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
+                    $bothAttempt = New-SingleInstanceReleaseAttempt -Source 'safety-net' -Stage 'release-safety-net' `
                         -Release (Complete-SingleInstanceControlRelease -ControlWindow $stub)
                     # The writer only reads the two flags of this node; the real hand over path into
                     # the writer is driven by the factory hand over and connection cases.
                     $factoryReport = [pscustomobject] @{ objectObtained = $true; releaseAttempted = $true; attempt = $bothAttempt }
-                    # Two attempts, so the record must keep the earlier one beside the standing one:
-                    # the silent first attempt keeps no fact nodes, the failing last attempt does, and
-                    # the standing facts come from that last attempt.
+                    # Two attempts in the production order, so the record must keep the earlier one
+                    # beside the standing one: the silent success path attempt keeps no fact nodes,
+                    # the failing safety net retry does, and the standing facts come from that last
+                    # attempt.
                     $outcome2 = Write-SingleInstanceExitEvidence -OutputDirectory $badOut -Artifacts $artifacts2 -Failures $failures2 `
                         -SuccessEvidence $null -BusinessErrorRecord $business -BusinessStage 'secondary-exited' `
                         -ReleaseAttempts @($failedAttempt, $bothAttempt) -FactoryReleaseReport $factoryReport
@@ -2942,20 +2963,22 @@ function Get-TestCases {
                     $errorDoc = $errorText | ConvertFrom-Json
                     Assert-Equal 'secondary-exited' ([string] $errorDoc.stage)
                     Assert-True ($errorDoc.message -like '*probe_business_failure*') 'the original error must stay at the top level'
-                    Assert-Equal 'release-after-second-start' ([string] $errorDoc.releaseActionError.stage)
+                    Assert-Equal 'release-safety-net' ([string] $errorDoc.releaseActionError.stage)
                     Assert-True ($errorDoc.releaseActionError.errorType -like '*MethodInvocationException') 'the action error kind must be retained'
-                    Assert-Equal 'release-after-second-start' ([string] $errorDoc.releaseReadBackError.stage)
+                    Assert-Equal 'release-safety-net' ([string] $errorDoc.releaseReadBackError.stage)
                     Assert-True ($errorDoc.releaseReadBackError.errorType -like '*PropertyNotFoundException') 'the read back error kind must be retained'
                     Assert-Equal 'True' ([string] $errorDoc.factoryRelease.objectObtained)
                     Assert-Equal 'False' ([string] $errorDoc.release.confirmed) 'the failed release must not be confirmed'
                     Assert-True ($errorText -match '"exitFailures"') 'the exit failure list must be part of the forensics'
-                    # Both attempts are kept: the earlier silent one is still in the record beside the
-                    # failing one, and each attempt keeps its own fact nodes.
+                    # Both attempts are kept in the production order: the earlier silent success path
+                    # attempt is still in the record beside the failing safety net retry, and only the
+                    # standing attempt keeps the fact nodes the forensics read.
                     $badReleaseText = [IO.File]::ReadAllText((Join-Path $badOut 'single-instance-control-release.json'))
                     $badReleaseDoc = $badReleaseText | ConvertFrom-Json
                     Assert-Equal 2 ([int] $badReleaseDoc.attemptCount) 'both attempts must be kept'
-                    Assert-Equal 'safety-net' ([string] @($badReleaseDoc.attempts)[0].source) 'the earlier attempt stays first'
-                    Assert-Equal 'success-path' ([string] @($badReleaseDoc.attempts)[1].source) 'the standing attempt stays last'
+                    Assert-Equal 'success-path' ([string] @($badReleaseDoc.attempts)[0].source) 'the earlier attempt stays first'
+                    Assert-Equal 'safety-net' ([string] @($badReleaseDoc.attempts)[1].source) 'the standing attempt stays last'
+                    Assert-Equal 'release-safety-net' ([string] $badReleaseDoc.stage) 'the record stage is the standing attempt stage'
                     Assert-True ($null -eq @($badReleaseDoc.attempts)[0].closeErrorFact) 'the silent attempt has no close fact'
                     Assert-True ($null -ne @($badReleaseDoc.attempts)[1].closeErrorFact) 'the failing attempt keeps its close fact'
                     Assert-Equal 'False' ([string] $badReleaseDoc.confirmed) 'a failed last attempt is not confirmed'
@@ -3292,6 +3315,82 @@ function Get-TestCases {
                     Assert-Equal 'True' ([string] $result4.ReleaseConfirmed)
                     Assert-Equal 1 $failures4.Count
                     Assert-Equal 'success-evidence-write' ([string] $failures4[0].stage)
+
+                    # 5. the production retry pair, succeeding: the success path's own release failed
+                    # (recorded first), the safety net's retry succeeded (recorded last). The original
+                    # failure must NOT be turned green, and the confirmed retry must reach the record,
+                    # the forensics and the final field alike.
+                    $firstStub = [pscustomobject] @{ Note = 'x' }
+                    $firstStub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
+                    $firstStub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                    $retryRecord = New-ConnectionRecord 'single.instance.control_window_not_closed: MethodInvocationException'
+                    $attempts5 = New-Object System.Collections.Generic.List[object]
+                    $attempts5.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
+                                -Release (Complete-SingleInstanceControlRelease -ControlWindow $firstStub)))
+                    $failures5 = New-Object System.Collections.Generic.List[object]
+                    $out5 = Join-Path $sandbox 'retry-succeeded'
+                    [void] [IO.Directory]::CreateDirectory($out5)
+                    $retryForm = New-Object System.Windows.Forms.Form
+                    $result5 = Invoke-ConnectionProbe -BusinessRecord $retryRecord -BusinessOutcome 'Failed' `
+                        -BusinessReason 'single.instance.control_window_not_closed: MethodInvocationException' `
+                        -ControlWindow $retryForm -AlreadyClosed $false `
+                        -Attempts $attempts5 -Failures $failures5 -OutDirectory $out5 -SuccessEvidence $null
+                    Assert-Equal 'Failed' ([string] $result5.Status) 'the original failure must not be turned green by the retry'
+                    Assert-Equal 'single.instance.control_window_not_closed: MethodInvocationException' ([string] $result5.Reason) 'the original business code must be kept'
+                    Assert-Equal 'True' ([string] $result5.ReleaseConfirmed) 'a confirmed retry is confirmed'
+                    Assert-Equal '' ([string] $result5.ReleaseFailure) 'a confirmed retry leaves no standing failure'
+                    Assert-Equal 2 $attempts5.Count 'both attempts must be recorded'
+                    Assert-Equal 'success-path' ([string] $attempts5[0].source)
+                    Assert-Equal 'False' ([string] $attempts5[0].closed) 'the first attempt failed'
+                    Assert-Equal 'safety-net' ([string] $attempts5[1].source)
+                    Assert-Equal 'True' ([string] $attempts5[1].closed) 'the retry succeeded'
+                    Assert-Equal 0 $failures5.Count
+                    $releaseDoc5 = [IO.File]::ReadAllText((Join-Path $out5 'single-instance-control-release.json')) | ConvertFrom-Json
+                    $errorDoc5 = [IO.File]::ReadAllText((Join-Path $out5 'single-instance-stage-error.json')) | ConvertFrom-Json
+                    Assert-Equal 'True' ([string] $releaseDoc5.confirmed) 'the record keeps the retry confirmation'
+                    Assert-Equal 'True' ([string] $errorDoc5.release.confirmed) 'the forensics keep it too'
+                    Assert-Equal ([string] $releaseDoc5.confirmed) ([string] $result5.ReleaseConfirmed) 'the record and the final field must agree'
+                    Assert-Equal ([string] $errorDoc5.release.confirmed) ([string] $result5.ReleaseConfirmed) 'the forensics and the final field must agree'
+                    Assert-Equal 2 ([int] $releaseDoc5.attemptCount) 'the record keeps both attempts'
+                    Assert-True (@($releaseDoc5.attempts)[0].releaseFailure -clike 'single.instance.control_window_not_closed*') 'the first attempt failure is retained'
+                    Assert-True ($null -ne @($releaseDoc5.attempts)[0].closeErrorFact) 'the first attempt action error is kept as its own fact'
+                    Assert-True ($errorDoc5.message -like '*control_window_not_closed*') 'the original error stays at the top level'
+                    Assert-Equal 'release-safety-net' ([string] $errorDoc5.release.lastStage) 'the standing attempt is the retry'
+                    Assert-Equal '' ([string] $errorDoc5.release.lastFailure) 'the retry stands as a clean release'
+
+                    # 6. the production retry pair, failing again: the second failure is the standing
+                    # one, nothing is confirmed, and the retry's own action error shows up as its own
+                    # fact beside the original business error.
+                    $attempts6 = New-Object System.Collections.Generic.List[object]
+                    $attempts6.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
+                                -Release (Complete-SingleInstanceControlRelease -ControlWindow $firstStub)))
+                    $failures6 = New-Object System.Collections.Generic.List[object]
+                    $out6 = Join-Path $sandbox 'retry-failed'
+                    [void] [IO.Directory]::CreateDirectory($out6)
+                    $retryStub = [pscustomobject] @{ Note = 'x' }
+                    $retryStub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
+                    $retryStub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+                    $result6 = Invoke-ConnectionProbe -BusinessRecord $retryRecord -BusinessOutcome 'Failed' `
+                        -BusinessReason 'single.instance.control_window_not_closed: MethodInvocationException' `
+                        -ControlWindow $retryStub -AlreadyClosed $false `
+                        -Attempts $attempts6 -Failures $failures6 -OutDirectory $out6 -SuccessEvidence $null
+                    Assert-Equal 'Failed' ([string] $result6.Status) 'a failing retry keeps the business failure'
+                    Assert-Equal 'single.instance.control_window_not_closed: MethodInvocationException' ([string] $result6.Reason)
+                    Assert-Equal 'False' ([string] $result6.ReleaseConfirmed) 'two failures cannot be confirmed'
+                    Assert-True ($result6.ReleaseFailure -clike 'single.instance.control_window_not_closed*') 'the standing failure is the retry close error'
+                    Assert-Equal 2 $attempts6.Count
+                    Assert-Equal 'success-path' ([string] $attempts6[0].source)
+                    Assert-Equal 'safety-net' ([string] $attempts6[1].source)
+                    Assert-Equal 0 $failures6.Count
+                    $releaseDoc6 = [IO.File]::ReadAllText((Join-Path $out6 'single-instance-control-release.json')) | ConvertFrom-Json
+                    $errorDoc6 = [IO.File]::ReadAllText((Join-Path $out6 'single-instance-stage-error.json')) | ConvertFrom-Json
+                    Assert-Equal 'False' ([string] $releaseDoc6.confirmed) 'a failed retry keeps the record unconfirmed'
+                    Assert-Equal 'False' ([string] $errorDoc6.release.confirmed)
+                    Assert-Equal ([string] $releaseDoc6.confirmed) ([string] $result6.ReleaseConfirmed) 'the record and the final field must agree'
+                    Assert-True ($null -ne @($releaseDoc6.attempts)[1].closeErrorFact) 'the retry keeps its close fact'
+                    Assert-Equal 'release-safety-net' ([string] $errorDoc6.releaseActionError.stage)
+                    Assert-True ($errorDoc6.releaseActionError.errorType -like '*MethodInvocationException') 'the retry action error is its own fact'
+                    Assert-True ($errorDoc6.message -like '*control_window_not_closed*') 'the original error stays at the top level'
                 }
                 finally {
                     Remove-UiTestTree -Path $sandbox

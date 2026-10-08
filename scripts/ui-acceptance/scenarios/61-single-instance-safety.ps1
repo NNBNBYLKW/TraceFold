@@ -452,18 +452,28 @@ function ConvertTo-SingleInstanceErrorFact {
 
 # The last resort for a failure fact: no record machinery, no conversion and no second attempt at
 # the converter, just fixed scalar fields with the message redacted through the existing redaction.
-# A redaction that is itself unavailable is never an excuse to publish the raw text.
+# A redaction that is itself unavailable is never an excuse to publish the raw text, and an empty
+# message is legal: it is simply left out instead of being smuggled in as an empty suffix.
 function New-SingleInstanceFallbackErrorFact {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $Stage,
-        [Parameter(Mandatory)][string] $Message,
+        # An exception message may legally be empty, so the empty string is an accepted input here;
+        # refusing it would make this last resort itself a source of new errors.
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Message,
         [string] $RunToken = '',
         [string] $OwnedRoot = ''
     )
     $redacted = ''
     try { $redacted = Protect-UiAcceptanceText -Value $Message -RunToken $RunToken -OwnedRoot $OwnedRoot }
     catch { $redacted = '[redaction-unavailable]' }
+    $summary = 'fact-conversion-failed'
+    if (-not [string]::IsNullOrWhiteSpace($redacted) -and $redacted -cne '[redaction-unavailable]') {
+        $summary = $summary + ': ' + $redacted
+    }
+    elseif ($redacted -ceq '[redaction-unavailable]') {
+        $summary = $summary + ': [redaction-unavailable]'
+    }
     return [pscustomobject] [ordered] @{
         stage     = $Stage
         errorType = 'unavailable'
@@ -471,13 +481,15 @@ function New-SingleInstanceFallbackErrorFact {
         category  = ''
         position  = ''
         stack     = ''
-        message   = 'fact-conversion-failed: ' + $redacted
+        message   = $summary
     }
 }
 
 # The conversion used inside the failure paths. The conversion itself is a seam, so a failure of the
 # fact materialisation can be driven once; whatever happens, this function never throws, and its
-# fallback never recurses into the same converter that just failed.
+# fallback never recurses into the same converter that just failed. Both the message sampling and
+# the fallback call are bounded, so even an empty message or an unreadable exception can only ever
+# produce a static scalar fact.
 function New-SingleInstanceErrorFactSafe {
     [CmdletBinding()]
     param(
@@ -492,7 +504,22 @@ function New-SingleInstanceErrorFactSafe {
         return ConvertTo-SingleInstanceErrorFact -ErrorRecord $ErrorRecord -Stage $Stage -RunToken $RunToken -OwnedRoot $OwnedRoot
     }
     catch {
-        return New-SingleInstanceFallbackErrorFact -Stage $Stage -Message ([string] $ErrorRecord.Exception.Message) -RunToken $RunToken -OwnedRoot $OwnedRoot
+        $message = ''
+        try { $message = [string] $ErrorRecord.Exception.Message } catch { $message = '' }
+        try {
+            return New-SingleInstanceFallbackErrorFact -Stage $Stage -Message $message -RunToken $RunToken -OwnedRoot $OwnedRoot
+        }
+        catch { }
+        # The static literal is the end of the line: it cannot fail, cannot recurse and cannot leak.
+        return [pscustomobject] [ordered] @{
+            stage     = $Stage
+            errorType = 'unavailable'
+            errorId   = 'fact-conversion-failed'
+            category  = ''
+            position  = ''
+            stack     = ''
+            message   = 'fact-conversion-failed'
+        }
     }
 }
 
