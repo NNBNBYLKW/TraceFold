@@ -3316,34 +3316,56 @@ function Get-TestCases {
                     Assert-Equal 1 $failures4.Count
                     Assert-Equal 'success-evidence-write' ([string] $failures4[0].stage)
 
-                    # 5. the production retry pair, succeeding: the success path's own release failed
-                    # (recorded first), the safety net's retry succeeded (recorded last). The original
-                    # failure must NOT be turned green, and the confirmed retry must reach the record,
-                    # the forensics and the final field alike.
-                    $firstStub = [pscustomobject] @{ Note = 'x' }
-                    $firstStub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
-                    $firstStub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
-                    $retryRecord = New-ConnectionRecord 'single.instance.control_window_not_closed: MethodInvocationException'
+                    # 5. the production retry pair, succeeding, on ONE object: the success path's own
+                    # release fails on this very object and its real release failure is thrown and
+                    # caught exactly the way production forms its business error; the safety net then
+                    # retries the SAME object and really releases it. The original failure must NOT be
+                    # turned green, and the confirmed retry must reach the record, the forensics and
+                    # the final field alike.
+                    $retryWindow = [pscustomobject] @{ CloseAttempts = 0; DisposeAttempts = 0; CloseDone = $false; DisposeDone = $false }
+                    $retryWindow | Add-Member -MemberType ScriptMethod -Name Close -Value {
+                        $this.CloseAttempts = $this.CloseAttempts + 1
+                        if ($this.CloseAttempts -eq 1) { throw 'stub close failed once' }
+                        $this.CloseDone = $true
+                    }
+                    $retryWindow | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+                        $this.DisposeAttempts = $this.DisposeAttempts + 1
+                        $this.DisposeDone = $true
+                    }
+                    $retryWindow | Add-Member -MemberType ScriptProperty -Name IsDisposed -Value { return ($this.CloseDone -and $this.DisposeDone) }
+                    $firstRelease5 = Complete-SingleInstanceControlRelease -ControlWindow $retryWindow
+                    Assert-Equal 'False' ([string] $firstRelease5.closed) 'the first attempt must really fail'
+                    Assert-Equal 'not-disposed' ([string] $firstRelease5.releaseReadBack) 'the first read back reports the real state'
+                    Assert-Equal 1 $retryWindow.CloseAttempts 'the first attempt ran on this object'
+                    Assert-Equal 1 $retryWindow.DisposeAttempts 'a throwing close must not skip the dispose'
                     $attempts5 = New-Object System.Collections.Generic.List[object]
-                    $attempts5.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
-                                -Release (Complete-SingleInstanceControlRelease -ControlWindow $firstStub)))
+                    $attempts5.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' -Release $firstRelease5))
+                    $business5 = $null
+                    try { throw $firstRelease5.releaseFailure } catch { $business5 = $_ }
+                    Assert-Equal ([string] $firstRelease5.releaseFailure) ([string] $business5.Exception.Message) 'the business error is the real first failure'
                     $failures5 = New-Object System.Collections.Generic.List[object]
                     $out5 = Join-Path $sandbox 'retry-succeeded'
                     [void] [IO.Directory]::CreateDirectory($out5)
-                    $retryForm = New-Object System.Windows.Forms.Form
-                    $result5 = Invoke-ConnectionProbe -BusinessRecord $retryRecord -BusinessOutcome 'Failed' `
-                        -BusinessReason 'single.instance.control_window_not_closed: MethodInvocationException' `
-                        -ControlWindow $retryForm -AlreadyClosed $false `
+                    $result5 = Invoke-ConnectionProbe -BusinessRecord $business5 -BusinessOutcome 'Failed' `
+                        -BusinessReason ([string] $firstRelease5.releaseFailure) `
+                        -ControlWindow $retryWindow -AlreadyClosed $false `
                         -Attempts $attempts5 -Failures $failures5 -OutDirectory $out5 -SuccessEvidence $null
                     Assert-Equal 'Failed' ([string] $result5.Status) 'the original failure must not be turned green by the retry'
-                    Assert-Equal 'single.instance.control_window_not_closed: MethodInvocationException' ([string] $result5.Reason) 'the original business code must be kept'
+                    Assert-Equal ([string] $business5.Exception.Message) ([string] $result5.Reason) 'the original business error must be carried through'
                     Assert-Equal 'True' ([string] $result5.ReleaseConfirmed) 'a confirmed retry is confirmed'
                     Assert-Equal '' ([string] $result5.ReleaseFailure) 'a confirmed retry leaves no standing failure'
+                    Assert-Equal 2 $retryWindow.CloseAttempts 'both attempts must run on the same object'
+                    Assert-Equal 2 $retryWindow.DisposeAttempts 'both dispose calls must run on the same object'
+                    Assert-Equal 'True' ([string] $retryWindow.IsDisposed) 'the original object really ended confirmed released'
                     Assert-Equal 2 $attempts5.Count 'both attempts must be recorded'
                     Assert-Equal 'success-path' ([string] $attempts5[0].source)
                     Assert-Equal 'False' ([string] $attempts5[0].closed) 'the first attempt failed'
+                    Assert-Equal 'not-disposed' ([string] $attempts5[0].releaseReadBack) 'the first attempt keeps its own read back'
+                    Assert-Equal 'single.instance.control_window_not_closed: MethodInvocationException' ([string] $attempts5[0].closeError) 'the first attempt action error is kept'
                     Assert-Equal 'safety-net' ([string] $attempts5[1].source)
                     Assert-Equal 'True' ([string] $attempts5[1].closed) 'the retry succeeded'
+                    Assert-Equal 'disposed' ([string] $attempts5[1].releaseReadBack) 'the retry keeps its own read back'
+                    Assert-Equal '' ([string] $attempts5[1].closeError) 'the retry close did not fail'
                     Assert-Equal 0 $failures5.Count
                     $releaseDoc5 = [IO.File]::ReadAllText((Join-Path $out5 'single-instance-control-release.json')) | ConvertFrom-Json
                     $errorDoc5 = [IO.File]::ReadAllText((Join-Path $out5 'single-instance-stage-error.json')) | ConvertFrom-Json
@@ -3354,33 +3376,53 @@ function Get-TestCases {
                     Assert-Equal 2 ([int] $releaseDoc5.attemptCount) 'the record keeps both attempts'
                     Assert-True (@($releaseDoc5.attempts)[0].releaseFailure -clike 'single.instance.control_window_not_closed*') 'the first attempt failure is retained'
                     Assert-True ($null -ne @($releaseDoc5.attempts)[0].closeErrorFact) 'the first attempt action error is kept as its own fact'
+                    Assert-Equal 'not-disposed' ([string] @($releaseDoc5.attempts)[0].releaseReadBack) 'the first attempt read back stays as its own fact'
+                    Assert-Equal 'disposed' ([string] @($releaseDoc5.attempts)[1].releaseReadBack) 'the retry read back is its own fact'
                     Assert-True ($errorDoc5.message -like '*control_window_not_closed*') 'the original error stays at the top level'
                     Assert-Equal 'release-safety-net' ([string] $errorDoc5.release.lastStage) 'the standing attempt is the retry'
                     Assert-Equal '' ([string] $errorDoc5.release.lastFailure) 'the retry stands as a clean release'
 
-                    # 6. the production retry pair, failing again: the second failure is the standing
-                    # one, nothing is confirmed, and the retry's own action error shows up as its own
-                    # fact beside the original business error.
+                    # 6. the production retry pair, failing again, on ONE object: the same object fails
+                    # its close again and cannot answer the read back, so the retry's own action and
+                    # read back errors are the standing facts, nothing is confirmed, and the first
+                    # business error stays untouched.
+                    $alwaysFailWindow = [pscustomobject] @{ CloseAttempts = 0; DisposeAttempts = 0 }
+                    $alwaysFailWindow | Add-Member -MemberType ScriptMethod -Name Close -Value {
+                        $this.CloseAttempts = $this.CloseAttempts + 1
+                        throw 'stub close failed again'
+                    }
+                    $alwaysFailWindow | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+                        $this.DisposeAttempts = $this.DisposeAttempts + 1
+                    }
+                    $firstRelease6 = Complete-SingleInstanceControlRelease -ControlWindow $alwaysFailWindow
+                    Assert-Equal 'False' ([string] $firstRelease6.closed) 'the first attempt must fail here too'
+                    Assert-True ($firstRelease6.closeError -clike 'single.instance.control_window_not_closed*') 'the first close error is real'
+                    Assert-True ($firstRelease6.readBackError -clike 'single.instance.control_window_read_back_failed*') 'this object cannot answer the read back'
                     $attempts6 = New-Object System.Collections.Generic.List[object]
-                    $attempts6.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' `
-                                -Release (Complete-SingleInstanceControlRelease -ControlWindow $firstStub)))
+                    $attempts6.Add((New-SingleInstanceReleaseAttempt -Source 'success-path' -Stage 'release-after-second-start' -Release $firstRelease6))
+                    $business6 = $null
+                    try { throw $firstRelease6.releaseFailure } catch { $business6 = $_ }
+                    Assert-Equal ([string] $firstRelease6.releaseFailure) ([string] $business6.Exception.Message) 'the business error is the real first failure here too'
                     $failures6 = New-Object System.Collections.Generic.List[object]
                     $out6 = Join-Path $sandbox 'retry-failed'
                     [void] [IO.Directory]::CreateDirectory($out6)
-                    $retryStub = [pscustomobject] @{ Note = 'x' }
-                    $retryStub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
-                    $retryStub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
-                    $result6 = Invoke-ConnectionProbe -BusinessRecord $retryRecord -BusinessOutcome 'Failed' `
-                        -BusinessReason 'single.instance.control_window_not_closed: MethodInvocationException' `
-                        -ControlWindow $retryStub -AlreadyClosed $false `
+                    $result6 = Invoke-ConnectionProbe -BusinessRecord $business6 -BusinessOutcome 'Failed' `
+                        -BusinessReason ([string] $firstRelease6.releaseFailure) `
+                        -ControlWindow $alwaysFailWindow -AlreadyClosed $false `
                         -Attempts $attempts6 -Failures $failures6 -OutDirectory $out6 -SuccessEvidence $null
                     Assert-Equal 'Failed' ([string] $result6.Status) 'a failing retry keeps the business failure'
-                    Assert-Equal 'single.instance.control_window_not_closed: MethodInvocationException' ([string] $result6.Reason)
+                    Assert-Equal ([string] $business6.Exception.Message) ([string] $result6.Reason) 'the first business error must be kept'
                     Assert-Equal 'False' ([string] $result6.ReleaseConfirmed) 'two failures cannot be confirmed'
                     Assert-True ($result6.ReleaseFailure -clike 'single.instance.control_window_not_closed*') 'the standing failure is the retry close error'
+                    Assert-Equal 2 $alwaysFailWindow.CloseAttempts 'both attempts must run on the same object'
+                    Assert-Equal 2 $alwaysFailWindow.DisposeAttempts 'every attempt must still dispose'
                     Assert-Equal 2 $attempts6.Count
                     Assert-Equal 'success-path' ([string] $attempts6[0].source)
+                    Assert-True ($attempts6[0].closeError -clike 'single.instance.control_window_not_closed*') 'the first attempt keeps its action error'
+                    Assert-True ($attempts6[0].readBackError -clike 'single.instance.control_window_read_back_failed*') 'the first attempt keeps its read back error'
                     Assert-Equal 'safety-net' ([string] $attempts6[1].source)
+                    Assert-True ($attempts6[1].closeError -clike 'single.instance.control_window_not_closed*') 'the retry keeps its own action error'
+                    Assert-True ($attempts6[1].readBackError -clike 'single.instance.control_window_read_back_failed*') 'the retry keeps its own read back error'
                     Assert-Equal 0 $failures6.Count
                     $releaseDoc6 = [IO.File]::ReadAllText((Join-Path $out6 'single-instance-control-release.json')) | ConvertFrom-Json
                     $errorDoc6 = [IO.File]::ReadAllText((Join-Path $out6 'single-instance-stage-error.json')) | ConvertFrom-Json
@@ -3388,8 +3430,11 @@ function Get-TestCases {
                     Assert-Equal 'False' ([string] $errorDoc6.release.confirmed)
                     Assert-Equal ([string] $releaseDoc6.confirmed) ([string] $result6.ReleaseConfirmed) 'the record and the final field must agree'
                     Assert-True ($null -ne @($releaseDoc6.attempts)[1].closeErrorFact) 'the retry keeps its close fact'
+                    Assert-True ($null -ne @($releaseDoc6.attempts)[0].readBackErrorFact) 'the first attempt read back error is kept'
                     Assert-Equal 'release-safety-net' ([string] $errorDoc6.releaseActionError.stage)
                     Assert-True ($errorDoc6.releaseActionError.errorType -like '*MethodInvocationException') 'the retry action error is its own fact'
+                    Assert-Equal 'release-safety-net' ([string] $errorDoc6.releaseReadBackError.stage) 'the retry read back error is its own standing fact'
+                    Assert-True ($errorDoc6.releaseReadBackError.errorType -like '*PropertyNotFoundException') 'the retry read back error kind is retained'
                     Assert-True ($errorDoc6.message -like '*control_window_not_closed*') 'the original error stays at the top level'
                 }
                 finally {
