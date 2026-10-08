@@ -219,28 +219,45 @@ function Assert-SingleInstanceActivated {
 function Complete-SingleInstanceControlRelease {
     [CmdletBinding()]
     param([Parameter(Mandatory)] $ControlWindow)
-    $releaseReadBack = 'unknown'
-    $releaseFailure = ''
-    $closed = $false
+    # The action and the read back are two separate facts and are kept separate. An action that threw
+    # is an error even when the object turns out to be disposed, so it can never be reported as a
+    # clean release, and a read back that throws or is unavailable is not a release either. Released
+    # means both: the calls did not fail and the object really is disposed.
+    $actionError = ''
     try {
         $ControlWindow.Close()
         $ControlWindow.Dispose()
     }
     catch {
-        $releaseFailure = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
+        $actionError = 'single.instance.control_window_not_closed: ' + $_.Exception.GetType().Name
     }
-    if ($ControlWindow.IsDisposed) {
-        $closed = $true
-        $releaseReadBack = 'disposed'
+
+    # The read back has its own guard, so an object that refuses to answer is reported as unreadable
+    # rather than letting the failure escape the unit.
+    $readBackError = ''
+    $isDisposed = $false
+    $releaseReadBack = 'unknown'
+    try {
+        $isDisposed = [bool] $ControlWindow.IsDisposed
+        if ($isDisposed) { $releaseReadBack = 'disposed' } else { $releaseReadBack = 'not-disposed' }
     }
-    elseif ([string]::IsNullOrWhiteSpace($releaseFailure)) {
-        $releaseFailure = 'single.instance.control_window_not_released'
+    catch {
+        $readBackError = 'single.instance.control_window_read_back_failed: ' + $_.Exception.GetType().Name
     }
+
+    $closed = ($isDisposed -and [string]::IsNullOrWhiteSpace($actionError) -and [string]::IsNullOrWhiteSpace($readBackError))
+    $releaseFailure = ''
+    if (-not [string]::IsNullOrWhiteSpace($actionError)) { $releaseFailure = $actionError }
+    elseif (-not [string]::IsNullOrWhiteSpace($readBackError)) { $releaseFailure = $readBackError }
+    elseif (-not $isDisposed) { $releaseFailure = 'single.instance.control_window_not_released' }
+
     return [pscustomobject] @{
         closed             = $closed
         releaseReadBack    = $releaseReadBack
         releaseFailure     = $releaseFailure
-        isDisposedReadBack = [bool] $ControlWindow.IsDisposed
+        actionError        = $actionError
+        readBackError      = $readBackError
+        isDisposedReadBack = $isDisposed
     }
 }
 
@@ -434,7 +451,10 @@ try {
     # disposed. A release that did not take effect is unknown and fails this scenario, so a release
     # problem can never be reported as Passed. Because this runs before the result record is built,
     # the final status is decided by this fact rather than by a status written earlier.
-    $controlStage = 'primary-and-restart-verified'
+    # This stage must not claim the restart: the restart has not been verified yet at this point, and
+    # a stage name that says otherwise is a claim about an action that has not happened. The name
+    # that mentions the restart is only set once the restart really has been verified.
+    $controlStage = 'release-after-second-start'
     $release = Complete-SingleInstanceControlRelease -ControlWindow $controlWindow
     $controlWindowClosed = [bool] $release.closed
     $controlReleaseFailure = [string] $release.releaseFailure
@@ -482,6 +502,8 @@ try {
     if ($restartWindow -eq [IntPtr]::Zero) { throw 'single.instance.restart_window_missing' }
     $restartObservation = Invoke-SingleInstanceObservation -ProcessId $restartPid
     if ([string] $restartObservation.Status -cne 'Passed') { throw 'single.instance.restart_unresponsive' }
+    # Only now, with the restart actually verified, may a stage say so.
+    $controlStage = 'primary-and-restart-verified'
     $scenarioStage = 'restart-verified'
 
     # The restart is a new process on the same root: a brand new window is expected here, and the
