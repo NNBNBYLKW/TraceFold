@@ -410,7 +410,7 @@ try {
         throw 'conflict.ingest_incomplete'
     }
 
-    $formalBefore = Read-ConflictFormalFiles -LibraryDirectory $folders['library']
+    $formalBefore = @(Read-ConflictFormalFiles -LibraryDirectory $folders['library'])
     if ($formalBefore.Count -ne 1 -or $formalBefore[0].Name -cne $photoFilename) { throw 'conflict.original_missing' }
     if ($formalBefore[0].Hash -cne $verifiedPhoto.Sha256) { throw 'conflict.hash_mismatch' }
 
@@ -501,7 +501,7 @@ try {
 
     # --- read-only facts: one record, same record, new content, nothing else left ---
     $afterSnapshot = Read-ConflictSnapshot -EvidenceId 'conflict-after'
-    $formalAfter = Read-ConflictFormalFiles -LibraryDirectory $folders['library']
+    $formalAfter = @(Read-ConflictFormalFiles -LibraryDirectory $folders['library'])
 
     if ($formalAfter.Count -ne 1) { throw 'conflict.extra_records' }
     if ($formalAfter[0].Name -cne $photoFilename) { throw 'conflict.extra_records' }
@@ -570,7 +570,7 @@ try {
         -Nodes (ConvertTo-ConflictEvidenceNodes -Nodes $reopenedNodes) -RunToken $RunToken -OwnedRoot $OwnedRoot
     $artifacts.Add($reopenedRelative)
 
-    $reopenedFiles = Read-ConflictFormalFiles -LibraryDirectory $folders['library']
+    $reopenedFiles = @(Read-ConflictFormalFiles -LibraryDirectory $folders['library'])
     if ($reopenedFiles.Count -ne 1 -or $reopenedFiles[0].Hash -cne $verifiedReplacement.Sha256) {
         throw 'conflict.restart_persistence'
     }

@@ -345,6 +345,143 @@ function Get-LibrarySnapshotScopeText {
     return ($lines -join "`n")
 }
 
+<#
+.SYNOPSIS
+    Returns the upper-case SHA-256 of a text as the toolkit's readers compute file hashes.
+#>
+function Get-TestTextSha256 {
+    param([Parameter(Mandatory)][string] $Text)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-', '')
+    }
+    finally { $sha.Dispose() }
+}
+
+<#
+.SYNOPSIS
+    Builds the text of a scope that carries one conflict scenario's own formal-file read and
+    the shipped block that consumes it.
+
+.DESCRIPTION
+    The conflict scenarios are owned-run entry points, so the file is not dot-sourced. The
+    Read-ConflictFormalFiles definition is lifted out of the parsed file, and the block that
+    reads the library directory and asserts on the result is lifted between two unique anchor
+    lines: the assignment line and the section's final assertion. The text that runs here is
+    the file's own text: the reader, the array collection, the count, name and hash
+    assertions and the error exits are the shipped ones; only the surrounding values are
+    supplied.
+#>
+function Get-ConflictFormalFilesScopeText {
+    param(
+        [Parameter(Mandatory)][string] $ScenarioPath,
+        [Parameter(Mandatory)][string] $AnchorText,
+        [Parameter(Mandatory)][string] $EndText,
+        [int] $EndExtraLines = 0,
+        [Parameter(Mandatory)][string[]] $PreludeLines,
+        [Parameter(Mandatory)][string] $ExpectedFragment
+    )
+
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($ScenarioPath, [ref] $tokens, [ref] $errors)
+    if (@($errors).Count -gt 0) { throw 'The conflict scenario does not parse.' }
+
+    $definition = $null
+    foreach ($candidate in @($ast.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.FunctionDefinitionAst]
+            }, $false))) {
+        if ($candidate.Name -ceq 'Read-ConflictFormalFiles') { $definition = $candidate }
+    }
+    if ($null -eq $definition) { throw 'The scenario does not define Read-ConflictFormalFiles.' }
+
+    $source = [IO.File]::ReadAllText($ScenarioPath)
+    $lines = $source -split "`n"
+    $start = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index].Contains($AnchorText)) {
+            if ($start -ge 0) { throw 'The anchor is not unique in the scenario.' }
+            $start = $index
+        }
+    }
+    if ($start -lt 0) { throw ('The anchor was not found: ' + $AnchorText) }
+    $end = -1
+    for ($index = $start; $index -lt $lines.Count; $index++) {
+        if ($lines[$index].Contains($EndText)) {
+            if ($end -ge 0) { throw 'The end anchor is not unique after the start anchor.' }
+            $end = $index
+        }
+    }
+    if ($end -lt 0) { throw ('The end anchor was not found: ' + $EndText) }
+    $end = $end + $EndExtraLines
+    if ($end -ge $lines.Count) { throw 'The end anchor runs past the end of the file.' }
+    $block = (($lines[$start..$end]) -join "`n").TrimEnd("`r", "`n")
+    if (-not $block.Contains($ExpectedFragment)) {
+        throw ('The extracted block does not carry the expected fragment: ' + $ExpectedFragment)
+    }
+
+    $scopeLines = @('Set-StrictMode -Version Latest', '$ErrorActionPreference = ''Stop''')
+    $scopeLines += $PreludeLines
+    $scopeLines += $definition.Extent.Text
+    $scopeLines += $block
+    return ($scopeLines -join "`n")
+}
+
+<#
+.SYNOPSIS
+    Runs one lifted formal-file block against a directory holding exactly the given files.
+
+.DESCRIPTION
+    The block executes in this function's own scope, so the strict mode it sets does not
+    leak into the case. The read variable the block assigns is read back by name, and its
+    element count and array shape are reported beside the refusal text, if any, so a case
+    can assert both acceptance and refusal. The scratch directory is removed in finally.
+#>
+function Invoke-ConflictFormalBit {
+    param(
+        [Parameter(Mandatory)][string] $ScenarioPath,
+        [Parameter(Mandatory)][string] $AnchorText,
+        [Parameter(Mandatory)][string] $EndText,
+        [int] $EndExtraLines = 0,
+        [Parameter(Mandatory)][string] $ExpectedFragment,
+        [Parameter(Mandatory)][string] $ReadVariable,
+        [Parameter(Mandatory)][hashtable] $Files,
+        [Parameter(Mandatory)][string[]] $PreludeTemplate
+    )
+
+    $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-conflict-bit-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $library = Join-Path $base 'library'
+        [void] [IO.Directory]::CreateDirectory($library)
+        foreach ($name in @($Files.Keys)) {
+            [IO.File]::WriteAllText((Join-Path $library $name), [string] $Files[$name])
+        }
+        $prelude = @()
+        foreach ($line in $PreludeTemplate) { $prelude += $line.Replace('__LIBRARY__', $library) }
+        $scopeText = Get-ConflictFormalFilesScopeText -ScenarioPath $ScenarioPath -AnchorText $AnchorText `
+            -EndText $EndText -EndExtraLines $EndExtraLines -PreludeLines $prelude -ExpectedFragment $ExpectedFragment
+        $thrown = ''
+        $value = $null
+        try {
+            . ([scriptblock]::Create($scopeText))
+            $value = (Get-Variable -Name $ReadVariable -ErrorAction SilentlyContinue).Value
+        }
+        catch { $thrown = $_.Exception.Message }
+        return [pscustomobject] @{
+            Thrown    = $thrown
+            Value     = $value
+            IsArray   = ($value -is [System.Array])
+            ItemCount = $(if ($value -is [System.Array]) { $value.Count } else { -1 })
+        }
+    }
+    finally {
+        Remove-UiTestTree -Path $base
+    }
+}
+
+
 function Get-TestCases {
     return @(
         @{
@@ -909,6 +1046,159 @@ function Get-TestCases {
                 $isAscii = $true
                 foreach ($byte in $bytes) { if ($byte -gt 0x7F) { $isAscii = $false; break } }
                 Assert-True ($isAscii -or $hasBom) 'a scenario containing non-ASCII text needs a UTF-8 BOM'
+            }
+        },
+        @{
+            Name = 'the conflict scenarios read the formal files as flat arrays for zero, one and two files'
+            Body = {
+                # The first ingest leaves exactly one formal file, and the strict mode this suite
+                # runs with gives a scalar no Count member on Windows PowerShell, so every read
+                # must collect its result as an explicit array. These cases run the shipped
+                # Read-ConflictFormalFiles and the shipped read-and-assert block for the initial
+                # state, the keep-both and replacement verdicts, the skip verdict and the
+                # replacement reopening. Zero files stays a refusal; a wrong count stays refused
+                # by the shipped error codes.
+                $photoText = 'photo-bytes-v1'
+                $copyText = 'copy-bytes-v1'
+                $replacementText = 'replacement-bytes-v1'
+                $photoSha = Get-TestTextSha256 -Text $photoText
+                $copySha = Get-TestTextSha256 -Text $copyText
+                $replacementSha = Get-TestTextSha256 -Text $replacementText
+                $path20 = Join-Path $script:uiRoot 'scenarios/20-conflict-keep-both.ps1'
+                $path21 = Join-Path $script:uiRoot 'scenarios/21-conflict-replace.ps1'
+                $path22 = Join-Path $script:uiRoot 'scenarios/22-conflict-skip.ps1'
+
+                # Connection check on the shipped text: every read of the formal files is
+                # collected as an array at its own assignment, reopening included.
+                foreach ($pair in @(
+                        @{ Path = $path20; Variable = 'formalBefore' },
+                        @{ Path = $path20; Variable = 'formalAfter' },
+                        @{ Path = $path21; Variable = 'formalBefore' },
+                        @{ Path = $path21; Variable = 'formalAfter' },
+                        @{ Path = $path21; Variable = 'reopenedFiles' },
+                        @{ Path = $path22; Variable = 'formalBefore' },
+                        @{ Path = $path22; Variable = 'formalAfter' }
+                    )) {
+                    $text = [IO.File]::ReadAllText($pair.Path)
+                    $pattern = '\$' + $pair.Variable + ' = @\(Read-ConflictFormalFiles'
+                    Assert-True ($text -cmatch $pattern) (
+                        $pair.Variable + ' must be collected as an array in ' + [IO.Path]::GetFileName($pair.Path))
+                }
+
+                $beforeAnchor = '$formalBefore = @(Read-ConflictFormalFiles -LibraryDirectory $folders[''library''])'
+                $afterAnchor = '$formalAfter = @(Read-ConflictFormalFiles -LibraryDirectory $folders[''library''])'
+                $reopenAnchor = '$reopenedFiles = @(Read-ConflictFormalFiles -LibraryDirectory $folders[''library''])'
+                $endBefore = "    if (`$formalBefore[0].Hash -cne `$verifiedPhoto.Sha256) { throw 'conflict.hash_mismatch' }"
+                $endAfterKeep = "        if (`$file.Name -cne `$photoFilename -and `$file.Name -cne `$expectedCopy) { throw 'conflict.extra_files' }"
+                $endAfterReplace = "    if (`$formalAfter[0].Hash -ceq `$verifiedPhoto.Sha256) { throw 'conflict.hash_unchanged' }"
+                $endReopen = "    if (`$reopenedFiles.Count -ne 1 -or `$reopenedFiles[0].Hash -cne `$verifiedReplacement.Sha256) {"
+                $endAfterSkip = "    if (`$formalAfter.Count -ne 1) { throw 'conflict.copy_created' }"
+                $beforePrelude = @(
+                    '$folders = @{ library = ''__LIBRARY__'' }',
+                    '$photoFilename = ''photo.jpg''',
+                    ('$verifiedPhoto = [pscustomobject] @{{ Sha256 = ''{0}'' }}' -f $photoSha)
+                )
+                $afterPrelude = @(
+                    '$folders = @{ library = ''__LIBRARY__'' }',
+                    '$photoFilename = ''photo.jpg''',
+                    ('$verifiedPhoto = [pscustomobject] @{{ Sha256 = ''{0}'' }}' -f $photoSha),
+                    ('$verifiedReplacement = [pscustomobject] @{{ Sha256 = ''{0}'' }}' -f $replacementSha)
+                )
+                $reopenPrelude = @(
+                    '$folders = @{ library = ''__LIBRARY__'' }',
+                    ('$verifiedReplacement = [pscustomobject] @{{ Sha256 = ''{0}'' }}' -f $replacementSha)
+                )
+
+                # --- keep-both: the initial state, zero files refused, a wrong hash refused.
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path20 -AnchorText $beforeAnchor -EndText $endBefore `
+                    -ExpectedFragment 'conflict.original_missing' -ReadVariable 'formalBefore' `
+                    -Files @{ 'photo.jpg' = $photoText } -PreludeTemplate $beforePrelude
+                Assert-Equal '' $bit.Thrown 'one file must not refuse the initial read'
+                Assert-True $bit.IsArray 'the initial read must be a flat array'
+                Assert-Equal 1 $bit.ItemCount 'exactly one formal file is reported'
+                Assert-Equal 'photo.jpg' $bit.Value[0].Name
+                Assert-Equal $photoSha $bit.Value[0].Hash
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path20 -AnchorText $beforeAnchor -EndText $endBefore `
+                    -ExpectedFragment 'conflict.original_missing' -ReadVariable 'formalBefore' `
+                    -Files @{} -PreludeTemplate $beforePrelude
+                Assert-Equal 'conflict.original_missing' $bit.Thrown 'zero files must still be refused by the count check'
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path20 -AnchorText $beforeAnchor -EndText $endBefore `
+                    -ExpectedFragment 'conflict.original_missing' -ReadVariable 'formalBefore' `
+                    -Files @{ 'photo.jpg' = $photoText } -PreludeTemplate @(
+                        '$folders = @{ library = ''__LIBRARY__'' }',
+                        '$photoFilename = ''photo.jpg''',
+                        ('$verifiedPhoto = [pscustomobject] @{{ Sha256 = ''{0}'' }}' -f $copySha)
+                    )
+                Assert-Equal 'conflict.hash_mismatch' $bit.Thrown 'a wrong hash must still be refused'
+
+                # --- keep-both verdict: two files pass, one and three are refused by the count.
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path20 -AnchorText $afterAnchor -EndText $endAfterKeep `
+                    -EndExtraLines 1 -ExpectedFragment 'conflict.extra_files' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $photoText; 'photo (2).jpg' = $photoText } -PreludeTemplate $afterPrelude
+                Assert-Equal '' $bit.Thrown 'two files must not refuse the keep-both verdict read'
+                Assert-True $bit.IsArray 'the verdict read must be a flat array'
+                Assert-Equal 2 $bit.ItemCount 'both formal files are reported'
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path20 -AnchorText $afterAnchor -EndText $endAfterKeep `
+                    -EndExtraLines 1 -ExpectedFragment 'conflict.extra_files' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $photoText } -PreludeTemplate $afterPrelude
+                Assert-Equal 'conflict.copy_missing' $bit.Thrown 'a missing copy must still be refused'
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path20 -AnchorText $afterAnchor -EndText $endAfterKeep `
+                    -EndExtraLines 1 -ExpectedFragment 'conflict.extra_files' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $photoText; 'photo (2).jpg' = $photoText; 'extra.bin' = $copyText } `
+                    -PreludeTemplate $afterPrelude
+                Assert-Equal 'conflict.copy_missing' $bit.Thrown 'an unexpected extra file must still be refused'
+
+                # --- replace: initial state, verdict, wrong content, reopening.
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path21 -AnchorText $beforeAnchor -EndText $endBefore `
+                    -ExpectedFragment 'conflict.original_missing' -ReadVariable 'formalBefore' `
+                    -Files @{ 'photo.jpg' = $photoText } -PreludeTemplate $beforePrelude
+                Assert-Equal '' $bit.Thrown 'one file must not refuse the replace initial read'
+                Assert-True $bit.IsArray 'the replace initial read must be a flat array'
+                Assert-Equal 1 $bit.ItemCount
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path21 -AnchorText $afterAnchor -EndText $endAfterReplace `
+                    -ExpectedFragment 'conflict.extra_records' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $replacementText } -PreludeTemplate $afterPrelude
+                Assert-Equal '' $bit.Thrown 'one replaced record must not refuse the verdict read'
+                Assert-True $bit.IsArray 'the replace verdict read must be a flat array'
+                Assert-Equal 1 $bit.ItemCount
+                Assert-Equal $replacementSha $bit.Value[0].Hash
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path21 -AnchorText $afterAnchor -EndText $endAfterReplace `
+                    -ExpectedFragment 'conflict.extra_records' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $replacementText; 'second.jpg' = $photoText } -PreludeTemplate $afterPrelude
+                Assert-Equal 'conflict.extra_records' $bit.Thrown 'a second record must still be refused'
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path21 -AnchorText $afterAnchor -EndText $endAfterReplace `
+                    -ExpectedFragment 'conflict.extra_records' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $photoText } -PreludeTemplate $afterPrelude
+                Assert-Equal 'conflict.hash_unchanged' $bit.Thrown 'the old content must still be refused'
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path21 -AnchorText $reopenAnchor -EndText $endReopen `
+                    -EndExtraLines 2 -ExpectedFragment 'conflict.restart_persistence' -ReadVariable 'reopenedFiles' `
+                    -Files @{ 'photo.jpg' = $replacementText } -PreludeTemplate $reopenPrelude
+                Assert-Equal '' $bit.Thrown 'one surviving record must not refuse the reopening read'
+                Assert-True $bit.IsArray 'the reopening read must be a flat array'
+                Assert-Equal 1 $bit.ItemCount
+                Assert-Equal $replacementSha $bit.Value[0].Hash
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path21 -AnchorText $reopenAnchor -EndText $endReopen `
+                    -EndExtraLines 2 -ExpectedFragment 'conflict.restart_persistence' -ReadVariable 'reopenedFiles' `
+                    -Files @{} -PreludeTemplate $reopenPrelude
+                Assert-Equal 'conflict.restart_persistence' $bit.Thrown 'a lost record must still be refused after the restart'
+
+                # --- skip: initial state and verdict.
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path22 -AnchorText $beforeAnchor -EndText $endBefore `
+                    -ExpectedFragment 'conflict.original_missing' -ReadVariable 'formalBefore' `
+                    -Files @{ 'photo.jpg' = $photoText } -PreludeTemplate $beforePrelude
+                Assert-Equal '' $bit.Thrown 'one file must not refuse the skip initial read'
+                Assert-True $bit.IsArray 'the skip initial read must be a flat array'
+                Assert-Equal 1 $bit.ItemCount
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path22 -AnchorText $afterAnchor -EndText $endAfterSkip `
+                    -ExpectedFragment 'conflict.copy_created' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $photoText } -PreludeTemplate $afterPrelude
+                Assert-Equal '' $bit.Thrown 'one untouched record must not refuse the skip verdict read'
+                Assert-True $bit.IsArray 'the skip verdict read must be a flat array'
+                Assert-Equal 1 $bit.ItemCount
+                $bit = Invoke-ConflictFormalBit -ScenarioPath $path22 -AnchorText $afterAnchor -EndText $endAfterSkip `
+                    -ExpectedFragment 'conflict.copy_created' -ReadVariable 'formalAfter' `
+                    -Files @{ 'photo.jpg' = $photoText; 'photo (2).jpg' = $photoText } -PreludeTemplate $afterPrelude
+                Assert-Equal 'conflict.copy_created' $bit.Thrown 'a skipped copy must still be refused'
             }
         },
         @{

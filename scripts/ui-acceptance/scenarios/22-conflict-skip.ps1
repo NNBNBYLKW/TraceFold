@@ -425,7 +425,7 @@ try {
         throw 'conflict.ingest_incomplete'
     }
 
-    $formalBefore = Read-ConflictFormalFiles -LibraryDirectory $folders['library']
+    $formalBefore = @(Read-ConflictFormalFiles -LibraryDirectory $folders['library'])
     if ($formalBefore.Count -ne 1 -or $formalBefore[0].Name -cne $photoFilename) { throw 'conflict.original_missing' }
     if ($formalBefore[0].Hash -cne $verifiedPhoto.Sha256) { throw 'conflict.hash_mismatch' }
 
@@ -537,7 +537,7 @@ try {
 
     # --- read-only facts: the original is untouched, nothing was added, the source stays ---
     $afterSnapshot = Read-ConflictSnapshot -EvidenceId 'conflict-after'
-    $formalAfter = Read-ConflictFormalFiles -LibraryDirectory $folders['library']
+    $formalAfter = @(Read-ConflictFormalFiles -LibraryDirectory $folders['library'])
 
     $original = @($formalAfter | Where-Object { $_.Name -ceq $photoFilename })
     if ($original.Count -ne 1) { throw 'conflict.original_missing' }
