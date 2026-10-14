@@ -109,6 +109,83 @@ function Get-TestCases {
                 Assert-Contains $error 'durationMs'
                 Assert-NotContains $error 'status'
             }
+        },
+        @{
+            Name = 'redaction keeps a serialized document parseable when a quoted no-space path is masked'
+            Body = {
+                $document = [ordered] @{
+                    commandLine = '"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -File T:\TraceFold5CC\scripts\run-stage5cc-ui-acceptance.ps1'
+                    scenario    = 'Conflict'
+                    counter     = 7
+                    flag        = $true
+                }
+                $json = ConvertTo-Json -InputObject $document -Depth 5
+                $safe = Protect-UiAcceptanceText -Value $json -RunToken 'token-not-in-document' -OwnedRoot 'T:\root-not-in-document'
+                $parsed = ConvertFrom-UiAcceptanceJson -Text $safe -Source 'document'
+                Assert-True ($safe.Contains('[redacted-path]')) 'the path must be masked'
+                Assert-True ($safe.Contains('\"[redacted-path]\"')) 'the escaped quotes around the mask must survive'
+                Assert-NotContains $safe 'C:\WINDOWS'
+                Assert-Equal 'Conflict' ([string] $parsed.scenario)
+                Assert-Equal 7 ([int] $parsed.counter)
+                Assert-True ($parsed.flag -eq $true) 'a boolean must stay a boolean'
+            }
+        },
+        @{
+            Name = 'redaction keeps the previous mask bound for spaced and bare paths and never rewrites other values'
+            Body = {
+                $hash = '7D1BD6791F1D40FFAFE6C7704FB2E71B6FBF6CBD26B71F9A45E62460D61312A6'
+                $cjk = -join @([char]0x4F5C, [char]0x8005, [char]0x7532)
+                $document = [ordered] @{
+                    commandLine = '"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.3.0_x64__8wekyb3d8bbwe\pwsh.exe" -NoLogo'
+                    bare        = 'raw=C:\Users\someone\AppData\Local\Temp\x.json end'
+                    hash        = $hash
+                    number      = 12345
+                    flag        = $false
+                    when        = '2026-10-14T12:00:00.0000000Z'
+                    cjk         = $cjk
+                }
+                $json = ConvertTo-Json -InputObject $document -Depth 5
+                $safe = Protect-UiAcceptanceText -Value $json -RunToken 'token-not-in-document' -OwnedRoot 'T:\root-not-in-document'
+                $parsed = ConvertFrom-UiAcceptanceJson -Text $safe -Source 'document'
+                # The spaced and bare shapes keep exactly the mask bound they had before: the fix is
+                # a no-op for them, proven against the previous pattern in the same run.
+                $oldShape = [regex]::Replace($json, '[A-Za-z]:\\[^\s"'']*', '[redacted-path]', 'IgnoreCase')
+                $newShape = [regex]::Replace($json, '[A-Za-z]:\\(?:[^\s"''\\]|\\(?!\\*"))*', '[redacted-path]', 'IgnoreCase')
+                Assert-True ($oldShape -ceq $newShape) 'a spaced or bare path must keep its previous mask bound'
+                Assert-True ($safe.Contains('[redacted-path]')) 'the paths must be masked'
+                Assert-NotContains $safe 'C:\Program Files\WindowsApps'
+                Assert-NotContains $safe 'C:\Users\someone'
+                Assert-True ($safe.Contains($hash)) 'a fixture hash must not be rewritten'
+                Assert-Equal 12345 ([int] $parsed.number)
+                Assert-True ($parsed.flag -eq $false) 'a boolean must stay a boolean'
+                Assert-True ($safe.Contains('2026-10-14T12:00:00.0000000Z')) 'an ISO instant must not be rewritten'
+                Assert-Equal $cjk ([string] $parsed.cjk)
+            }
+        },
+        @{
+            Name = 'redaction keeps escape runs and multiple quoted paths valid and masks token and root occurrences'
+            Body = {
+                $token = 'sekrit-token'
+                $root = 'C:\Users\someone\AppData\Local\Temp\TraceFold-UIA-abc'
+                $document = [ordered] @{
+                    trailing      = 'C:\dir\'
+                    quotedNoSpace = '"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe"'
+                    multi         = '"D:\aaa\b.exe" and "C:\ccc\d.exe" and bare E:\e\f.mp4'
+                    tokenNote     = 'token=' + $token
+                    rootNote      = $root + '\screenshots\x.png'
+                }
+                $json = ConvertTo-Json -InputObject $document -Depth 5
+                $safe = Protect-UiAcceptanceText -Value $json -RunToken $token -OwnedRoot $root
+                $parsed = ConvertFrom-UiAcceptanceJson -Text $safe -Source 'document'
+                Assert-True ($safe.Contains('[redacted-token]')) 'the run token must be masked'
+                Assert-NotContains $safe $token
+                Assert-NotContains $safe $root
+                Assert-NotContains $safe 'C:\WINDOWS'
+                Assert-NotContains $safe 'D:\aaa'
+                Assert-NotContains $safe 'E:\e\f.mp4'
+                Assert-True ($safe.Contains('[redacted-path]')) 'the paths must be masked'
+                Assert-True ($null -ne $parsed) 'the protected document must parse'
+            }
         }
     )
 }

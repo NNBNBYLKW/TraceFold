@@ -1384,7 +1384,11 @@ function Get-TestCases {
                 Assert-Contains $source 'library.prior_values'
                 Assert-Contains $source 'library.file_changed'
                 Assert-Contains $source 'Get-FileHash'
-                Assert-Contains $source 'snapshot --data-root'
+                # The read-only facts come from the snapshot, and the snapshot is taken through the
+                # support helper that pins the payload encoding instead of the caller's ambient one.
+                Assert-Contains $source 'Invoke-UiAcceptanceSupportCommand'
+                Assert-Contains $source "'snapshot', '--data-root'"
+                Assert-NotContains $source 'snapshot --data-root'
                 Assert-True ([regex]::Matches($source, 'Read-LibrarySnapshot -EvidenceId').Count -ge 3) 'before, applied and undone snapshots are required'
             }
         },

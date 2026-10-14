@@ -192,9 +192,14 @@ function Assert-LibraryUndoCount {
 function Read-LibrarySnapshot {
     param([Parameter(Mandatory)][string] $EvidenceId)
 
-    $raw = & $SupportPath snapshot --data-root $OwnedRoot --token $RunToken
-    if ($LASTEXITCODE -ne 0) { throw 'library.snapshot_unavailable' }
-    $data = ConvertFrom-UiAcceptanceJson -Text ($raw | Out-String) -Source 'snapshot'
+    # The support CLI publishes its snapshot as UTF-8, so it is read through the shared launcher
+    # that pins the payload encoding on both runtimes: a raw capture decodes with the console code
+    # page, and on a machine whose page is a double-byte one that mangles the values and can even
+    # consume a delimiter. The guard status is the one this invocation returned.
+    $invocation = Invoke-UiAcceptanceSupportCommand -SupportPath $SupportPath `
+        -Arguments @('snapshot', '--data-root', $OwnedRoot, '--token', $RunToken)
+    if ($invocation.ExitCode -ne 0) { throw 'library.snapshot_unavailable' }
+    $data = ConvertFrom-UiAcceptanceJson -Text $invocation.Stdout -Source 'snapshot'
     Assert-UiAcceptanceFields -InputObject $data -Required @('tables','taxonomy','formalAssets')
     $relative = (ConvertTo-UiAcceptanceSlug -Value $EvidenceId) + '-snapshot.json'
     $text = ConvertTo-Json -InputObject ([ordered] @{

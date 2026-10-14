@@ -143,8 +143,10 @@ function Get-UiAcceptanceRedactionPatterns {
         [void] $patterns.Add([pscustomobject]@{ Pattern = [regex]::Escape($machineName); Label = '[redacted-host]' })
     }
 
-    # Absolute Windows paths that escaped the explicit root replacement.
-    [void] $patterns.Add([pscustomobject]@{ Pattern = '[A-Za-z]:\\[^\s"'']*'; Label = '[redacted-path]' })
+    # Absolute Windows paths that escaped the explicit root replacement. A backslash run that
+    # reaches a quote is never consumed, so the escape of a closing quote survives and a redacted
+    # document stays parseable.
+    [void] $patterns.Add([pscustomobject]@{ Pattern = '[A-Za-z]:\\(?:[^\s"''\\]|\\(?!\\*"))*'; Label = '[redacted-path]' })
     # GUID-shaped identifiers (product entity ids, run ids).
     [void] $patterns.Add([pscustomobject]@{ Pattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'; Label = '[redacted-id]' })
     # Product card AutomationIds use Guid:N, without separators. Limit this rule to their known
