@@ -1984,7 +1984,7 @@ function Get-TestCases {
                 Assert-Equal '50-taxonomy-maintenance-undo.ps1' (Get-UiAcceptanceScenarioFile -Name 'Taxonomy')
                 $names = @(Get-UiAcceptanceScenarioName)
                 Assert-True ($names -ccontains 'Taxonomy')
-                # The aggregate entries that no task has implemented stay exactly as they were, so a
+                # The aggregate entries keep their registry names exactly as they are, so a
                 # single scenario passing can never be read as the whole suite passing.
                 Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
                 Assert-Equal '03-library.ps1' (Get-UiAcceptanceScenarioFile -Name 'Library')

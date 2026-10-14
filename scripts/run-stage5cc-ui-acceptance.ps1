@@ -403,6 +403,7 @@ foreach ($name in $pending) {
             RunToken          = $runToken
             OutputDirectory   = $runOutput
             SupportPath       = (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe')
+            WinAppCliArchivePath = $WinAppCliArchivePath
             WinAppPath        = (Join-Path $runDriver 'winapp.exe')
         }
 
