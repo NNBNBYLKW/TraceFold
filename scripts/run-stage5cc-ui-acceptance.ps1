@@ -176,6 +176,46 @@ function Get-Stage5CCOwnedLedger {
     return ,$records
 }
 
+# [D0203-E2 EVIDENCE-FUNCTION]
+<#
+.SYNOPSIS
+    Writes the D0203-E2 host evidence file: one independent document per entry process.
+
+.DESCRIPTION
+    The file lands under this run's own fresh output directory. Nothing that already exists is
+    ever overwritten by a process that has not written it itself, and every failure is returned
+    instead of thrown, so the caller folds it into its own outcome bookkeeping and an original
+    business error is never replaced by an evidence problem.
+#>
+function Write-Stage5CCHostEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)] $Document,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        [Parameter(Mandatory)][bool] $ClaimWrite
+    )
+
+    $path = Join-Path $OutputDirectory 'host-condition.json'
+    try {
+        if ([IO.File]::Exists($path) -and -not $ClaimWrite) {
+            return [pscustomobject] @{ ok = $false; reason = 'evidence_already_present'; path = $path }
+        }
+        $json = ConvertTo-Json -InputObject $Document -Depth 12
+        if (-not [string]::IsNullOrWhiteSpace($RunToken) -or -not [string]::IsNullOrWhiteSpace($OwnedRoot)) {
+            $json = Protect-UiAcceptanceText -Value $json -RunToken $RunToken -OwnedRoot $OwnedRoot
+        }
+        [void][IO.Directory]::CreateDirectory($OutputDirectory)
+        [IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))
+        return [pscustomobject] @{ ok = $true; reason = ''; path = $path }
+    }
+    catch {
+        return [pscustomobject] @{ ok = $false; reason = [string] $_.Exception.Message; path = $path }
+    }
+}
+# [/D0203-E2 EVIDENCE-FUNCTION]
+
 # --- inputs ----------------------------------------------------------------------------
 
 $product = [IO.Path]::GetFullPath($ProductDirectory)
@@ -350,6 +390,58 @@ $productHash = (Get-FileHash -LiteralPath $productExecutable -Algorithm SHA256).
 $productVersion = [string] (Get-Item -LiteralPath $productExecutable).VersionInfo.FileVersion
 if ([string]::IsNullOrWhiteSpace($productVersion)) { $productVersion = 'unknown' }
 
+# [D0203-E2 HOST-FACTS]
+# The three registry names whose verification runs under the double-byte console condition in
+# the process that actually executes them; each host records its own facts and no host reads
+# another host's setting.
+$hostConditionFamilies = @('Library', 'BatchMetadataUndo', 'LibraryFilterNaming')
+# Every captured fact carries its own state and its own error text. A field that could not be
+# read keeps state 'unknown' with the original error beside it, and is never replaced by an
+# empty placeholder that later reads like a real answer; the host version is part of the
+# evidence document itself instead of a construction that is discarded before it is written.
+$hostConditionVersion = [ordered] @{
+    psVersion = ''; psVersionState = 'unknown'; psVersionError = ''
+    psEdition = ''; psEditionState = 'unknown'; psEditionError = ''
+    clr = ''; clrState = 'unknown'; clrError = ''
+}
+try { $hostConditionVersion.psVersion = $PSVersionTable.PSVersion.ToString(); $hostConditionVersion.psVersionState = 'captured' }
+catch { $hostConditionVersion.psVersionError = [string] $_.Exception.Message }
+try { $hostConditionVersion.psEdition = [string] $PSVersionTable.PSEdition; $hostConditionVersion.psEditionState = 'captured' }
+catch { $hostConditionVersion.psEditionError = [string] $_.Exception.Message }
+try { $hostConditionVersion.clr = [Environment]::Version.ToString(); $hostConditionVersion.clrState = 'captured' }
+catch { $hostConditionVersion.clrError = [string] $_.Exception.Message }
+$hostConditionProcess = [ordered] @{
+    pid = $PID
+    startUtcTicks = $null; startUtcTicksState = 'unknown'; startUtcTicksError = ''
+    path = ''; pathState = 'unknown'; pathError = ''
+    parentPid = $null; parentPidState = 'unknown'; parentPidError = ''
+    commandLine = ''; commandLineState = 'unknown'; commandLineError = ''
+    product = [ordered] @{
+        path = $productExecutable
+        bytes = $null; bytesState = 'unknown'; bytesError = ''
+        sha256 = $productHash; fileVersion = $productVersion
+    }
+}
+try { $hostConditionProcess.startUtcTicks = [long] (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks; $hostConditionProcess.startUtcTicksState = 'captured' }
+catch { $hostConditionProcess.startUtcTicksError = [string] $_.Exception.Message }
+try { $hostConditionProcess.path = [string] (Get-Process -Id $PID).Path; $hostConditionProcess.pathState = 'captured' }
+catch { $hostConditionProcess.pathError = [string] $_.Exception.Message }
+try {
+    $parentRecord = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID) -ErrorAction Stop
+    if ($null -eq $parentRecord) { throw 'the process table answered no record for this process id' }
+    $hostConditionProcess.parentPid = [int] $parentRecord.ParentProcessId
+    $hostConditionProcess.parentPidState = 'captured'
+}
+catch { $hostConditionProcess.parentPidError = [string] $_.Exception.Message }
+try { $hostConditionProcess.commandLine = [string] [Environment]::CommandLine; $hostConditionProcess.commandLineState = 'captured' }
+catch { $hostConditionProcess.commandLineError = [string] $_.Exception.Message }
+try { $hostConditionProcess.product.bytes = [long] ((Get-Item -LiteralPath $productExecutable).Length); $hostConditionProcess.product.bytesState = 'captured' }
+catch { $hostConditionProcess.product.bytesError = [string] $_.Exception.Message }
+$hostEvidence = [ordered] @{ evidence = 'host-condition'; version = 1; hostConditionVersion = $hostConditionVersion; process = $hostConditionProcess; scenarios = (New-Object System.Collections.ArrayList) }
+$hostEvidenceClaimed = $false
+$hostEvidenceWriteFailure = ''
+# [/D0203-E2 HOST-FACTS]
+
 foreach ($name in $pending) {
     $started = [DateTimeOffset]::UtcNow
     $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -363,6 +455,10 @@ foreach ($name in $pending) {
     $reportStatus = 'NotRun'
     $executionStatus = 'NotRun'
     $reason = ''
+    $hostConditionApplies = ($hostConditionFamilies -ccontains $name)
+    $hostConditionAttempted = $false
+    $hostConditionRestoreFailed = $false
+    $savedOutputEncoding = $null
 
     # Checked again at dispatch time: an entry file may have appeared or vanished since the
     # request precheck, and this is the check that actually decides whether anything runs. The
@@ -382,6 +478,30 @@ foreach ($name in $pending) {
     }
 
     try {
+        # [D0203-E2 CONDITION-SETUP]
+        # Same family as the WorkflowScenario cases: save the process console encoding, set and
+        # measure the double-byte code page, and run this scenario's body here while it holds.
+        # The restore is the finally on this same try; both paths run it.
+        $scenarioEvidence = [ordered] @{ name = $name; condition = $null; instances = $null }
+        [void] $hostEvidence.scenarios.Add($scenarioEvidence)
+        if ($hostConditionApplies) {
+            $condition = [ordered] @{ applies = $true; established = $false; beforeCodePage = $null; duringCodePage = $null; afterCodePage = $null; restoreOk = $false; setupError = ''; restoreError = '' }
+            $scenarioEvidence.condition = $condition
+            try {
+                $savedOutputEncoding = [Console]::OutputEncoding
+                $condition.beforeCodePage = [int] $savedOutputEncoding.CodePage
+                $hostConditionAttempted = $true
+                [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(936)
+                $condition.duringCodePage = [int] [Console]::OutputEncoding.CodePage
+                if ($condition.duringCodePage -ne 936) { throw 'the double-byte host condition was not established' }
+                $condition.established = $true
+            }
+            catch {
+                $condition.setupError = [string] $_.Exception.Message
+                throw ('host_condition_not_established: ' + [string] $_.Exception.Message)
+            }
+        }
+        # [/D0203-E2 CONDITION-SETUP]
         # Preparation stays in this scope, never in a helper script block: the catch below has to
         # know the root it was given so it can stop whatever the root owns and hand it back to the
         # support tool, and every later step reads the paths produced here. Moving this away to
@@ -394,6 +514,97 @@ foreach ($name in $pending) {
         [void][IO.Directory]::CreateDirectory($runDriver)
         Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
         if (-not [IO.File]::Exists((Join-Path $runDriver 'winapp.exe'))) { throw 'pinned_driver_executable_missing' }
+
+        # [D0203-E2 INSTANCE-FACTS]
+        # The instances that are about to be used are bound per member, from this run's own records,
+        # after the copy and the extraction and before anything is dispatched; errors are stored beside
+        # the fields instead of being collapsed into one string. The support copy is compared member by
+        # member against the published source it was copied from; the extracted driver executable is
+        # compared against the member bytes inside the verified archive itself, because the archive hash
+        # alone says nothing about the file that will actually run. Cleanup later deletes these
+        # instances; the facts recorded here stay readable without them.
+        $instanceFacts = [ordered] @{
+            support = [ordered] @{
+                sourceRoot = ''; instanceRoot = ''
+                members = @(); memberCount = 0; allMatchSource = $false; captureState = 'unknown'; error = ''
+            }
+            driver = [ordered] @{
+                archivePath = ''; archiveBytes = $null; archiveSha256 = ''
+                manifestSha256 = ''; manifestArchiveSize = $null; matchesManifest = $false
+                winappExePath = ''; winappExeBytes = $null; winappExeSha256 = ''; winappExeFileVersion = ''
+                archiveMemberName = ''; archiveMemberBytes = $null; archiveMemberSha256 = ''
+                matchesArchiveMember = $false; memberReadState = 'unknown'; error = ''
+            }
+        }
+        try {
+            $supportSourceFull = [IO.Path]::GetFullPath($supportRoot)
+            $supportInstanceFull = [IO.Path]::GetFullPath($runSupport)
+            $instanceFacts.support.sourceRoot = Protect-UiAcceptanceText -Value $supportSourceFull -RunToken $runToken -OwnedRoot $runRoot
+            $instanceFacts.support.instanceRoot = Protect-UiAcceptanceText -Value $supportInstanceFull -RunToken $runToken -OwnedRoot $runRoot
+            $memberRows = New-Object System.Collections.ArrayList
+            foreach ($memberFile in @(Get-ChildItem -LiteralPath $supportInstanceFull -Recurse -File | Sort-Object FullName)) {
+                $relative = $memberFile.FullName.Substring($supportInstanceFull.Length).TrimStart([char] 92)
+                $memberRow = [ordered] @{ relative = $relative; instanceBytes = $null; instanceSha256 = ''; sourceBytes = $null; sourceSha256 = ''; matchesSource = $false; state = 'unknown'; error = '' }
+                try {
+                    $memberRow.instanceBytes = [long] $memberFile.Length
+                    $memberRow.instanceSha256 = (Get-FileHash -LiteralPath $memberFile.FullName -Algorithm SHA256).Hash
+                    $sourceMember = Join-Path $supportSourceFull $relative
+                    if (-not [IO.File]::Exists($sourceMember)) { throw ('the published source member is missing: ' + $relative) }
+                    $memberRow.sourceBytes = [long] ((Get-Item -LiteralPath $sourceMember).Length)
+                    $memberRow.sourceSha256 = (Get-FileHash -LiteralPath $sourceMember -Algorithm SHA256).Hash
+                    $memberRow.matchesSource = ($memberRow.instanceSha256 -ceq $memberRow.sourceSha256 -and $memberRow.instanceBytes -eq $memberRow.sourceBytes)
+                    $memberRow.state = 'captured'
+                }
+                catch { $memberRow.error = [string] $_.Exception.Message }
+                [void] $memberRows.Add($memberRow)
+            }
+            $instanceFacts.support.members = $memberRows.ToArray()
+            $instanceFacts.support.memberCount = $memberRows.Count
+            $instanceFacts.support.allMatchSource = ($memberRows.Count -gt 0 -and @($memberRows | Where-Object { -not [bool] $_.matchesSource }).Count -eq 0)
+            $instanceFacts.support.captureState = 'captured'
+        }
+        catch { $instanceFacts.support.error = [string] $_.Exception.Message }
+        try {
+            $instanceFacts.driver.archivePath = Protect-UiAcceptanceText -Value $archivePath -RunToken $runToken -OwnedRoot $runRoot
+            $instanceFacts.driver.archiveBytes = [long] ((Get-Item -LiteralPath $archivePath).Length)
+            $instanceFacts.driver.archiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+            $instanceFacts.driver.manifestSha256 = [string] $driverManifest.sha256
+            $instanceFacts.driver.manifestArchiveSize = [long] $driverManifest.archiveSize
+            $instanceFacts.driver.matchesManifest = ($instanceFacts.driver.archiveSha256 -ceq [string] $driverManifest.sha256 -and $instanceFacts.driver.archiveBytes -eq [long] $driverManifest.archiveSize)
+            $winappInstance = Join-Path $runDriver 'winapp.exe'
+            $instanceFacts.driver.winappExePath = Protect-UiAcceptanceText -Value $winappInstance -RunToken $runToken -OwnedRoot $runRoot
+            $instanceFacts.driver.winappExeBytes = [long] ((Get-Item -LiteralPath $winappInstance).Length)
+            $instanceFacts.driver.winappExeSha256 = (Get-FileHash -LiteralPath $winappInstance -Algorithm SHA256).Hash
+            $instanceFacts.driver.winappExeFileVersion = [string] ((Get-Item -LiteralPath $winappInstance).VersionInfo.FileVersion)
+            # Both loader names are attempted so the same text runs on both hosts: Windows PowerShell
+            # needs the compression assemblies loaded before their types can be used.
+            try { Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop } catch { }
+            try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
+            $driverZip = [IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($archivePath))
+            try {
+                $driverMember = @($driverZip.Entries | Where-Object { $_.FullName -ceq 'winapp.exe' })
+                if ($driverMember.Count -ne 1) { throw ('the archive carries ' + $driverMember.Count + ' winapp.exe members') }
+                $memberStream = $driverMember[0].Open()
+                try {
+                    $memberBuffer = New-Object IO.MemoryStream
+                    try { $memberStream.CopyTo($memberBuffer); $memberBytes = $memberBuffer.ToArray() }
+                    finally { $memberBuffer.Dispose() }
+                }
+                finally { $memberStream.Dispose() }
+                $memberHasher = [Security.Cryptography.SHA256]::Create()
+                try { $memberHash = ([BitConverter]::ToString($memberHasher.ComputeHash($memberBytes))).Replace('-', '') }
+                finally { $memberHasher.Dispose() }
+                $instanceFacts.driver.archiveMemberName = 'winapp.exe'
+                $instanceFacts.driver.archiveMemberBytes = [long] $memberBytes.Length
+                $instanceFacts.driver.archiveMemberSha256 = $memberHash
+                $instanceFacts.driver.matchesArchiveMember = ($instanceFacts.driver.winappExeSha256 -ceq $memberHash -and $instanceFacts.driver.winappExeBytes -eq [long] $memberBytes.Length)
+                $instanceFacts.driver.memberReadState = 'captured'
+            }
+            finally { $driverZip.Dispose() }
+        }
+        catch { $instanceFacts.driver.error = [string] $_.Exception.Message }
+        $scenarioEvidence.instances = $instanceFacts
+        # [/D0203-E2 INSTANCE-FACTS]
 
         $entryArguments = @{
             ScenarioId        = (ConvertTo-UiAcceptanceSlug -Value $name)
@@ -474,8 +685,62 @@ foreach ($name in $pending) {
             }
         }
     }
+    finally {
+        # [D0203-E2 CONDITION-RESTORE]
+        # Runs whether the body succeeded, failed or threw: hand the console back and read it.
+        if ($hostConditionApplies -and $hostConditionAttempted) {
+            try {
+                [Console]::OutputEncoding = $savedOutputEncoding
+                $afterCodePage = [int] [Console]::OutputEncoding.CodePage
+                $scenarioEvidence.condition.afterCodePage = $afterCodePage
+                $scenarioEvidence.condition.restoreOk = ($afterCodePage -eq [int] $savedOutputEncoding.CodePage)
+                if (-not $scenarioEvidence.condition.restoreOk) {
+                    $hostConditionRestoreFailed = $true
+                    try { [Console]::Error.WriteLine('e2-host-condition-restore-mismatch') } catch { }
+                }
+            }
+            catch {
+                $hostConditionRestoreFailed = $true
+                try {
+                    $scenarioEvidence.condition.restoreError = [string] $_.Exception.Message
+                    $scenarioEvidence.condition.restoreOk = $false
+                }
+                catch { }
+                try { [Console]::Error.WriteLine('e2-host-condition-restore-failed') } catch { }
+            }
+        }
+        # [/D0203-E2 CONDITION-RESTORE]
+    }
 
     $clock.Stop()
+
+    # [D0203-E2 EVIDENCE-WRITE]
+    # The independent evidence document is written here, before the outcome is booked, so an
+    # evidence problem is visible in this entry's own status without touching the report schema.
+    try {
+        $evidenceWrite = Write-Stage5CCHostEvidence -OutputDirectory $output -Document $hostEvidence -RunToken $runToken -OwnedRoot $runRoot -ClaimWrite $hostEvidenceClaimed
+        if ([bool] $evidenceWrite.ok) { $hostEvidenceClaimed = $true }
+        else {
+            $hostEvidenceWriteFailure = [string] $evidenceWrite.reason
+            try { [Console]::Error.WriteLine('e2-host-evidence-write-failed: ' + [string] $evidenceWrite.reason) } catch { }
+        }
+    }
+    catch {
+        $hostEvidenceWriteFailure = [string] $_.Exception.Message
+        try { [Console]::Error.WriteLine('e2-host-evidence-write-failed') } catch { }
+    }
+    # [/D0203-E2 EVIDENCE-WRITE]
+
+    # [D0203-E2 FINALIZE]
+    # A failed host condition, a failed restore or a failed evidence write never reads as a
+    # pass, and an existing business failure or block is never overwritten by these markers.
+    if ($hostConditionRestoreFailed -or $hostEvidenceWriteFailure -ne '') {
+        if ($executionStatus -cne 'Failed' -and $executionStatus -cne 'Blocked') { $executionStatus = 'Failed' }
+        if ($hostConditionRestoreFailed -and $reason -notlike '*host_condition_restore_failed*') { $reason += '; host_condition_restore_failed' }
+        if ($hostEvidenceWriteFailure -ne '' -and $reason -notlike '*host_evidence_write_failed*') { $reason += '; host_evidence_write_failed' }
+    }
+    # [/D0203-E2 FINALIZE]
+
     $status = Get-Stage5CCEntryEffectiveStatus -ReportStatus $reportStatus -ExecutionStatus $executionStatus
     Write-Stage5CCIndexEntry -Index $index -Entry @{
         id = $name; status = $status; reportStatus = $reportStatus; executionStatus = $executionStatus
