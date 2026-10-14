@@ -367,6 +367,78 @@ function Invoke-Stage5CCEntry {
     return $LASTEXITCODE
 }
 
+function ConvertFrom-Stage5CCPreservedJson {
+    # JSON timestamps must survive as the exact lexemes the writer produced: on PowerShell 7 the
+    # bare serializer would bind every ISO string to a DateTime, and the offset and the fractional
+    # precision would be gone before anything reads the value. The capability guard keeps the
+    # Windows PowerShell behaviour (which preserves strings natively) on its own branch.
+    param([Parameter(Mandatory)][string] $Text)
+
+    $convertCommand = Get-Command -Name ConvertFrom-Json -ErrorAction SilentlyContinue
+    if ($null -ne $convertCommand -and $convertCommand.Parameters.ContainsKey('DateKind')) {
+        return ($Text | ConvertFrom-Json -DateKind String)
+    }
+    return ($Text | ConvertFrom-Json)
+}
+
+function Get-Stage5CCCheckedInstant {
+    # The ONE time semantics of every checkedUtc comparison. It reads a value that was PRESERVED
+    # from JSON as text and answers with named facts; it never repairs a value, never defaults it
+    # and never lets anything but an explicit-offset instant through:
+    #   absent-or-null              the field is missing, JSON null, empty or blank
+    #   not-a-string:<type>         a JSON value that is not a preserved string
+    #   not-an-explicit-offset-...  text that is not an ISO round-trip instant with an explicit
+    #                               offset - the culture shaped date a lost-offset round trip
+    #                               produces ('10/14/2026 07:21:05') can never pass this gate
+    #   unparsable                  the shape matches but the value does not parse
+    # The instant is parsed with the invariant culture and kept as UTC ticks, so the comparison
+    # cannot depend on the host's day/month order, on the current culture or on a re-formatting
+    # that drops the offset or the fractional precision. The parse style below is the one the
+    # development probe measured as legal on BOTH fixed hosts (every DateTimeStyles value,
+    # RoundtripKind included, parses and preserves the instant there).
+    param($Value, [Parameter(Mandatory)][string] $Field)
+
+    $fact = [ordered] @{
+        field = $Field; ok = $false; reason = ''; text = ''
+        utcTicks = [long] 0; offset = ''; fractionalDigits = -1
+    }
+    if ($null -eq $Value) { $fact.reason = 'absent-or-null'; return [pscustomobject] $fact }
+    if (-not ($Value -is [string])) { $fact.reason = ('not-a-string:' + $Value.GetType().Name); return [pscustomobject] $fact }
+    $fact.text = [string] $Value
+    if ([string]::IsNullOrWhiteSpace($fact.text)) { $fact.reason = 'absent-or-null'; return [pscustomobject] $fact }
+    $pattern = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2})$'
+    if ($fact.text -cnotmatch $pattern) { $fact.reason = 'not-an-explicit-offset-instant'; return [pscustomobject] $fact }
+    $fraction = [regex]::Match($fact.text, '\.(\d{1,7})')
+    $fact.fractionalDigits = $(if ($fraction.Success) { $fraction.Groups[1].Value.Length } else { 0 })
+    $suffix = [regex]::Match($fact.text, '(Z|[+-]\d{2}:\d{2})$')
+    if ($suffix.Success) { $fact.offset = [string] $suffix.Groups[1].Value }
+    try {
+        $instant = [DateTimeOffset]::Parse($fact.text, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+    }
+    catch { $fact.reason = 'unparsable'; return [pscustomobject] $fact }
+    $fact.utcTicks = $instant.UtcTicks
+    $fact.ok = $true
+    $fact.reason = 'explicit-offset'
+    return [pscustomobject] $fact
+}
+
+function Test-Stage5CCSummaryNotOlder {
+    # The shared comparison of two checkedUtc values: both sides must be preserved explicit-offset
+    # instants and the order is decided on UTC ticks only. Every caller receives the two facts as
+    # well, so a refusal names the side and the reason instead of a bare 'not fresh'.
+    param($BeforeValue, $AfterValue)
+
+    $before = Get-Stage5CCCheckedInstant -Value $BeforeValue -Field 'before'
+    $after = Get-Stage5CCCheckedInstant -Value $AfterValue -Field 'after'
+    $bothOk = ([bool] $before.ok) -and ([bool] $after.ok)
+    return [pscustomobject] @{
+        ok       = $bothOk
+        notOlder = ($bothOk -and ($after.utcTicks -ge $before.utcTicks))
+        before   = $before
+        after    = $after
+    }
+}
+
 function Read-Stage5CCSummary {
     param([Parameter(Mandatory)][string] $OutputDirectory)
 
@@ -375,7 +447,7 @@ function Read-Stage5CCSummary {
     $text = [IO.File]::ReadAllText($path)
     return [pscustomobject]@{
         Text    = $text
-        Summary = ($text | ConvertFrom-Json)
+        Summary = (ConvertFrom-Stage5CCPreservedJson -Text $text)
     }
 }
 
@@ -1357,7 +1429,172 @@ function Get-TestCases {
 
                     $reread = (Read-Stage5CCSummary -OutputDirectory $first).Summary
                     Assert-Equal 0 $reread.checks.missingCount
-                    Assert-True ([DateTimeOffset]::Parse([string]$after.checks.checkedUtc) -ge [DateTimeOffset]::Parse([string]$before.checks.checkedUtc))
+                    $order = Test-Stage5CCSummaryNotOlder -BeforeValue $before.checks.checkedUtc -AfterValue $after.checks.checkedUtc
+                    Assert-True $order.ok ('both checkedUtc values must be preserved explicit-offset instants (before=' + $order.before.reason + ', after=' + $order.after.reason + ')')
+                    Assert-True $order.notOlder 'the recomputed precheck must not carry an earlier instant than the first run'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'the checkedUtc reader preserves explicit-offset lexemes and refuses every other shape'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    # Controlled summary materials are written to disk exactly as summaries are and
+                    # read back through Read-Stage5CCSummary; the facts below come from the real
+                    # reading and comparison code, never from a second model of it.
+                    $writeMaterial = {
+                        param([string] $Directory, [string] $Text)
+                        [void][IO.Directory]::CreateDirectory($Directory)
+                        [IO.File]::WriteAllText((Join-Path $Directory 'summary.json'), $Text, [Text.UTF8Encoding]::new($false))
+                    }
+                    $readCheckedUtc = {
+                        param([string] $Directory)
+                        $summary = (Read-Stage5CCSummary -OutputDirectory $Directory).Summary
+                        $prop = $summary.checks.PSObject.Properties['checkedUtc']
+                        if ($null -eq $prop) { return $null }
+                        return $prop.Value
+                    }
+
+                    # The real capability branch of this host: PowerShell 7 rewrites ISO strings to
+                    # DateTime unless the guard asks for strings; Windows PowerShell preserves them
+                    # natively. The two fixed hosts must therefore answer differently here, and the
+                    # read below must preserve the lexeme on BOTH.
+                    $hasDateKind = (Get-Command -Name ConvertFrom-Json).Parameters.ContainsKey('DateKind')
+                    Assert-Equal ($PSVersionTable.PSEdition -eq 'Core') $hasDateKind
+
+                    $rows = @(
+                        # day <= 12 and day >= 13: the old defect changed its verdict with the day
+                        # of the month, so both halves of the range are pinned.
+                        @{ label = 'day-05'; text = '{"checks":{"checkedUtc":"2026-10-05T07:21:05.1234567Z"}}'
+                           ok = $true; reason = 'explicit-offset'; ticks = [long] 639267816651234567
+                           offset = 'Z'; fraction = 7; lexeme = '2026-10-05T07:21:05.1234567Z' },
+                        @{ label = 'day-14'; text = '{"checks":{"checkedUtc":"2026-10-14T07:21:05.1234567Z"}}'
+                           ok = $true; reason = 'explicit-offset'; ticks = [long] 639275592651234567
+                           offset = 'Z'; fraction = 7; lexeme = '2026-10-14T07:21:05.1234567Z' },
+                        # a non-zero offset and the same instant expressed in another zone
+                        @{ label = 'plus-08'; text = '{"checks":{"checkedUtc":"2026-10-14T15:21:05.1234567+08:00"}}'
+                           ok = $true; reason = 'explicit-offset'; ticks = [long] 639275592651234567
+                           offset = '+08:00'; fraction = 7; lexeme = '2026-10-14T15:21:05.1234567+08:00' },
+                        @{ label = 'minus-05'; text = '{"checks":{"checkedUtc":"2026-10-14T07:21:05.1234567-05:00"}}'
+                           ok = $true; reason = 'explicit-offset'; ticks = [long] 639275772651234567
+                           offset = '-05:00'; fraction = 7; lexeme = '2026-10-14T07:21:05.1234567-05:00' },
+                        # the fraction is optional; seven digits keep the 100 ns resolution
+                        @{ label = 'no-fraction'; text = '{"checks":{"checkedUtc":"2026-10-14T07:21:05Z"}}'
+                           ok = $true; reason = 'explicit-offset'; ticks = [long] 639275592650000000
+                           offset = 'Z'; fraction = 0; lexeme = '2026-10-14T07:21:05Z' },
+                        @{ label = 'one-tick'; text = '{"checks":{"checkedUtc":"2026-10-14T07:21:05.1234568Z"}}'
+                           ok = $true; reason = 'explicit-offset'; ticks = [long] 639275592651234568
+                           offset = 'Z'; fraction = 7; lexeme = '2026-10-14T07:21:05.1234568Z' },
+                        # refusals - none of these may pass as an instant
+                        @{ label = 'absent'; text = '{"checks":{}}'; ok = $false; reason = 'absent-or-null' },
+                        @{ label = 'null'; text = '{"checks":{"checkedUtc":null}}'; ok = $false; reason = 'absent-or-null' },
+                        @{ label = 'blank'; text = '{"checks":{"checkedUtc":"   "}}'; ok = $false; reason = 'absent-or-null' },
+                        @{ label = 'number'; text = '{"checks":{"checkedUtc":20261014}}'; ok = $false; reason = 'not-a-string' },
+                        @{ label = 'culture-shaped'; text = '{"checks":{"checkedUtc":"10/14/2026 07:21:05"}}'
+                           ok = $false; reason = 'not-an-explicit-offset-instant' },
+                        @{ label = 'no-offset'; text = '{"checks":{"checkedUtc":"2026-10-14T07:21:05"}}'
+                           ok = $false; reason = 'not-an-explicit-offset-instant' },
+                        @{ label = 'unparsable'; text = '{"checks":{"checkedUtc":"2026-13-45T07:21:05.1234567Z"}}'
+                           ok = $false; reason = 'unparsable' }
+                    )
+
+                    for ($i = 0; $i -lt $rows.Count; $i++) {
+                        $row = $rows[$i]
+                        $dir = Join-Path $base ('case-' + $row.label)
+                        & $writeMaterial $dir $row.text
+                        $value = & $readCheckedUtc $dir
+                        $fact = Get-Stage5CCCheckedInstant -Value $value -Field $row.label
+                        if ($row.ok) {
+                            Assert-True ($value -is [string]) ($row.label + ': the checkedUtc lexeme must stay a string')
+                            Assert-Equal $true $fact.ok ($row.label + ': must read as an instant (' + $fact.reason + ')')
+                            Assert-Equal 'explicit-offset' $fact.reason ($row.label + ': reason')
+                            Assert-Equal $row.lexeme $fact.text ($row.label + ': the preserved lexeme')
+                            Assert-Equal $row.offset $fact.offset ($row.label + ': the explicit offset')
+                            Assert-Equal $row.fraction $fact.fractionalDigits ($row.label + ': the fractional precision')
+                            Assert-Equal $row.ticks $fact.utcTicks ($row.label + ': the fixed UTC ticks')
+                        }
+                        else {
+                            Assert-Equal $false $fact.ok ($row.label + ': must be refused, not read as an instant')
+                            if ($row.reason -ceq 'not-a-string') {
+                                Assert-True ($fact.reason -like 'not-a-string:*') ($row.label + ': reason (' + $fact.reason + ')')
+                            }
+                            else {
+                                Assert-Equal $row.reason $fact.reason ($row.label + ': reason')
+                            }
+                        }
+                    }
+
+                    # the two exact facts of the one-tick pair, measured against each other
+                    $one = Get-Stage5CCCheckedInstant -Value '2026-10-14T07:21:05.1234567Z' -Field 'pair-before'
+                    $two = Get-Stage5CCCheckedInstant -Value '2026-10-14T07:21:05.1234568Z' -Field 'pair-after'
+                    Assert-Equal ([long] 1) ($two.utcTicks - $one.utcTicks) 'the pair must differ by exactly one tick'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'the checkedUtc comparison holds under a culture switch and the culture is restored'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    $writeMaterial = {
+                        param([string] $Directory, [string] $Text)
+                        [void][IO.Directory]::CreateDirectory($Directory)
+                        [IO.File]::WriteAllText((Join-Path $Directory 'summary.json'), $Text, [Text.UTF8Encoding]::new($false))
+                    }
+                    $readCheckedUtc = {
+                        param([string] $Directory)
+                        $summary = (Read-Stage5CCSummary -OutputDirectory $Directory).Summary
+                        $prop = $summary.checks.PSObject.Properties['checkedUtc']
+                        if ($null -eq $prop) { return $null }
+                        return $prop.Value
+                    }
+
+                    $tickA = Join-Path $base 'tick-a'
+                    $tickB = Join-Path $base 'tick-b'
+                    $zoneA = Join-Path $base 'zone-a'
+                    $zoneB = Join-Path $base 'zone-b'
+                    & $writeMaterial $tickA '{"checks":{"checkedUtc":"2026-10-05T07:21:05.1234567Z"}}'
+                    & $writeMaterial $tickB '{"checks":{"checkedUtc":"2026-10-05T07:21:05.1234568Z"}}'
+                    & $writeMaterial $zoneA '{"checks":{"checkedUtc":"2026-10-14T07:21:05.1234567Z"}}'
+                    & $writeMaterial $zoneB '{"checks":{"checkedUtc":"2026-10-14T15:21:05.1234567+08:00"}}'
+
+                    # The comparison must give the same answer under this process's native culture
+                    # and under a deliberately contrasting one; each phase saves the culture,
+                    # switches, runs the same code, and the finally restores it and reads it back.
+                    foreach ($phase in @([System.Threading.Thread]::CurrentThread.CurrentCulture.Name, 'en-US')) {
+                        $saved = [System.Threading.Thread]::CurrentThread.CurrentCulture
+                        try {
+                            [System.Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($phase)
+                            Assert-Equal $phase ([System.Threading.Thread]::CurrentThread.CurrentCulture.Name) ('phase ' + $phase + ': the switch must be in effect')
+
+                            $tickValueA = & $readCheckedUtc $tickA
+                            $tickValueB = & $readCheckedUtc $tickB
+                            $forward = Test-Stage5CCSummaryNotOlder -BeforeValue $tickValueA -AfterValue $tickValueB
+                            Assert-True $forward.ok ('phase ' + $phase + ': both instants must read (' + $forward.before.reason + ', ' + $forward.after.reason + ')')
+                            Assert-True $forward.notOlder ('phase ' + $phase + ': one tick later is not older')
+                            Assert-Equal ([long] 1) ($forward.after.utcTicks - $forward.before.utcTicks) ('phase ' + $phase + ': the exact tick delta')
+
+                            $reverse = Test-Stage5CCSummaryNotOlder -BeforeValue $tickValueB -AfterValue $tickValueA
+                            Assert-True $reverse.ok ('phase ' + $phase + ': both instants must read (reverse)')
+                            Assert-True (-not $reverse.notOlder) ('phase ' + $phase + ': the reverse order must not pass')
+
+                            $zoneValueA = & $readCheckedUtc $zoneA
+                            $zoneValueB = & $readCheckedUtc $zoneB
+                            $sameForward = Test-Stage5CCSummaryNotOlder -BeforeValue $zoneValueA -AfterValue $zoneValueB
+                            $sameReverse = Test-Stage5CCSummaryNotOlder -BeforeValue $zoneValueB -AfterValue $zoneValueA
+                            Assert-True $sameForward.ok ('phase ' + $phase + ': both zone spellings must read')
+                            Assert-True $sameForward.notOlder ('phase ' + $phase + ': the same instant is not older')
+                            Assert-True $sameReverse.notOlder ('phase ' + $phase + ': the same instant is not older, either way')
+                            Assert-Equal $sameForward.before.utcTicks $sameForward.after.utcTicks ('phase ' + $phase + ': the same instant must have identical UTC ticks')
+                        }
+                        finally {
+                            [System.Threading.Thread]::CurrentThread.CurrentCulture = $saved
+                            Assert-Equal $saved.Name ([System.Threading.Thread]::CurrentThread.CurrentCulture.Name) ('phase ' + $phase + ': the culture must be restored')
+                        }
+                    }
                 }
                 finally { Remove-UiTestTree -Path $base }
             }
