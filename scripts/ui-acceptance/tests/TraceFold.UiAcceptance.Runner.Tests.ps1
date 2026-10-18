@@ -333,7 +333,7 @@ function New-Stage5CCFakeRepository {
     $fakeUiRoot = Join-Path $scripts 'ui-acceptance'
     $fakeScenarios = Join-Path $fakeUiRoot 'scenarios'
     [void][IO.Directory]::CreateDirectory($fakeScenarios)
-    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows')) {
+    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')) {
         Copy-Item -LiteralPath (Join-Path $script:uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')) -Destination (Join-Path $fakeUiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1'))
     }
     Copy-Item -LiteralPath (Join-Path $script:root 'scripts/run-stage5cc-ui-acceptance.ps1') -Destination (Join-Path $scripts 'run-stage5cc-ui-acceptance.ps1')
@@ -743,6 +743,158 @@ function Get-TestCases {
                     Assert-Equal 'Passed' $report.scenarios[0].status
                     Assert-Equal 'NotRun' $report.cleanVmStatus
                     Assert-True ($report.acceptanceId -match '^run-[0-9a-f]{32}$')
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            # The producer is the real metadata helper and the consumer is the real Runner and
+            # report writer, including its own redaction. A block produced by the helper and
+            # checked by the helper alone (M12) never proves what the writer does with it.
+            Name = 'a real metadata evidence block crosses the runner writer without collapsing null, zero, false, empty or Int64'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $root = Join-Path $base 'owned'
+                [void][IO.Directory]::CreateDirectory($root)
+                # A fixture capability value, not a real one: it is the exact RunToken the writer
+                # receives, and it also rides inside a metadata text field, so the report proves
+                # replacement instead of merely proving the token absent.
+                $token = 'fixture-token-7f3a9c2e'
+                Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Metadata.psm1') -Force -DisableNameChecking
+                try {
+                    $product = Join-Path $base 'product'
+                    [void][IO.Directory]::CreateDirectory($product)
+                    $exe = Join-Path $product 'TraceFold.Media.exe'
+                    [IO.File]::WriteAllBytes($exe, [Text.UTF8Encoding]::new($false).GetBytes('TEST_ONLY_NOT_A_PRODUCT'))
+
+                    $provenance = Get-UiMetadataSourceProvenance -ProductExecutable $exe `
+                        -RepositoryRoot $script:root -CandidateSha256 $null
+                    $identity = Get-UiMetadataProductIdentity -ProductExecutable $exe -ProductDirectory $product
+                    $driver = Get-UiMetadataDriverIdentity -ArchivePath (Join-Path $base 'not-here.zip') `
+                        -ExtractedExePath (Join-Path $base 'not-here.exe')
+                    $fixtures = Get-UiMetadataFixtureManifest -DeclaredAssets @() -RepositoryRoot $base
+                    $observation = Get-UiMetadataHostObservation
+                    $block = New-UiMetadataReportBlock -SourceProvenance $provenance -ProductIdentity $identity `
+                        -DriverIdentity $driver -FixtureManifest $fixtures -HostObservation $observation -HostOs $root
+
+                    $metadata = @{
+                        sourceCommit = $block.sourceCommit
+                        productHash = $block.productHash
+                        productVersion = ('1.0.0+' + $token)
+                        driverVersion = $block.driverVersion
+                        driverHash = $block.driverHash
+                        fixtureHashes = @()
+                        hostOs = $root
+                        dpi = 0
+                        theme = $null
+                        viewport = @{ width = [long] 9007199254740993; height = 0; frozen = $false }
+                        metadataEvidence = $block.metadataEvidence
+                    }
+                    $result = Invoke-UiAcceptanceRun -ScenarioId 'metadata-consumer' `
+                        -Scenario { [pscustomobject]@{Status='Passed'} } -Cleanup { } `
+                        -OwnedRoot $root -OutputDirectory (Join-Path $base 'out') -Metadata $metadata `
+                        -RunToken $token
+                    Assert-Equal 0 $result.ExitCode
+                    $json = [IO.File]::ReadAllText($result.ReportPath)
+                    $report = $json | ConvertFrom-Json
+
+                    # The writer's own redaction ran on metadata text, not only on a scenario reason.
+                    Assert-True ($json.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -lt 0) 'the owned root does not reach the report'
+                    Assert-True ($json.IndexOf('[redacted-path]', [StringComparison]::Ordinal) -ge 0) 'the path was replaced by the shared label'
+                    # The token rides inside productVersion, so absence alone would also be true if
+                    # the value had simply been dropped. Both halves are asserted: no original value
+                    # anywhere in the document, and the shared label in that exact field.
+                    Assert-True ($json.IndexOf($token, [StringComparison]::Ordinal) -lt 0) 'the fixture token does not appear as an original value'
+                    Assert-True ($json.IndexOf('[redacted-token]', [StringComparison]::Ordinal) -ge 0) 'the fixture token was replaced by the shared label'
+                    Assert-Equal '1.0.0+[redacted-token]' ([string] $report.productVersion) 'the token inside a metadata field is replaced in place'
+
+                    # Parsed facts, recorded before any assertion can abort the case: the values,
+                    # their types and their null-state are the evidence, not the JSON whitespace.
+                    $facts = [ordered] @{
+                        case = 'metadata-consumer'
+                        dpi = $report.dpi
+                        dpiType = $(if ($null -eq $report.dpi) { 'null' } else { $report.dpi.GetType().Name })
+                        themePresent = [bool] ($null -ne $report.PSObject.Properties['theme'])
+                        themeIsNull = [bool] ($null -eq $report.theme)
+                        fixtureHashesType = $(if ($null -eq $report.fixtureHashes) { 'null' } else { $report.fixtureHashes.GetType().Name })
+                        fixtureHashesCount = $(if ($null -eq $report.fixtureHashes) { $null } else { @($report.fixtureHashes).Count })
+                        frozen = $report.viewport.frozen
+                        frozenType = $(if ($null -eq $report.viewport.frozen) { 'null' } else { $report.viewport.frozen.GetType().Name })
+                        width = [string] $report.viewport.width
+                        widthType = $(if ($null -eq $report.viewport.width) { 'null' } else { $report.viewport.width.GetType().Name })
+                        metadataEvidencePresent = [bool] ($null -ne $report.metadataEvidence)
+                        sourceCommitLength = ([string] $report.sourceCommit).Length
+                        sourceCommit = [string] $report.sourceCommit
+                        hostOs = [string] $report.hostOs
+                    }
+                    Write-Host ('metadata-consumer-facts ' + ($facts | ConvertTo-Json -Compress -Depth 4))
+
+                    # Four absent-looking values, four different facts. Types and values are
+                    # asserted on the parsed object; JSON layout is not a product contract.
+                    Assert-True ($facts.dpiType -ne 'null') 'a measured zero is present'
+                    Assert-True ($facts.dpi -eq 0) 'a measured zero stays zero'
+                    Assert-True ($facts.dpiType -in @('Int32', 'Int64')) 'the measured zero keeps an integer type'
+                    Assert-Equal $true $facts.themePresent 'the theme field is present'
+                    Assert-Equal $true $facts.themeIsNull 'an unknown theme stays null'
+                    Assert-Equal 'Object[]' $facts.fixtureHashesType 'an empty fixture set is an array'
+                    Assert-Equal 0 ([int] $facts.fixtureHashesCount) 'the empty fixture set has no entries'
+                    Assert-Equal 'Boolean' $facts.frozenType 'false is a boolean'
+                    Assert-Equal $false $facts.frozen 'false is not dropped'
+                    Assert-Equal 'Int64' $facts.widthType 'an Int64 beyond double precision keeps its type'
+                    Assert-Equal '9007199254740993' $facts.width 'the Int64 value survives without rounding'
+                    Assert-Equal $true $facts.metadataEvidencePresent 'the evidence object reaches the report'
+
+                    # The field itself, not a substring anywhere in the file: hostOs must be the
+                    # label exactly, and the original path must not survive in it.
+                    Assert-Equal '[redacted-path]' ([string] $report.hostOs) 'the host field is exactly the shared label'
+                    Assert-True ([string] $report.hostOs -cne [string] $root) 'the host field is not the original path'
+                    Assert-Equal 40 $facts.sourceCommitLength 'the script repository HEAD is its own domain'
+                    Assert-True ([string] $report.sourceCommit -match '^[0-9a-fA-F]{40}$') 'the script repository HEAD is a commit'
+                    Assert-Equal $true ([bool] $report.metadataEvidence.provenance.domainsSeparate)
+                    Assert-True ([string] $report.metadataEvidence.sourceCommitDomain.state -ne '') 'the commit domain carries its state'
+                    # The product build commit is not back-filled from the repository HEAD.
+                    Assert-True ($null -eq $report.metadataEvidence.provenance.productBuildCommit) 'the product build commit stays unknown beside its state'
+                    Assert-True ([string] $report.metadataEvidence.productClasses.classes -ne '') 'the digest classes keep their separation note'
+                    Assert-True ([string] $report.productHash -match '^[0-9A-F]{64}$') 'the exe digest class is not substituted by another digest'
+                    # An unknown digest is a null beside its state, not a zero or an empty string.
+                    Assert-True ($null -eq $report.metadataEvidence.driverClasses.archiveSha256) 'an unknown archive digest stays null'
+                    Assert-True ([string] $report.metadataEvidence.driverClasses.archiveState -ne '') 'the unknown archive digest carries its state'
+
+                    # A legacy caller: no metadataEvidence key at all, one fixture row instead of
+                    # none, and the optional run token omitted. The projection must not turn the
+                    # missing key into a terminating lookup, and a one-element array must stay an
+                    # array instead of collapsing to a bare object.
+                    $legacyMetadata = @{
+                        sourceCommit = 'abc'; productHash = 'hash'; productVersion = '1'
+                        driverVersion = '0.5.0'; driverHash = 'hash'
+                        fixtureHashes = @(@{ fixedFilename = 'only-one'; declaredBytes = 1 })
+                        hostOs = 'Windows'; dpi = 96; theme = 'Light'
+                        viewport = @{ width = 1024; height = 720 }
+                    }
+                    $legacy = Invoke-UiAcceptanceRun -ScenarioId 'metadata-legacy' `
+                        -Scenario { [pscustomobject]@{Status='Passed'} } -Cleanup { } `
+                        -OwnedRoot $root -OutputDirectory (Join-Path $base 'out-legacy') `
+                        -Metadata $legacyMetadata
+                    Assert-Equal 0 $legacy.ExitCode
+                    $legacyReport = Get-Content -LiteralPath $legacy.ReportPath -Raw | ConvertFrom-Json
+                    $legacyFacts = [ordered] @{
+                        case = 'metadata-legacy'
+                        hasEvidenceKey = [bool] ($null -ne $legacyReport.PSObject.Properties['metadataEvidence'])
+                        evidenceIsNull = [bool] ($null -eq $legacyReport.metadataEvidence)
+                        fixtureHashesType = $(if ($null -eq $legacyReport.fixtureHashes) { 'null' } else { $legacyReport.fixtureHashes.GetType().Name })
+                        fixtureHashesCount = $(if ($null -eq $legacyReport.fixtureHashes) { $null } else { @($legacyReport.fixtureHashes).Count })
+                        firstName = $(if ($null -eq $legacyReport.fixtureHashes) { $null } else { [string] $legacyReport.fixtureHashes[0].fixedFilename })
+                        dpi = $legacyReport.dpi
+                        theme = [string] $legacyReport.theme
+                    }
+                    Write-Host ('metadata-legacy-facts ' + ($legacyFacts | ConvertTo-Json -Compress -Depth 4))
+                    Assert-Equal $true $legacyFacts.hasEvidenceKey 'the projected field is present even when the caller never supplied it'
+                    Assert-Equal $true $legacyFacts.evidenceIsNull 'an absent metadataEvidence stays null, not an invented value'
+                    Assert-Equal 'Object[]' $legacyFacts.fixtureHashesType 'a one-element fixture set is still an array'
+                    Assert-Equal 1 ([int] $legacyFacts.fixtureHashesCount) 'the one-element fixture set keeps its single entry'
+                    Assert-Equal 'only-one' $legacyFacts.firstName 'the single row is a row, not a scalar'
+                    Assert-Equal 96 $legacyFacts.dpi 'a legacy literal integer survives the projection'
+                    Assert-Equal 'Light' $legacyFacts.theme 'a legacy literal theme survives the projection'
                 }
                 finally { Remove-UiTestTree -Path $base }
             }
@@ -1702,6 +1854,26 @@ function Get-TestCases {
                     $report = Get-Content -LiteralPath ([IO.Path]::Combine($out, 'Visual', 'report.json')) -Raw | ConvertFrom-Json
                     Assert-Equal 'Passed' $report.scenarios[0].status
                     Assert-Equal 'Passed' $report.cleanup.status
+
+                    # The entry's metadata construction really ran for this request: these values
+                    # can only come from the block the entry builds before it hands the ten-key
+                    # hashtable to the Runner. Script head, product identity, driver identity,
+                    # fixture manifest and host observation are checked as separate classes.
+                    $productExe = [IO.Path]::Combine($product, 'TraceFold.Media.exe')
+                    Assert-Equal (Get-FileHash -LiteralPath $productExe -Algorithm SHA256).Hash ([string] $report.productHash) 'the product digest is the executable digest class'
+                    Assert-Equal (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash ([string] $report.driverHash) 'the driver hash is the archive digest class'
+                    Assert-True ($null -eq $report.metadataEvidence.provenance.productBuildCommit) 'no build commit is derived from a script HEAD'
+                    Assert-True ($null -eq $report.sourceCommit) 'a repository root without git stays an unknown commit, not an empty answer'
+                    Assert-Equal 'unknown' ([string] $report.metadataEvidence.sourceCommitDomain.state) 'the unknown script HEAD carries its state'
+                    Assert-True ($null -eq $report.dpi) 'an unobserved DPI stays null instead of being synthesised as 96'
+                    Assert-Equal 'unknown' ([string] $report.metadataEvidence.hostObservation.dpiState) 'the unobserved DPI carries its state'
+                    Assert-True ($null -eq $report.theme) 'an unobserved theme stays null'
+                    Assert-Equal 'unknown' ([string] $report.metadataEvidence.hostObservation.themeState) 'the unobserved theme carries its state'
+                    Assert-True ($null -eq $report.viewport) 'an unobserved viewport stays null instead of a 0x0 placeholder'
+                    Assert-Equal 'not-run' ([string] $report.metadataEvidence.hostObservation.viewportState) 'the unobserved viewport says not-run'
+                    Assert-Equal 'Object[]' $report.fixtureHashes.GetType().Name 'a declared-empty fixture set is still an array'
+                    Assert-Equal 0 @($report.fixtureHashes).Count 'the fixture set has no rows'
+                    Assert-Equal $true ([bool] $report.metadataEvidence.provenance.domainsSeparate) 'the identity domains stay separate'
                 }
                 finally {
                     $env:TRACEFOLD_STUB_SCENARIO_JOURNAL = $previousScenarioJournal

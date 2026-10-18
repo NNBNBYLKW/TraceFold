@@ -33,6 +33,8 @@ $script:uiRoot = Join-Path $script:repositoryRoot 'scripts/ui-acceptance'
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Contracts.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Processes.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Runner.psm1') -Force -DisableNameChecking
+# Metadata and provenance producers: one implementation per field family, consumed below.
+Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Metadata.psm1') -Force -DisableNameChecking
 
 $ExitInvalidArguments = 2
 $ExitBlocked = 1
@@ -624,27 +626,41 @@ foreach ($name in $pending) {
                 $null = Stop-OwnedProcessTree -Ledger $ledger -ApprovedDirectories @($product)
             }
         }
-        # Provenance is best effort and decides nothing: git that is missing, that refuses, or that
-        # is pointed at a tree this shell cannot read must not stop a scenario from running. On
-        # Windows PowerShell a native tool writing to stderr is an error record, so an unavailable
-        # commit used to abort the preparation of every scenario; an unknown commit stays unknown.
-        $sourceCommit = ''
-        try {
-            $rawHead = & git -C $script:repositoryRoot rev-parse HEAD 2>$null
-            if ($LASTEXITCODE -eq 0) { $sourceCommit = ($rawHead | Out-String).Trim() }
+        # Provenance, product, driver, fixture and host facts now come from the metadata module:
+        # each field family has one producer, and a value that could not be read stays null beside
+        # its own state. The legacy ten-key hashtable the Runner requires is projected from the
+        # block below; the Runner keeps the values' types instead of collapsing them to text.
+        $contractPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
+        $metadataSourceProvenance = Get-UiMetadataSourceProvenance -ProductExecutable $productExecutable -RepositoryRoot $script:repositoryRoot -CandidateSha256 $null
+        $metadataProductIdentity = Get-UiMetadataProductIdentity -ProductExecutable $productExecutable -ProductDirectory (Split-Path -Parent $productExecutable)
+        $metadataDriverIdentity = Get-UiMetadataDriverIdentity -ArchivePath $WinAppCliArchivePath -ExtractedExePath (Join-Path $runDriver 'winapp.exe') -ManifestVersion ([string] $driverManifest.version) -ManifestSha256 ([string] $driverManifest.sha256) -ManifestArchiveSize ([long] $driverManifest.archiveSize)
+        $declaredFixtureAssets = @()
+        if ([IO.File]::Exists($contractPath)) {
+            $contractDocument = Read-UiMetadataJsonDocument -Path $contractPath
+            $contractValue = $contractDocument['value']
+            if ($contractDocument['state'] -ceq 'captured' -and $null -ne $contractValue -and $null -ne $contractValue.PSObject.Properties['fixtureAssets']) {
+                $declaredFixtureAssets = @($contractValue.fixtureAssets)
+            }
         }
-        catch { $sourceCommit = '' }
+        $metadataFixtures = Get-UiMetadataFixtureManifest -DeclaredAssets $declaredFixtureAssets -RepositoryRoot $script:repositoryRoot
+        $metadataHostObservation = Get-UiMetadataHostObservation
+        $metadataBlock = New-UiMetadataReportBlock -SourceProvenance $metadataSourceProvenance -ProductIdentity $metadataProductIdentity -DriverIdentity $metadataDriverIdentity -FixtureManifest $metadataFixtures -HostObservation $metadataHostObservation -HostOs ([Environment]::OSVersion.VersionString) -Redactor { param([AllowNull()] $Value) if ($null -eq $Value) { return $null }; return (Protect-UiAcceptanceText -Value $Value -RunToken $runToken -OwnedRoot $runRoot) }
+        # The legacy ten-key hashtable the Runner requires, now sourced from the block through its
+        # indexer: a known value keeps its text, an unknown stays null instead of collapsing to an
+        # empty string or to a placeholder. The Runner projection and the report writer decide the
+        # legacy shape.
         $metadata = @{
-            sourceCommit  = $sourceCommit
-            productHash   = $productHash
-            productVersion = $productVersion
-            driverVersion = [string] $driverManifest.version
-            driverHash    = [string] $driverManifest.sha256
-            fixtureHashes = @()
-            hostOs        = [Environment]::OSVersion.VersionString
-            dpi           = 96
-            theme         = 'unknown'
-            viewport      = @{ width = 0; height = 0 }
+            sourceCommit  = $metadataBlock['sourceCommit']
+            productHash   = $metadataBlock['productHash']
+            productVersion = $metadataBlock['productVersion']
+            driverVersion = $metadataBlock['driverVersion']
+            driverHash    = $metadataBlock['driverHash']
+            fixtureHashes = $metadataBlock['fixtureHashes']
+            hostOs        = $metadataBlock['hostOs']
+            dpi           = $metadataBlock['dpi']
+            theme         = $metadataBlock['theme']
+            viewport      = $metadataBlock['viewport']
+            metadataEvidence = $metadataBlock['metadataEvidence']
         }
 
         $result = Invoke-UiAcceptanceRun -ScenarioId $name `

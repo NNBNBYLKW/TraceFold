@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition')]
+    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata')]
     [string] $Suite = 'All'
 )
 
@@ -50,6 +50,12 @@ $script:suites = [ordered] @{
     )
     HostCondition = @(
         'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.EntryHostCondition.Tests.ps1'
+    )
+    # The metadata file keeps its own standalone entry (-RunRoot/-OutputDirectory). Registered
+    # here it contributes the same 13 case bodies through Get-TestCases; each body gets its own
+    # fresh attempt directory and must prove it gone before the case passes.
+    Metadata = @(
+        'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Metadata.Tests.ps1'
     )
 }
 

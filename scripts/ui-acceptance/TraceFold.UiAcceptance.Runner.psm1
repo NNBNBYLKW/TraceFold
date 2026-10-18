@@ -367,6 +367,35 @@ function Invoke-UiAcceptanceRun {
     foreach ($field in @('sourceCommit','productHash','productVersion','driverVersion','driverHash','fixtureHashes','hostOs','dpi','theme','viewport')) {
         if (-not $Metadata.ContainsKey($field)) { throw ('Missing run metadata: ' + $field) }
     }
+    function Get-UiMetadataProjectedText {
+        param([AllowNull()] $Value)
+        if ($null -eq $Value) { return $null }
+        return [string] $Value
+    }
+
+    # A legacy caller may hand in a metadata hashtable that has no metadataEvidence key at all.
+    # Read every projected field through this helper: an absent key is an absent value, never a
+    # terminating property lookup under this module's Set-StrictMode -Version Latest.
+    function Get-UiMetadataProjectedField {
+        param([AllowNull()] $Metadata, [Parameter(Mandatory)][string] $Name)
+        if ($null -eq $Metadata) { return $null }
+        $value = $null
+        if ($Metadata -is [System.Collections.IDictionary]) {
+            if (-not $Metadata.Contains($Name)) { return $null }
+            $value = $Metadata[$Name]
+        }
+        else {
+            $property = $Metadata.PSObject.Properties[$Name]
+            if ($null -eq $property) { return $null }
+            $value = $property.Value
+        }
+        if ($null -eq $value) { return $null }
+        # A bare 'return $value' would let the pipeline enumerate the value: an empty array would
+        # arrive as nothing (indistinguishable from null) and a one-element array as a scalar.
+        # The leading comma emits the collection as one object.
+        return ,$value
+    }
+
     if (Test-Path -LiteralPath $OutputDirectory) { throw 'Run output already exists.' }
     $parent = Split-Path -Parent ([IO.Path]::GetFullPath($OutputDirectory))
     if (-not [IO.Directory]::Exists($parent)) { throw 'Run output parent does not exist.' }
@@ -450,16 +479,17 @@ function Invoke-UiAcceptanceRun {
     $report = [ordered]@{
         acceptanceId = 'run-' + [guid]::NewGuid().ToString('N')
         checkpoint = '5CC'
-        sourceCommit = [string]$Metadata.sourceCommit
-        productHash = [string]$Metadata.productHash
-        productVersion = [string]$Metadata.productVersion
-        driverVersion = [string]$Metadata.driverVersion
-        driverHash = [string]$Metadata.driverHash
-        fixtureHashes = $Metadata.fixtureHashes
-        hostOs = [string]$Metadata.hostOs
-        dpi = $Metadata.dpi
-        theme = [string]$Metadata.theme
-        viewport = $Metadata.viewport
+        sourceCommit = (Get-UiMetadataProjectedText -Value (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'sourceCommit'))
+        productHash = (Get-UiMetadataProjectedText -Value (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'productHash'))
+        productVersion = (Get-UiMetadataProjectedText -Value (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'productVersion'))
+        driverVersion = (Get-UiMetadataProjectedText -Value (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'driverVersion'))
+        driverHash = (Get-UiMetadataProjectedText -Value (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'driverHash'))
+        fixtureHashes = (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'fixtureHashes')
+        hostOs = (Get-UiMetadataProjectedText -Value (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'hostOs'))
+        dpi = (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'dpi')
+        theme = (Get-UiMetadataProjectedText -Value (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'theme'))
+        viewport = (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'viewport')
+        metadataEvidence = (Get-UiMetadataProjectedField -Metadata $Metadata -Name 'metadataEvidence')
         startedUtc = $start.ToString('o')
         endedUtc = $end.ToString('o')
         durationMs = $clock.ElapsedMilliseconds
