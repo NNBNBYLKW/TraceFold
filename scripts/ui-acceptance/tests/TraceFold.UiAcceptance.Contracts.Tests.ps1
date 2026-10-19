@@ -76,13 +76,23 @@ function Get-TestCases {
         @{
             Name = 'dangerous report keys are refused'
             Body = {
-                foreach ($key in @('token', 'OwnerToken', 'runId', 'userName', 'machineName', 'databasePath', 'pid', 'stdout')) {
+                foreach ($key in @('token', 'OwnerToken', 'runId', 'userName', 'machineName', 'databasePath', 'pid', 'stdout',
+                        'handbackToken', 'handbackTokenDigest', 'receiptId')) {
                     Assert-True (Test-UiAcceptanceDangerousKey -Key $key) ('expected ' + $key + ' to be refused')
                 }
 
                 foreach ($key in @('automationId', 'status', 'durationMs', 'evidencePaths', 'controlType')) {
                     Assert-True (-not (Test-UiAcceptanceDangerousKey -Key $key)) ('expected ' + $key + ' to be allowed')
                 }
+            }
+        },
+        @{
+            Name = 'a capability value is found by exact value, never by shape'
+            Body = {
+                $token = 'C' * 64
+                Assert-Throws { Assert-UiAcceptanceNoCapabilityValue -Text ('mode=' + $token) -Value $token }
+                Assert-UiAcceptanceNoCapabilityValue -Text 'mode=light' -Value $token
+                Assert-UiAcceptanceNoCapabilityValue -Text ('mode=' + $token) -Value ''
             }
         },
         @{
@@ -187,5 +197,24 @@ function Get-TestCases {
                 Assert-True ($null -ne $parsed) 'the protected document must parse'
             }
         }
+    @{
+        Name = 'required fields are judged per container: dictionary keys, ordered keys and object properties'
+        Body = {
+            # A key that exists is present even when its value is null, zero, false or empty.
+            Assert-UiAcceptanceFields -InputObject @{ a = 1; b = $null } -Required @('a', 'b')
+            Assert-UiAcceptanceFields -InputObject ([ordered] @{ a = 1; b = 0; c = $false; d = @() }) -Required @('a', 'b', 'c', 'd')
+            Assert-UiAcceptanceFields -InputObject ([pscustomobject] @{ a = 1; b = $null }) -Required @('a', 'b')
+
+            # The same three containers must still refuse a missing field.
+            $refused = 0
+            foreach ($document in @(@{ a = 1 }, ([ordered] @{ a = 1 }), ([pscustomobject] @{ a = 1 }))) {
+                $threw = $false
+                try { Assert-UiAcceptanceFields -InputObject $document -Required @('a', 'missing') }
+                catch { $threw = $true }
+                if ($threw) { $refused++ }
+            }
+            Assert-Equal 3 $refused 'every container refuses a missing field'
+        }
+    }
     )
 }

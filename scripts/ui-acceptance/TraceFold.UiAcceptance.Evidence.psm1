@@ -278,10 +278,47 @@ function Write-UiRedactedTreeEvidence {
     return $fileName
 }
 
+<#
+.SYNOPSIS
+    Writes the theme apply/restore/readback facts as their own evidence document.
+
+.DESCRIPTION
+    Theme state is a harness fact, not a business verdict: the document keeps the requested mode,
+    the apply result, the restore result, the independent readback and the journal state in
+    separate fields so a failed restore is never hidden by a later readback. The writer only
+    persists the document; the scenario decides whether an unknown value blocks or fails the run.
+#>
+function Write-UiThemeEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)][string] $EvidenceId,
+        [Parameter(Mandatory)] $Document,
+        [string] $RunToken,
+        [string] $OwnedRoot,
+        [AllowEmptyString()][string] $ForbiddenValue = ''
+    )
+
+    if (-not [IO.Directory]::Exists($OutputDirectory)) { throw 'Run output directory does not exist.' }
+    Assert-UiAcceptanceFields -InputObject $Document -Required @('mode', 'apply', 'restore', 'readback', 'journal')
+    $safe = ConvertTo-UiSafeValue -Value $Document -RunToken $RunToken -OwnedRoot $OwnedRoot
+    $serialized = ConvertTo-Json -InputObject $safe -Depth 30
+    # The receipt is checked by exact value before anything is written: it is a random 64-hex
+    # string, so the shape-based redaction cannot find it and must not guess.
+    Assert-UiAcceptanceNoCapabilityValue -Text $serialized -Value $ForbiddenValue `
+        -Code 'Theme evidence contains a capability value.'
+    $fileName = (ConvertTo-UiAcceptanceSlug -Value $EvidenceId) + '-theme.json'
+    $target = Join-Path $OutputDirectory $fileName
+    if ([IO.File]::Exists($target)) { throw 'Theme evidence already exists.' }
+    [IO.File]::WriteAllText($target, $serialized, [Text.UTF8Encoding]::new($false))
+    return $fileName
+}
+
 Export-ModuleMember -Function @(
     'Write-UiFailureEvidence',
     'Write-UiAcceptanceReport',
     'Write-UiRedactedTreeEvidence',
+    'Write-UiThemeEvidence',
     'Assert-UiPngBytes',
     'Assert-UiOwnedEvidenceFile',
     'Assert-UiEvidenceDirectory'

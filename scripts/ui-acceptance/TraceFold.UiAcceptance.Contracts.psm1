@@ -223,7 +223,8 @@ function Test-UiAcceptanceDangerousKey {
     )
 
     $denied = @(
-        'token', 'ownertoken', 'runid', 'acceptancerunid',
+        'token', 'ownertoken', 'receiptid', 'handbacktoken', 'handbacktokendigest',
+        'runid', 'acceptancerunid',
         'username', 'machinename', 'hostname', 'userprofile',
         'databasepath', 'datasource', 'connectionstring',
         'raw', 'stdout', 'stderr', 'commandline', 'processid', 'pid'
@@ -270,8 +271,16 @@ function Assert-UiAcceptanceFields {
 
     $missing = New-Object System.Collections.ArrayList
     foreach ($name in $Required) {
-        $property = $InputObject.PSObject.Properties[$name]
-        if ($null -eq $property) {
+        # A dictionary carries its fields as keys; PSObject.Properties only exposes the
+        # dictionary's own members (Keys, Values, Count), so a key check must use Contains.
+        $present = $false
+        if ($InputObject -is [System.Collections.IDictionary]) {
+            $present = $InputObject.Contains($name)
+        }
+        else {
+            $present = ($null -ne $InputObject.PSObject.Properties[$name])
+        }
+        if (-not $present) {
             [void] $missing.Add($name)
         }
     }
@@ -279,6 +288,34 @@ function Assert-UiAcceptanceFields {
     if ($missing.Count -gt 0) {
         throw ('Missing required fields: ' + ($missing -join ', ') + '.')
     }
+}
+
+<#
+.SYNOPSIS
+    Refuses a document that still contains a live capability value.
+
+.DESCRIPTION
+    Text redaction is field-agnostic: it removes run tokens, roots, user names and identifier
+    shapes, but a hand-back receipt is a random 64-hex value that looks exactly like a digest and
+    must stay available as evidence. A receipt therefore cannot be found by shape; it is checked
+    by exact value at the boundary where a document is about to be persisted. An empty value
+    means "this document has no capability to check", not "the check passed".
+#>
+function Assert-UiAcceptanceNoCapabilityValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string] $Text,
+
+        [AllowEmptyString()]
+        [string] $Value = '',
+
+        [string] $Code = 'capability_value_leak'
+    )
+
+    if ([string]::IsNullOrEmpty($Value)) { return }
+    if ($Text.IndexOf($Value, [StringComparison]::Ordinal) -ge 0) { throw $Code }
 }
 
 Export-ModuleMember -Function @(
@@ -290,6 +327,7 @@ Export-ModuleMember -Function @(
     'Get-UiAcceptanceRedactionPatterns',
     'Protect-UiAcceptanceText',
     'Test-UiAcceptanceDangerousKey',
+    'Assert-UiAcceptanceNoCapabilityValue',
     'Get-UiAcceptanceRequiredViewport',
     'Get-UiAcceptanceDynamicRowPhase',
     'ConvertFrom-UiAcceptanceJson',

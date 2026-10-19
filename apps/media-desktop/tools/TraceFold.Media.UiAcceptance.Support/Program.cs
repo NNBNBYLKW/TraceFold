@@ -42,9 +42,13 @@ public static class Program
     }
 
     public static int Run(IReadOnlyList<string> args, TextWriter output)
+        => Run(args, output, Console.In);
+
+    public static int Run(IReadOnlyList<string> args, TextWriter output, TextReader input)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(input);
         try
         {
             return args.Count == 0
@@ -55,6 +59,7 @@ public static class Program
                     "snapshot" => RunSnapshot(args, output),
                     "window" => RunWindow(args, output),
                     "native" => RunNative(args, output),
+                    "theme" => RunTheme(args, output, input),
                     _ => Fail(output, ExitInvalidArguments, "The command is not supported."),
                 };
         }
@@ -383,6 +388,684 @@ public static class Program
             }));
         }
     }
+
+    /// <summary>
+    /// Command surface for the Task 13 temporary app-theme switch.
+    /// </summary>
+    /// <remarks>
+    /// One integration point: arguments become a typed request, the reviewed
+    /// WindowsAppThemeCoordinator decides, and the result becomes an explicit JSON projection.
+    /// No decision logic lives here and no response is produced by serialising a component record.
+    /// Exit codes: 0 means the coordinator returned a verdict (applied/restored may still be
+    /// false); 2 means the arguments are malformed; 10 means the environment failed.
+    /// </remarks>
+    private static readonly string[] ThemeOwnerRequired =
+        ["owner-pid", "owner-start-utc-ticks", "owner-context"];
+
+    private static readonly string[] ThemeBindingOptions =
+    [
+        "product-hash-kind", "product-members", "product-member-names", "product-sha256",
+        "toolkit-hash-kind", "toolkit-members", "toolkit-member-names", "toolkit-sha256"
+    ];
+
+    private static readonly string[] ThemeCommonOptions = ["journal", "fixture-root"];
+
+    private static readonly string[] ThemeTokenOptions = ["handback-token"];
+
+    private static int RunTheme(IReadOnlyList<string> args, TextWriter output, TextReader input)
+    {
+        if (args.Count < 2)
+        {
+            return Fail(output, ExitInvalidArguments, "A theme action is required.");
+        }
+
+        if (!TryParsePairs(args, 2, out Dictionary<string, string> values, out string? error))
+        {
+            return Fail(output, ExitInvalidArguments, error!);
+        }
+
+        return args[1] switch
+        {
+            "inspect" => ThemeInspect(values, output, input),
+            "apply" => ThemeApply(values, output),
+            "restore" => ThemeRestore(values, output, input),
+            _ => Fail(output, ExitInvalidArguments, "The theme action is not supported."),
+        };
+    }
+
+    private static bool TryReadThemeJournal(Dictionary<string, string> values, out string journal)
+    {
+        journal = string.Empty;
+        if (!values.TryGetValue("journal", out string? text)
+            || string.IsNullOrWhiteSpace(text)
+            || !Path.IsPathFullyQualified(text))
+        {
+            return false;
+        }
+
+        journal = text;
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the three identity facts, plus an optional executable path. The executable is not a
+    /// fourth required option: a caller that does not state it is compared on the empty value.
+    /// </summary>
+    private static bool TryReadThemeOwner(
+        Dictionary<string, string> values,
+        bool required,
+        out ThemeOwnerIdentity? owner,
+        out string? error)
+    {
+        owner = null;
+        error = null;
+        int present = ThemeOwnerRequired.Count(values.ContainsKey);
+        bool executablePresent = values.ContainsKey("owner-exe");
+        if (present == 0)
+        {
+            if (required || executablePresent)
+            {
+                error = "The theme owner is required.";
+                return false;
+            }
+
+            return true;
+        }
+
+        if (present != ThemeOwnerRequired.Length)
+        {
+            error = "The theme owner options are incomplete.";
+            return false;
+        }
+
+        if (!int.TryParse(values["owner-pid"], NumberStyles.None, CultureInfo.InvariantCulture, out int pid)
+            || pid <= 0
+            || !long.TryParse(values["owner-start-utc-ticks"], NumberStyles.None,
+                CultureInfo.InvariantCulture, out long ticks)
+            || ticks <= 0)
+        {
+            error = "The theme owner options are invalid.";
+            return false;
+        }
+
+        string context = values["owner-context"];
+        if (context.Length is 0 or > 128
+            || !context.All(character => char.IsLetterOrDigit(character) || character == '-'))
+        {
+            error = "The theme owner options are invalid.";
+            return false;
+        }
+
+        string? executable = values.TryGetValue("owner-exe", out string? text) ? text : null;
+        if (executable is not null && !Path.IsPathFullyQualified(executable))
+        {
+            error = "The theme owner options are invalid.";
+            return false;
+        }
+
+        // Kind is a shape label, not an identity proof: the coordinator probes the journalled
+        // owner and compares every field. The support process never declares its own identity.
+        owner = new ThemeOwnerIdentity(pid, ticks, context, ThemeOwnerKind.HarnessRunner, executable);
+        return true;
+    }
+
+    private static bool TryReadThemeBindings(
+        Dictionary<string, string> values,
+        bool required,
+        out ThemeBindings? bindings,
+        out string? error)
+    {
+        bindings = null;
+        error = null;
+        int present = ThemeBindingOptions.Count(values.ContainsKey);
+        if (present == 0)
+        {
+            if (required)
+            {
+                error = "The theme bindings are required.";
+                return false;
+            }
+
+            return true;
+        }
+
+        if (present != ThemeBindingOptions.Length)
+        {
+            error = "The theme binding options are incomplete.";
+            return false;
+        }
+
+        if (!TryReadThemeBinding(values, "product", out ThemeBinding? product, out error)
+            || !TryReadThemeBinding(values, "toolkit", out ThemeBinding? toolkit, out error))
+        {
+            return false;
+        }
+
+        bindings = new ThemeBindings(product!, toolkit!);
+        return true;
+    }
+
+    private static bool TryReadThemeBinding(
+        Dictionary<string, string> values,
+        string prefix,
+        out ThemeBinding? binding,
+        out string? error)
+    {
+        binding = null;
+        error = null;
+        string digest = values[prefix + "-sha256"];
+        if (values[prefix + "-hash-kind"] is not "sha256"
+            || !IsSha256Hex(digest)
+            || !int.TryParse(values[prefix + "-members"], NumberStyles.None,
+                CultureInfo.InvariantCulture, out int count)
+            || count is < 1 or > 1000000)
+        {
+            error = "The theme binding options are invalid.";
+            return false;
+        }
+
+        // The count stays a count. The names are the members the digest actually covers; the
+        // count is only the cross-check that both describe the same set.
+        string[] names = values[prefix + "-member-names"].Split(';', StringSplitOptions.None);
+        if (names.Length != count
+            || names.Any(name => string.IsNullOrWhiteSpace(name)
+                || name.Any(char.IsWhiteSpace)
+                || name.Contains(';', StringComparison.Ordinal)))
+        {
+            error = "The theme binding member names do not match the declared count.";
+            return false;
+        }
+
+        binding = new ThemeBinding("sha256", names, digest);
+        return true;
+    }
+
+    private static bool TryReadThemeDisposition(
+        Dictionary<string, string> values,
+        out ThemeRestoreDisposition disposition)
+    {
+        disposition = ThemeRestoreDisposition.StartupRecovery;
+        if (!values.TryGetValue("disposition", out string? text))
+        {
+            return true;
+        }
+
+        if (text == "startup")
+        {
+            return true;
+        }
+
+        if (text == "handback")
+        {
+            disposition = ThemeRestoreDisposition.Handback;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Reads the hand-back receipt. The only accepted value is the sentinel that means
+    /// "read standard input": argv is process-visible and is the first thing a command record
+    /// copies, so a receipt is never accepted there.
+    /// </summary>
+    private static bool TryReadThemeToken(
+        Dictionary<string, string> values,
+        TextReader input,
+        out string token,
+        out string? error)
+    {
+        token = string.Empty;
+        error = null;
+        if (!values.TryGetValue("handback-token", out string? raw))
+        {
+            return true;
+        }
+
+        if (!string.Equals(raw, "-", StringComparison.Ordinal))
+        {
+            error = "The hand-back receipt is read from standard input only.";
+            return false;
+        }
+
+        token = (input.ReadLine() ?? string.Empty).Trim();
+        if (token.Length > 0 && !IsSha256Hex(token))
+        {
+            error = "The hand-back receipt is not a receipt.";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Validates the acceptance-only adapter root. Every check happens before the fixture, the
+    /// journal or any adapter is touched; the input must already be absolute, and every path is
+    /// normalised before the boundary comparison so a "..\" segment cannot escape.
+    /// </summary>
+    private static bool TryReadThemeFixtureRoot(
+        Dictionary<string, string> values,
+        string journal,
+        out string? root,
+        out string? error)
+    {
+        root = null;
+        error = null;
+        if (!values.TryGetValue("fixture-root", out string? text))
+        {
+            return true;
+        }
+
+        if (!Path.IsPathFullyQualified(text))
+        {
+            error = "The fixture root must be an absolute path.";
+            return false;
+        }
+
+        if (!ThemeFixtureAdapters.Licensed)
+        {
+            error = "The fixture adapters are not licensed for this process.";
+            return false;
+        }
+
+        string full;
+        string temp;
+        string journalFull;
+        try
+        {
+            full = Path.GetFullPath(text).TrimEnd(Path.DirectorySeparatorChar);
+            temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
+            journalFull = Path.GetFullPath(journal);
+        }
+        catch (ArgumentException)
+        {
+            error = "The fixture root is invalid.";
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            error = "The fixture root is invalid.";
+            return false;
+        }
+
+        string leaf = Path.GetFileName(full);
+        string separator = Path.DirectorySeparatorChar.ToString();
+        bool underTemp = full.StartsWith(temp + separator, StringComparison.OrdinalIgnoreCase);
+        string journalDirectory = (Path.GetDirectoryName(journalFull) ?? string.Empty)
+            .TrimEnd(Path.DirectorySeparatorChar);
+        bool journalInside = string.Equals(journalDirectory, full, StringComparison.OrdinalIgnoreCase);
+
+        if (!underTemp
+            || !leaf.StartsWith("tracefold-theme-fixture-", StringComparison.OrdinalIgnoreCase)
+            || !journalInside
+            || !Directory.Exists(full)
+            || HasReparsePoint(full)
+            || HasReparsePointInAncestors(full, temp)
+            || (File.Exists(journalFull) && HasReparsePoint(journalFull)))
+        {
+            error = "The fixture root is not an acceptance fixture root.";
+            return false;
+        }
+
+        root = full;
+        return true;
+    }
+
+    private static bool HasReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    private static bool HasReparsePointInAncestors(string path, string stopAt)
+    {
+        DirectoryInfo? current = new DirectoryInfo(path).Parent;
+        while (current is not null)
+        {
+            if (HasReparsePoint(current.FullName))
+            {
+                return true;
+            }
+
+            if (string.Equals(current.FullName.TrimEnd(Path.DirectorySeparatorChar), stopAt,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            current = current.Parent;
+        }
+
+        return false;
+    }
+
+    private static (IThemeRegistry, IThemeChangeBroadcaster, IThemeOwnerInspector)
+        CreateThemeAdapters(string? fixtureRoot) => fixtureRoot is null
+            ? (new WindowsThemeRegistry(), new WindowsThemeChangeBroadcaster(),
+                new WindowsThemeOwnerInspector())
+            : ThemeFixtureAdapters.Create(fixtureRoot);
+
+    private static IThemeOwnerInspector CreateThemeInspector(string? fixtureRoot) =>
+        fixtureRoot is null ? new WindowsThemeOwnerInspector() : ThemeFixtureAdapters.CreateInspector(fixtureRoot);
+
+    private static int ThemeInspect(Dictionary<string, string> values, TextWriter output, TextReader input)
+    {
+        string[] allowed =
+        [
+            .. ThemeCommonOptions, .. ThemeTokenOptions, .. ThemeOwnerRequired,
+            "owner-exe", .. ThemeBindingOptions
+        ];
+        string? error = null;
+        if (!OnlyOptions(values, allowed)
+            || !TryReadThemeJournal(values, out string journal)
+            || !TryReadThemeOwner(values, required: false, out ThemeOwnerIdentity? owner, out error)
+            || !TryReadThemeBindings(values, required: false, out ThemeBindings? bindings, out error)
+            || !TryReadThemeFixtureRoot(values, journal, out string? fixtureRoot, out error)
+            || !TryReadThemeToken(values, input, out string token, out error))
+        {
+            return Fail(output, ExitInvalidArguments, error ?? "The theme arguments are invalid.");
+        }
+
+        ThemeJournalInspection inspection;
+        try
+        {
+            inspection = WindowsAppThemeCoordinator.Inspect(
+                journal,
+                new SystemThemeJournalStore(),
+                CreateThemeInspector(fixtureRoot),
+                token.Length > 0 ? token : null,
+                owner);
+        }
+        catch (ThemeFixtureException fixtureError)
+        {
+            return Fail(output, ExitInvalidArguments, fixtureError.Message);
+        }
+
+        var payload = new
+        {
+            action = "inspect",
+            adapters = fixtureRoot is null ? "production" : "fixture",
+            journalState = MapJournalState(inspection),
+            ownerState = inspection.JournalPresent
+                ? ProbeState(inspection.OwnerProbe?.State ?? ThemeOwnerState.Unknown)
+                : "none",
+            journalPresent = inspection.JournalPresent,
+            journalReadable = inspection.JournalReadable,
+            checksumValid = inspection.JournalChecksumValid,
+            startupRecoveryAllowed = inspection.StartupRecoveryAllowed,
+            handbackAccepted = inspection.HandbackAccepted,
+            handbackRejection = inspection.HandbackRejection is null
+                ? null
+                : WindowsAppThemeCoordinator.ReasonCode(inspection.HandbackRejection.Value),
+            rejection = WindowsAppThemeCoordinator.ReasonCode(inspection.Rejection),
+            owner = inspection.Owner is null ? null : OwnerPayload(inspection.Owner),
+            requestBinding = bindings is null ? null : BindingPayload(bindings),
+        };
+        output.WriteLine(JsonSerializer.Serialize(payload));
+        return ExitSuccess;
+    }
+
+    private static int ThemeApply(Dictionary<string, string> values, TextWriter output)
+    {
+        string[] allowed =
+        [
+            .. ThemeCommonOptions, .. ThemeOwnerRequired, "owner-exe", .. ThemeBindingOptions, "mode"
+        ];
+        string? error = null;
+        if (!OnlyOptions(values, allowed)
+            || !TryReadThemeJournal(values, out string journal)
+            || !values.TryGetValue("mode", out string? modeText)
+            || modeText is not ("light" or "dark"))
+        {
+            return Fail(output, ExitInvalidArguments, "The theme arguments are invalid.");
+        }
+
+        if (!TryReadThemeOwner(values, required: true, out ThemeOwnerIdentity? owner, out error)
+            || !TryReadThemeBindings(values, required: true, out ThemeBindings? bindings, out error)
+            || !TryReadThemeFixtureRoot(values, journal, out string? fixtureRoot, out error))
+        {
+            return Fail(output, ExitInvalidArguments, error ?? "The theme arguments are invalid.");
+        }
+
+        IThemeRegistry registry;
+        IThemeChangeBroadcaster broadcaster;
+        try
+        {
+            (registry, broadcaster, _) = CreateThemeAdapters(fixtureRoot);
+        }
+        catch (ThemeFixtureException fixtureError)
+        {
+            return Fail(output, ExitInvalidArguments, fixtureError.Message);
+        }
+
+        ThemeApplyResult result = WindowsAppThemeCoordinator.Apply(
+            new ThemeApplyRequest(
+                WindowsAppThemeCoordinator.ApprovedKeyPath,
+                WindowsAppThemeCoordinator.ApprovedValueName,
+                modeText == "light" ? ThemeMode.Light : ThemeMode.Dark,
+                journal,
+                owner!,
+                bindings!),
+            registry,
+            new SystemThemeJournalStore(),
+            broadcaster);
+
+        var payload = new
+        {
+            action = "apply",
+            adapters = fixtureRoot is null ? "production" : "fixture",
+            applied = result.Applied,
+            mode = modeText,
+            // "pending" is a claim about a journal this call wrote. Absence is never claimed
+            // here: a failed call does not prove the journal was not there or was not written.
+            journalState = result.JournalWritten
+                ? "pending"
+                : result.Rejection == ThemeRejection.JournalAlreadyPresent ? "present" : "unknown",
+            journalWritten = result.JournalWritten,
+            journalRetained = result.JournalRetained,
+            registryWritten = result.RegistryWritten,
+            readBackVerified = result.AppliedReadBackVerified,
+            broadcast = new { sent = result.BroadcastSucceeded },
+            original = SnapshotPayload(result.Original),
+            appliedReadBack = SnapshotPayload(result.AppliedReadBack),
+            owner = OwnerPayload(owner!),
+            binding = BindingPayload(bindings!),
+            rejection = WindowsAppThemeCoordinator.ReasonCode(result.Rejection),
+            rejectionCode = result.Rejection.ToString(),
+            // Capability, not an identifier. Non-empty exactly when a journal was persisted.
+            handbackToken = result.HandbackToken,
+        };
+        output.WriteLine(JsonSerializer.Serialize(payload));
+        return ExitSuccess;
+    }
+
+    private static int ThemeRestore(Dictionary<string, string> values, TextWriter output, TextReader input)
+    {
+        string[] allowed =
+        [
+            .. ThemeCommonOptions, .. ThemeTokenOptions, .. ThemeOwnerRequired,
+            "owner-exe", .. ThemeBindingOptions, "disposition"
+        ];
+        string? error = null;
+        if (!OnlyOptions(values, allowed)
+            || !TryReadThemeJournal(values, out string journal)
+            || !TryReadThemeDisposition(values, out ThemeRestoreDisposition disposition))
+        {
+            return Fail(output, ExitInvalidArguments, "The theme arguments are invalid.");
+        }
+
+        bool handback = disposition == ThemeRestoreDisposition.Handback;
+        if (!TryReadThemeOwner(values, required: handback, out ThemeOwnerIdentity? owner, out error)
+            // A hand-back states the binding it expects. The component decides it against the
+            // journal it is about to consume and refuses before touching the registry; omitting
+            // it here would leave that decision to a post-hoc comparison.
+            || !TryReadThemeBindings(values, required: handback, out ThemeBindings? bindings, out error)
+            || !TryReadThemeFixtureRoot(values, journal, out string? fixtureRoot, out error)
+            || !TryReadThemeToken(values, input, out string token, out error))
+        {
+            return Fail(output, ExitInvalidArguments, error ?? "The theme arguments are invalid.");
+        }
+
+        ThemeBindings? expectedBindings = handback ? bindings : null;
+        IThemeRegistry registry;
+        IThemeChangeBroadcaster broadcaster;
+        IThemeOwnerInspector inspector;
+        try
+        {
+            (registry, broadcaster, inspector) = CreateThemeAdapters(fixtureRoot);
+        }
+        catch (ThemeFixtureException fixtureError)
+        {
+            return Fail(output, ExitInvalidArguments, fixtureError.Message);
+        }
+
+        var journals = new SystemThemeJournalStore();
+        ThemeRestoreResult result = WindowsAppThemeCoordinator.Restore(
+            new ThemeRestoreRequest(
+                WindowsAppThemeCoordinator.ApprovedKeyPath,
+                WindowsAppThemeCoordinator.ApprovedValueName,
+                journal,
+                disposition,
+                handback ? owner : null,
+                handback && token.Length > 0 ? token : null,
+                expectedBindings),
+            registry,
+            journals,
+            broadcaster,
+            inspector);
+
+        bool noAction = result.Action == ThemeRestoreAction.NoJournalNoAction;
+        bool? bindingMatches = expectedBindings is null || result.Bindings is null
+            ? null
+            : WindowsAppThemeCoordinator.BindingsEqual(expectedBindings, result.Bindings);
+        bool readBackMatches = result.Original is not null
+            && WindowsAppThemeCoordinator.SnapshotMatches(result.ReadBack, result.Original);
+        var payload = new
+        {
+            action = "restore",
+            adapters = fixtureRoot is null ? "production" : "fixture",
+            disposition = handback ? "handback" : "startup",
+            restored = result.Restored,
+            noAction,
+            journalState = noAction || result.JournalRemoved
+                ? "absent"
+                : result.JournalPresent ? "present" : "unknown",
+            journalPresent = result.JournalPresent,
+            journalRemoved = result.JournalRemoved,
+            journalChecksumValid = result.JournalChecksumValid,
+            owner = result.Owner is null ? null : OwnerPayload(result.Owner),
+            ownerState = noAction
+                ? "none"
+                : ProbeState(result.OwnerProbe?.State ?? ThemeOwnerState.Unknown),
+            ownerProbe = result.OwnerProbe is null
+                ? null
+                : new
+                {
+                    state = ProbeState(result.OwnerProbe.State),
+                    identityReadable = result.OwnerProbe.IdentityReadable,
+                    detail = result.OwnerProbe.Detail,
+                },
+            registryRestored = result.RegistryRestored,
+            readBackVerified = result.ReadBackVerified,
+            broadcast = new { sent = result.BroadcastSucceeded },
+            // Both triples come from the journal the restore actually consumed.
+            original = SnapshotPayload(result.Original),
+            readback = result.ReadBack is null
+                ? null
+                : new
+                {
+                    present = result.ReadBack.Present,
+                    valueKind = result.ReadBack.Present ? result.ReadBack.Kind.ToString() : null,
+                    bytes = result.ReadBack.Present && result.ReadBack.Bytes is not null
+                        ? Convert.ToHexString(result.ReadBack.Bytes)
+                        : null,
+                    matchesOriginal = readBackMatches,
+                },
+            binding = result.Bindings is null ? null : BindingPayload(result.Bindings),
+            requestBinding = expectedBindings is null ? null : BindingPayload(expectedBindings),
+            bindingMatchesJournal = bindingMatches,
+            rejection = WindowsAppThemeCoordinator.ReasonCode(result.Rejection),
+            rejectionCode = result.Rejection.ToString(),
+        };
+        output.WriteLine(JsonSerializer.Serialize(payload));
+        return ExitSuccess;
+    }
+
+    private static string MapJournalState(ThemeJournalInspection inspection)
+    {
+        if (!inspection.JournalPresent)
+        {
+            return "absent";
+        }
+
+        if (!inspection.JournalReadable || !inspection.JournalChecksumValid)
+        {
+            return "unknown";
+        }
+
+        if (inspection.StartupRecoveryAllowed)
+        {
+            return "restore-required";
+        }
+
+        return inspection.Rejection == ThemeRejection.OwnerLive ? "foreign-live" : "unknown";
+    }
+
+    private static string ProbeState(ThemeOwnerState state) => state switch
+    {
+        ThemeOwnerState.Live => "live",
+        ThemeOwnerState.Dead => "dead",
+        ThemeOwnerState.PidReused => "pid-reused",
+        _ => "unknown",
+    };
+
+    private static object OwnerPayload(ThemeOwnerIdentity owner) => new
+    {
+        pid = owner.ProcessId,
+        startUtcTicks = owner.StartUtcTicks,
+        context = owner.Context,
+        kind = owner.Kind.ToString(),
+        // executablePath is deliberately not echoed: the journal keeps it for the probe, the
+        // response and the report do not need a machine path.
+    };
+
+    private static object? SnapshotPayload(ThemeRegistrySnapshot? snapshot) => snapshot is null
+        ? null
+        : new
+        {
+            present = snapshot.Present,
+            valueKind = snapshot.Present ? snapshot.Kind.ToString() : null,
+            bytes = snapshot.Present && snapshot.Bytes is not null
+                ? Convert.ToHexString(snapshot.Bytes)
+                : null,
+        };
+
+    private static object BindingPayload(ThemeBindings bindings) => new
+    {
+        // The flat shape is the consumer contract VisualGate already validates; the member-name
+        // arrays are additive and say which members the digest actually covers.
+        productHashKind = bindings.Product.HashKind,
+        productMembers = bindings.Product.Members.Count,
+        productMemberNames = bindings.Product.Members.ToArray(),
+        productSha256 = bindings.Product.Digest,
+        toolkitHashKind = bindings.Toolkit.HashKind,
+        toolkitMembers = bindings.Toolkit.Members.Count,
+        toolkitMemberNames = bindings.Toolkit.Members.ToArray(),
+        toolkitSha256 = bindings.Toolkit.Digest,
+    };
+
+    private static bool IsSha256Hex(string value) =>
+        value.Length == 64 && value.All(Uri.IsHexDigit);
 
     private static string? Single(List<KeyValuePair<string, string>> pairs, string name)
     {
