@@ -303,6 +303,190 @@ function Get-TestCases {
                 }
                 finally { Remove-UiTestTree -Path $base }
             }
+        },
+        @{
+            Name = 'a report without visual facts writes no index and keeps the report schema'
+            Body = {
+                # The index is an addition, not a new obligation: an ordinary report must produce
+                # exactly the files it produced before this feature existed.
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-index-' + [guid]::NewGuid().ToString('N'))
+                $out = Join-Path $base 'durable'
+                [void][IO.Directory]::CreateDirectory($out)
+                try {
+                    $report = [ordered]@{
+                        acceptanceId='run-plain';checkpoint='5CC';startedUtc='2026-01-01T00:00:00Z';endedUtc='2026-01-01T00:00:01Z'
+                        scenarios=@([ordered]@{status='Passed';steps=@([ordered]@{status='Passed';evidencePaths=@('screenshot.png')})})
+                        cleanup=[ordered]@{status='Passed'};cleanVmStatus='NotRun'
+                    }
+                    $result = Write-UiAcceptanceReport -OutputDirectory $out -Report $report
+                    Assert-Equal 'Passed' $result.Status
+                    Assert-Equal 2 @([IO.Directory]::GetFileSystemEntries($out)).Count
+                    Assert-True (-not [IO.File]::Exists((Join-Path $out 'index.html')))
+                    Assert-True (-not [IO.File]::Exists((Join-Path $out 'screenshots.json')))
+                    $written = Get-Content -LiteralPath (Join-Path $out 'report.json') -Raw
+                    Assert-NotContains $written 'visual'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'visual facts through the report outlet write a relative index and a data document'
+            Body = {
+                # The page is produced by the same outlet that writes report.json, so the test calls
+                # that outlet rather than a private helper.
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-index-' + [guid]::NewGuid().ToString('N'))
+                $out = Join-Path $base 'durable'
+                [void][IO.Directory]::CreateDirectory((Join-Path $out 'shots'))
+                [void][IO.Directory]::CreateDirectory((Join-Path $out 'uia'))
+                try {
+                    [IO.File]::WriteAllBytes((Join-Path $out 'shots\a.png'), (Get-UiTestPngBytes))
+                    [IO.File]::WriteAllText((Join-Path $out 'uia\a.json'), '{"tree":[]}')
+                    $report = [ordered]@{
+                        acceptanceId='run-visual';checkpoint='5CC';startedUtc='2026-01-01T00:00:00Z';endedUtc='2026-01-01T00:00:01Z'
+                        scenarios=@([ordered]@{status='Failed';steps=@([ordered]@{status='Failed';evidencePaths=@('shots/a.png')})})
+                        cleanup=[ordered]@{status='Passed'};cleanVmStatus='NotRun'
+                        visual=[ordered]@{
+                            themeMatrix='light+dark';productHash='demo-product-hash';generatedUtc='2026-01-01T00:00:02Z'
+                            synthetic=$false;themes=@();keyboard=@();status='Failed';reason='fixture'
+                            entries=@([ordered]@{
+                                state='library';status='Failed';theme='dark';viewport='1024x720';page='library';dialog='none'
+                                clientWidth=1024;clientHeight=720;dpi=96;productHash='demo-product-hash';capturedUtc='2026-01-01T00:00:02Z'
+                                image='shots\a.png';uia='uia\a.json'
+                            })
+                        }
+                    }
+                    $result = Write-UiAcceptanceReport -OutputDirectory $out -Report $report
+                    Assert-Equal 'Failed' $result.Status
+                    Assert-True ([IO.File]::Exists((Join-Path $out 'index.html')))
+                    Assert-True ([IO.File]::Exists((Join-Path $out 'screenshots.json')))
+                    $data = Get-Content -LiteralPath (Join-Path $out 'screenshots.json') -Raw | ConvertFrom-Json
+                    Assert-Equal 1 @($data.entries).Count
+                    Assert-Equal 'Failed' ([string] $data.entries[0].status)
+                    Assert-Equal 'Failed' ([string] $data.status)
+                    Assert-Equal 'shots/a.png' ([string] $data.entries[0].image)
+                    Assert-Equal 'uia/a.json' ([string] $data.entries[0].uia)
+                    Assert-Equal 'dark' ([string] $data.entries[0].theme)
+                    Assert-Equal 1024 ([int] $data.entries[0].clientWidth)
+                    $html = Get-Content -LiteralPath (Join-Path $out 'index.html') -Raw
+                    Assert-Contains $html 'shots/a.png'
+                    Assert-NotContains $html '__SCREENSHOTS_JSON__'
+                    # report.json keeps its own schema: the matrix is a separate shared document.
+                    # The check is the absent property, not a substring, because an ordinary value
+                    # such as the acceptance id may legitimately contain the same word.
+                    $writtenReport = Get-Content -LiteralPath (Join-Path $out 'report.json') -Raw | ConvertFrom-Json
+                    Assert-True ($null -eq $writtenReport.PSObject.Properties['visual']) 'report.json carries no visual section'
+                    Assert-Equal 'run-visual' ([string] $writtenReport.acceptanceId)
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'visual index refuses absolute, traversing and mistyped evidence links'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-index-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    [IO.File]::WriteAllText((Join-Path $base 'note.txt'), 'not a picture')
+                    foreach ($candidate in @('C:\Users\person\shot.png', '../outside.png', 'note.txt')) {
+                        $out = Join-Path $base ([guid]::NewGuid().ToString('N'))
+                        [void][IO.Directory]::CreateDirectory($out)
+                        $report = [ordered]@{
+                            acceptanceId='run-link';checkpoint='5CC';startedUtc='2026-01-01T00:00:00Z';endedUtc='2026-01-01T00:00:01Z'
+                            scenarios=@([ordered]@{status='Passed';steps=@()})
+                            cleanup=[ordered]@{status='Passed'};cleanVmStatus='NotRun'
+                            visual=[ordered]@{status='Passed';entries=@([ordered]@{state='library';status='Passed';image=$candidate})}
+                        }
+                        Assert-Throws { Write-UiAcceptanceReport -OutputDirectory $out -Report $report } ('link refused: ' + $candidate)
+                        Assert-True (-not [IO.File]::Exists((Join-Path $out 'index.html'))) 'a refused link writes no page'
+                    }
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'visual index escapes script-closing text and redacts the token and the root'
+            Body = {
+                # The JSON is embedded in a script element, so a raw '<' from a scenario string could
+                # close that element. Every '<' must be escaped, and the shared redaction still runs.
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-index-' + [guid]::NewGuid().ToString('N'))
+                $out = Join-Path $base 'durable'
+                [void][IO.Directory]::CreateDirectory($out)
+                try {
+                    [IO.File]::WriteAllBytes((Join-Path $out 'a.png'), (Get-UiTestPngBytes))
+                    $token = 'index-run-token-value'
+                    $report = [ordered]@{
+                        acceptanceId='run-escape';checkpoint='5CC';startedUtc='2026-01-01T00:00:00Z';endedUtc='2026-01-01T00:00:01Z'
+                        scenarios=@([ordered]@{status='Passed';steps=@()})
+                        cleanup=[ordered]@{status='Passed'};cleanVmStatus='NotRun'
+                        visual=[ordered]@{
+                            status='Passed';reason=''
+                            entries=@([ordered]@{
+                                state='</script><script>alert(1)</script>';status='Passed';theme=('theme ' + $base)
+                                viewport='1024x720';page='page';image='a.png';productHash=$token
+                            })
+                        }
+                    }
+                    $null = Write-UiAcceptanceReport -OutputDirectory $out -Report $report -RunToken $token -OwnedRoot $base
+                    $html = Get-Content -LiteralPath (Join-Path $out 'index.html') -Raw
+                    Assert-Contains $html '\u003c/script'
+                    Assert-NotContains $html '<script>alert(1)'
+                    Assert-NotContains $html $token
+                    Assert-NotContains $html $base
+                    $data = Get-Content -LiteralPath (Join-Path $out 'screenshots.json') -Raw
+                    Assert-NotContains $data $token
+                    Assert-NotContains $data $base
+                    Assert-Contains $data '[redacted-token]'
+                    Assert-Contains $data '[redacted-path]'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'an empty or not-run matrix stays empty and is never upgraded to passed'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-index-' + [guid]::NewGuid().ToString('N'))
+                $out = Join-Path $base 'durable'
+                [void][IO.Directory]::CreateDirectory($out)
+                try {
+                    $report = [ordered]@{
+                        acceptanceId='run-empty';checkpoint='5CC';startedUtc='2026-01-01T00:00:00Z';endedUtc='2026-01-01T00:00:01Z'
+                        scenarios=@([ordered]@{status='Blocked';steps=@()})
+                        cleanup=[ordered]@{status='Passed'};cleanVmStatus='NotRun'
+                        visual=[ordered]@{status='NotRun';reason='';entries=@()}
+                    }
+                    $null = Write-UiAcceptanceReport -OutputDirectory $out -Report $report
+                    $data = Get-Content -LiteralPath (Join-Path $out 'screenshots.json') -Raw | ConvertFrom-Json
+                    Assert-Equal 0 @($data.entries).Count
+                    Assert-Equal 'NotRun' ([string] $data.status)
+                    $html = Get-Content -LiteralPath (Join-Path $out 'index.html') -Raw
+                    Assert-Contains $html 'No matrix entries were written.'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a synthetic matrix is marked synthetic in both the data and the page'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-index-' + [guid]::NewGuid().ToString('N'))
+                $out = Join-Path $base 'durable'
+                [void][IO.Directory]::CreateDirectory($out)
+                try {
+                    [IO.File]::WriteAllBytes((Join-Path $out 'a.png'), (Get-UiTestPngBytes))
+                    $report = [ordered]@{
+                        acceptanceId='run-synthetic';checkpoint='5CC';startedUtc='2026-01-01T00:00:00Z';endedUtc='2026-01-01T00:00:01Z'
+                        scenarios=@([ordered]@{status='Passed';steps=@()})
+                        cleanup=[ordered]@{status='Passed'};cleanVmStatus='NotRun'
+                        visual=[ordered]@{status='Passed';synthetic=$true;entries=@([ordered]@{state='library';status='Passed';image='a.png'})}
+                    }
+                    $null = Write-UiAcceptanceReport -OutputDirectory $out -Report $report
+                    $data = Get-Content -LiteralPath (Join-Path $out 'screenshots.json') -Raw | ConvertFrom-Json
+                    Assert-Equal $true ([bool] $data.synthetic)
+                    $html = Get-Content -LiteralPath (Join-Path $out 'index.html') -Raw
+                    Assert-Contains $html 'Synthetic demo data'
+                    Assert-Contains $html 'not real product screenshots'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
         }
     )
 }

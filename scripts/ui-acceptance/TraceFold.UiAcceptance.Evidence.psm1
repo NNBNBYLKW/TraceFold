@@ -166,7 +166,11 @@ function Write-UiAcceptanceReport {
             }
         }
     }
-    $safe = ConvertTo-UiSafeValue -Value $Report -RunToken $RunToken -OwnedRoot $OwnedRoot
+    # The visual matrix is a separate shared document: it is never folded into report.json, so a
+    # report that carries one keeps the report schema every existing consumer already parses.
+    $visual = Get-UiVisualField -Value $reportObject -Name 'visual'
+    $reportForJson = Remove-UiReportVisual -Report $reportObject
+    $safe = ConvertTo-UiSafeValue -Value $reportForJson -RunToken $RunToken -OwnedRoot $OwnedRoot
     $json = ConvertTo-Json -InputObject $safe -Depth 40
     $target = Join-Path $OutputDirectory 'report.json'
     if ([IO.File]::Exists($target)) { throw 'Report already exists.' }
@@ -178,6 +182,10 @@ function Write-UiAcceptanceReport {
         elseif (@($statuses | Where-Object { $_ -ceq 'Blocked' }).Count -gt 0 -and @($statuses | Where-Object { $_ -ceq 'Failed' }).Count -eq 0) { $overall = 'Blocked' }
     }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'summary.txt'), ('Stage ' + $Report.checkpoint + ': ' + $overall + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    # A report without visual facts is written exactly as before: no new file, no new field.
+    if ($null -ne $visual) {
+        $null = Write-UiVisualIndex -OutputDirectory $OutputDirectory -Visual $visual -RunToken $RunToken -OwnedRoot $OwnedRoot
+    }
     return [pscustomobject]@{ Status=$overall; ReportPath=$target }
 }
 
@@ -314,11 +322,238 @@ function Write-UiThemeEvidence {
     return $fileName
 }
 
+$script:ReportTemplatePath = Join-Path $PSScriptRoot 'report-template\index.html'
+
+<#
+.SYNOPSIS
+    Reads one optional field from a dictionary or a property bag.
+
+.DESCRIPTION
+    The visual matrix arrives either as a decoded JSON object or as an ordered dictionary built by
+    a scenario. An absent field is a legitimate answer, so the read goes through the metadata and
+    returns null instead of raising under strict mode.
+#>
+function Get-UiVisualField {
+    [CmdletBinding()]
+    param($Value, [Parameter(Mandatory)][string] $Name)
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        if ($Value.Contains($Name)) { return ,$Value[$Name] }
+        return $null
+    }
+    $property = $Value.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return ,$property.Value
+}
+
+<#
+.SYNOPSIS
+    Copies a report without its visual matrix, keeping every other field in order.
+
+.DESCRIPTION
+    report.json is the durable acceptance report every consumer already parses. The visual matrix is
+    a separate shared document, so it is removed here rather than folded into that schema.
+#>
+function Remove-UiReportVisual {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Report)
+
+    $copy = [ordered]@{}
+    if ($Report -is [System.Collections.IDictionary]) {
+        foreach ($key in @($Report.Keys)) {
+            if ([string]$key -cne 'visual') { $copy[[string]$key] = $Report[$key] }
+        }
+        return $copy
+    }
+    foreach ($property in @($Report.PSObject.Properties)) {
+        if ($property.Name -cne 'visual') { $copy[$property.Name] = $property.Value }
+    }
+    return $copy
+}
+
+<#
+.SYNOPSIS
+    Validates one report-relative evidence link and returns it in URL form.
+
+.DESCRIPTION
+    Only a canonical relative path inside the report directory may reach the page. A rooted path, a
+    traversal segment, a URL scheme, an empty segment or an absent target is refused, and the target
+    must parse as the expected type so a broken link never renders as a picture.
+#>
+function Get-UiVisualLink {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Value,
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)][string[]] $AllowedExtension
+    )
+
+    $text = [string] $Value
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'Visual evidence link is empty.' }
+    if ([IO.Path]::IsPathRooted($text)) { throw 'Visual evidence link must be relative.' }
+    if ($text -match '(^|[\\/])\.\.([\\/]|$)') { throw 'Visual evidence link must not traverse.' }
+    if ($text -match '[:*?"<>|]') { throw 'Visual evidence link contains a forbidden character.' }
+    $segments = @($text -split '[\\/]')
+    foreach ($segment in $segments) {
+        if ([string]::IsNullOrEmpty($segment) -or $segment -ceq '.') { throw 'Visual evidence link is not canonical.' }
+    }
+    $root = [IO.Path]::GetFullPath($OutputDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $full = [IO.Path]::GetFullPath((Join-Path $OutputDirectory $text))
+    if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw 'Visual evidence link escapes the report directory.' }
+    if (-not [IO.File]::Exists($full)) { throw 'Visual evidence link target is absent.' }
+    $extension = [IO.Path]::GetExtension($full).ToLowerInvariant()
+    if ($AllowedExtension -notcontains $extension) { throw 'Visual evidence link has an unexpected type.' }
+    if ($extension -ceq '.png') {
+        Assert-UiPngBytes -Bytes ([IO.File]::ReadAllBytes($full))
+    }
+    else {
+        $null = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($full, [Text.UTF8Encoding]::new($false, $true)))
+    }
+    return ($segments -join '/')
+}
+
+<#
+.SYNOPSIS
+    Normalizes one visual entry, keeping only the facts the page renders.
+
+.DESCRIPTION
+    The matrix is a report, not a verdict: state and status are carried exactly as given, an unknown
+    stays null, and nothing is upgraded. The known field set is explicit so a scenario cannot smuggle
+    an unreviewed field into the shared document.
+#>
+function ConvertTo-UiVisualEntry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Entry,
+        [Parameter(Mandatory)][string] $OutputDirectory
+    )
+
+    if ($null -eq $Entry) { throw 'Visual entry is missing.' }
+    $state = Get-UiVisualField -Value $Entry -Name 'state'
+    if ($state -isnot [string] -or [string]::IsNullOrWhiteSpace($state)) { throw 'Visual entry state is missing.' }
+    $status = Get-UiVisualField -Value $Entry -Name 'status'
+    if ($status -isnot [string]) { throw 'Visual entry status is missing.' }
+
+    $image = Get-UiVisualField -Value $Entry -Name 'image'
+    $imageLink = $null
+    if ($null -ne $image -and -not [string]::IsNullOrWhiteSpace([string]$image)) {
+        $imageLink = Get-UiVisualLink -Value $image -OutputDirectory $OutputDirectory -AllowedExtension @('.png')
+    }
+    $uia = Get-UiVisualField -Value $Entry -Name 'uia'
+    $uiaLink = $null
+    if ($null -ne $uia -and -not [string]::IsNullOrWhiteSpace([string]$uia)) {
+        $uiaLink = Get-UiVisualLink -Value $uia -OutputDirectory $OutputDirectory -AllowedExtension @('.json')
+    }
+    $synthetic = Get-UiVisualField -Value $Entry -Name 'synthetic'
+    $syntheticValue = $null
+    if ($null -ne $synthetic) { $syntheticValue = [bool] $synthetic }
+
+    return [ordered]@{
+        state        = [string] $state
+        status       = [string] $status
+        theme        = Get-UiVisualField -Value $Entry -Name 'theme'
+        viewport     = Get-UiVisualField -Value $Entry -Name 'viewport'
+        page         = Get-UiVisualField -Value $Entry -Name 'page'
+        dialog       = Get-UiVisualField -Value $Entry -Name 'dialog'
+        clientWidth  = Get-UiVisualField -Value $Entry -Name 'clientWidth'
+        clientHeight = Get-UiVisualField -Value $Entry -Name 'clientHeight'
+        dpi          = Get-UiVisualField -Value $Entry -Name 'dpi'
+        productHash  = Get-UiVisualField -Value $Entry -Name 'productHash'
+        capturedUtc  = Get-UiVisualField -Value $Entry -Name 'capturedUtc'
+        synthetic    = $syntheticValue
+        image        = $imageLink
+        uia          = $uiaLink
+    }
+}
+
+<#
+.SYNOPSIS
+    Writes the offline screenshot index and its data document into a finished report directory.
+
+.DESCRIPTION
+    This is the reporting outlet's own writer, not a separate tool: it consumes the visual facts the
+    caller already holds, validates every link inside the report directory, redacts through the same
+    text protection the durable report uses, and embeds the JSON with the script-closing sequence
+    escaped. Neither file is overwritten, and a synthetic matrix is marked as synthetic in both the
+    data and the page.
+#>
+function Write-UiVisualIndex {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)] $Visual,
+        [string] $RunToken,
+        [string] $OwnedRoot
+    )
+
+    if (-not [IO.Directory]::Exists($OutputDirectory)) { throw 'Run output directory does not exist.' }
+    $entriesValue = Get-UiVisualField -Value $Visual -Name 'entries'
+    if ($entriesValue -isnot [array]) { throw 'Visual matrix entries are missing.' }
+
+    $entries = New-Object System.Collections.ArrayList
+    foreach ($entry in $entriesValue) {
+        [void] $entries.Add((ConvertTo-UiVisualEntry -Entry $entry -OutputDirectory $OutputDirectory))
+    }
+    $themesValue = Get-UiVisualField -Value $Visual -Name 'themes'
+    $themes = @()
+    if ($themesValue -is [array]) { $themes = $themesValue }
+    $keyboardValue = Get-UiVisualField -Value $Visual -Name 'keyboard'
+    $keyboard = @()
+    if ($keyboardValue -is [array]) { $keyboard = $keyboardValue }
+    $syntheticValue = Get-UiVisualField -Value $Visual -Name 'synthetic'
+    $generatedUtc = Get-UiVisualField -Value $Visual -Name 'generatedUtc'
+
+    $doc = [ordered] @{
+        schemaVersion       = 1
+        scenario            = 'Visual'
+        themeMatrix         = Get-UiVisualField -Value $Visual -Name 'themeMatrix'
+        productHash         = Get-UiVisualField -Value $Visual -Name 'productHash'
+        generatedUtc        = $(if ($null -ne $generatedUtc) { [string] $generatedUtc } else { [DateTimeOffset]::UtcNow.ToString('o') })
+        synthetic           = [bool] $syntheticValue
+        journal             = Get-UiVisualField -Value $Visual -Name 'journal'
+        matrixPolicy        = Get-UiVisualField -Value $Visual -Name 'matrixPolicy'
+        themes              = $themes
+        keyboard            = $keyboard
+        entries             = $entries.ToArray()
+        themeRestoreFailure = Get-UiVisualField -Value $Visual -Name 'themeRestoreFailure'
+        stopReason          = Get-UiVisualField -Value $Visual -Name 'stopReason'
+        status              = Get-UiVisualField -Value $Visual -Name 'status'
+        reason              = Get-UiVisualField -Value $Visual -Name 'reason'
+    }
+    $safe = ConvertTo-UiSafeValue -Value $doc -RunToken $RunToken -OwnedRoot $OwnedRoot
+    $json = ConvertTo-Json -InputObject $safe -Depth 24
+    Assert-UiAcceptanceNoCapabilityValue -Text $json -Value $RunToken -Code 'visual.capability_value_leak'
+
+    $dataTarget = Join-Path $OutputDirectory 'screenshots.json'
+    if ([IO.File]::Exists($dataTarget)) { throw 'Screenshot index data already exists.' }
+    [IO.File]::WriteAllText($dataTarget, $json, [Text.UTF8Encoding]::new($false))
+
+    if (-not [IO.File]::Exists($script:ReportTemplatePath)) { throw 'visual.index_template_missing' }
+    $embedded = $json.Replace('<', '\u003c')
+    $embedded = $embedded.Replace([string] [char] 0x2028, '\u2028').Replace([string] [char] 0x2029, '\u2029')
+    $template = [IO.File]::ReadAllText($script:ReportTemplatePath)
+    if ($template.IndexOf('__SCREENSHOTS_JSON__', [StringComparison]::Ordinal) -lt 0) { throw 'visual.index_template_placeholder_missing' }
+    $html = $template.Replace('__SCREENSHOTS_JSON__', $embedded)
+    Assert-UiAcceptanceNoCapabilityValue -Text $html -Value $RunToken -Code 'visual.capability_value_leak'
+    $indexTarget = Join-Path $OutputDirectory 'index.html'
+    if ([IO.File]::Exists($indexTarget)) { throw 'Screenshot index already exists.' }
+    [IO.File]::WriteAllText($indexTarget, $html, [Text.UTF8Encoding]::new($false))
+
+    return [pscustomobject] @{
+        ScreenshotsPath = $dataTarget
+        IndexPath       = $indexTarget
+        EntryCount      = $entries.Count
+        Synthetic       = [bool] $syntheticValue
+    }
+}
+
 Export-ModuleMember -Function @(
     'Write-UiFailureEvidence',
     'Write-UiAcceptanceReport',
     'Write-UiRedactedTreeEvidence',
     'Write-UiThemeEvidence',
+    'Write-UiVisualIndex',
     'Assert-UiPngBytes',
     'Assert-UiOwnedEvidenceFile',
     'Assert-UiEvidenceDirectory'
