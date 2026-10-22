@@ -96,14 +96,24 @@ code { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
   }
 
   function group(values, key) {
-    var map = {};
+    // A plain object inherits names such as constructor, __proto__ and toString, so a theme with
+    // one of those names would index an inherited member instead of an array. A null-prototype map
+    // has no inherited members: every string is just a key, and the guard keeps the first write.
+    var map = Object.create(null);
     var order = [];
     values.forEach(function (entry) {
-      var name = String(entry[key] === undefined ? "unknown" : entry[key]);
-      if (!map[name]) { map[name] = []; order.push(name); }
+      var raw = entry[key];
+      var name = String(raw === undefined || raw === null ? "unknown" : raw);
+      if (!Object.prototype.hasOwnProperty.call(map, name)) { map[name] = []; order.push(name); }
       map[name].push(entry);
     });
     return order.map(function (name) { return { name: name, items: map[name] }; });
+  }
+
+  function threeState(value) {
+    if (value === true) { return "true"; }
+    if (value === false) { return "false"; }
+    return "unknown";
   }
 
   function renderEntry(entry) {
@@ -126,7 +136,7 @@ code { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
     }
     row.appendChild(imageCell);
     var facts = element("td");
-    if (data.synthetic === true || entry.synthetic === true) {
+    if (entry.synthetic === true) {
       facts.appendChild(element("span", "badge", "Synthetic"));
     }
     facts.appendChild(element("div", null, "client " + entry.clientWidth + " x " + entry.clientHeight + " px"));
@@ -152,14 +162,14 @@ code { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
     " | entries " + entries.length +
     " | product " + String(data.productHash || "unknown") +
     " | generated " + String(data.generatedUtc || "unknown") +
-    " | synthetic " + (data.synthetic === true ? "true" : "false");
+    " | synthetic " + threeState(data.synthetic);
 
   if (data.synthetic === true) {
     var banner = document.getElementById("banner");
     banner.hidden = false;
-    banner.textContent = "Synthetic demo data: the screenshots and UI trees on this page were " +
-      "generated for demonstration. They are not real product screenshots and do not prove " +
-      "that any Visual gate passed.";
+    banner.textContent = "Synthetic matrix: this matrix is marked as Synthetic demo data, and each " +
+      "entry is labelled by its own source. A synthetic example is not a real product screenshot " +
+      "and does not prove that any Visual gate passed.";
   }
 
   if (entries.length === 0) {

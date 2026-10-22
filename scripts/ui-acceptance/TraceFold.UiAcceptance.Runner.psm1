@@ -414,6 +414,7 @@ function Invoke-UiAcceptanceRun {
     $reason = ''
     $refs = @()
     $viewports = @()
+    $visual = $null
     $cleanupStatus = 'NotRun'
     try {
         $outcome = & $Scenario
@@ -426,6 +427,11 @@ function Invoke-UiAcceptanceRun {
         }
         if ($outcome.PSObject.Properties['Viewports']) {
             $viewports = @($outcome.Viewports)
+        }
+        # Optional visual matrix. It is handed to the existing report outlet unchanged; a scenario
+        # that states no Visual leaves the report exactly as it was before this input existed.
+        if ($outcome.PSObject.Properties['Visual']) {
+            $visual = $outcome.Visual
         }
     }
     catch {
@@ -498,6 +504,7 @@ function Invoke-UiAcceptanceRun {
         screenshotIndex = @($refs | Where-Object { $_ -like '*.png' })
         cleanVmStatus = 'NotRun'
     }
+    if ($null -ne $visual) { $report['visual'] = $visual }
     $written = Write-UiAcceptanceReport -OutputDirectory $OutputDirectory -Report $report -RunToken $RunToken -OwnedRoot $OwnedRoot
     return [pscustomobject]@{
         Status = if ($cleanupStatus -cne 'Passed') { 'Failed' } else { $status }

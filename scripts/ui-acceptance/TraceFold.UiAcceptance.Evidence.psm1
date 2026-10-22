@@ -174,6 +174,15 @@ function Write-UiAcceptanceReport {
     $json = ConvertTo-Json -InputObject $safe -Depth 40
     $target = Join-Path $OutputDirectory 'report.json'
     if ([IO.File]::Exists($target)) { throw 'Report already exists.' }
+    # Everything the new branch needs is validated and built before the first successful artifact is
+    # persisted: a refused link, a missing template or an occupied target cannot leave a report
+    # behind that claims a complete run without its index.
+    $prepared = $null
+    if ($null -ne $visual) {
+        $prepared = Write-UiVisualIndex -OutputDirectory $OutputDirectory -Visual $visual -RunToken $RunToken -OwnedRoot $OwnedRoot -PrepareOnly
+        if ([IO.File]::Exists($prepared.DataTarget) -or [IO.Directory]::Exists($prepared.DataTarget)) { throw 'Screenshot index data already exists.' }
+        if ([IO.File]::Exists($prepared.IndexTarget) -or [IO.Directory]::Exists($prepared.IndexTarget)) { throw 'Screenshot index already exists.' }
+    }
     [IO.File]::WriteAllText($target, $json, [Text.UTF8Encoding]::new($false))
     $statuses = @($Report.scenarios | ForEach-Object { $_.status })
     $overall = 'Failed'
@@ -183,8 +192,9 @@ function Write-UiAcceptanceReport {
     }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'summary.txt'), ('Stage ' + $Report.checkpoint + ': ' + $overall + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     # A report without visual facts is written exactly as before: no new file, no new field.
-    if ($null -ne $visual) {
-        $null = Write-UiVisualIndex -OutputDirectory $OutputDirectory -Visual $visual -RunToken $RunToken -OwnedRoot $OwnedRoot
+    if ($null -ne $prepared) {
+        Write-UiUtf8NewFile -Path $prepared.DataTarget -Text $prepared.Json
+        Write-UiUtf8NewFile -Path $prepared.IndexTarget -Text $prepared.Html
     }
     return [pscustomobject]@{ Status=$overall; ReportPath=$target }
 }
@@ -349,6 +359,26 @@ function Get-UiVisualField {
 
 <#
 .SYNOPSIS
+    Writes one UTF-8 document that must not already exist.
+
+.DESCRIPTION
+    Both shared documents are first-writers-only: the create-new mode is the refusal, so a second
+    run can never replace an existing index or data document with a different generation.
+#>
+function Write-UiUtf8NewFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Text
+    )
+
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush() } finally { $stream.Dispose() }
+}
+
+<#
+.SYNOPSIS
     Copies a report without its visual matrix, keeping every other field in order.
 
 .DESCRIPTION
@@ -386,22 +416,34 @@ function Get-UiVisualLink {
     param(
         [Parameter(Mandatory)] $Value,
         [Parameter(Mandatory)][string] $OutputDirectory,
-        [Parameter(Mandatory)][string[]] $AllowedExtension
+        [Parameter(Mandatory)][string[]] $AllowedExtension,
+        [string] $RunToken,
+        [string] $OwnedRoot
     )
 
     $text = [string] $Value
     if ([string]::IsNullOrWhiteSpace($text)) { throw 'Visual evidence link is empty.' }
     if ([IO.Path]::IsPathRooted($text)) { throw 'Visual evidence link must be relative.' }
     if ($text -match '(^|[\\/])\.\.([\\/]|$)') { throw 'Visual evidence link must not traverse.' }
-    if ($text -match '[:*?"<>|]') { throw 'Visual evidence link contains a forbidden character.' }
     $segments = @($text -split '[\\/]')
     foreach ($segment in $segments) {
         if ([string]::IsNullOrEmpty($segment) -or $segment -ceq '.') { throw 'Visual evidence link is not canonical.' }
+        foreach ($character in $segment.ToCharArray()) {
+            if ([int] [char] $character -lt 32) { throw 'Visual evidence link contains a control character.' }
+        }
     }
-    $root = [IO.Path]::GetFullPath($OutputDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    # The shared redaction runs on the name that actually points at the file, before URL encoding.
+    # Encoding a token into its escaped form would otherwise hide it from the same patterns that
+    # rewrite it everywhere else, and the link would be published as a working pointer to a file
+    # whose name the durable report refuses to print.
+    if ((Protect-UiAcceptanceText -Value $text -RunToken $RunToken -OwnedRoot $OwnedRoot) -cne $text) {
+        throw 'Visual evidence link would be rewritten by redaction.'
+    }
     $full = [IO.Path]::GetFullPath((Join-Path $OutputDirectory $text))
-    if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw 'Visual evidence link escapes the report directory.' }
-    if (-not [IO.File]::Exists($full)) { throw 'Visual evidence link target is absent.' }
+    # A lexical containment check does not resolve junctions: a directory inside the report root may
+    # itself point outside it. The shared check walks the root, every directory on the way and the
+    # target itself for a reparse point before anything is read.
+    Assert-UiOwnedEvidenceFile -Path $full -OwnedRoot $OutputDirectory
     $extension = [IO.Path]::GetExtension($full).ToLowerInvariant()
     if ($AllowedExtension -notcontains $extension) { throw 'Visual evidence link has an unexpected type.' }
     if ($extension -ceq '.png') {
@@ -410,7 +452,15 @@ function Get-UiVisualLink {
     else {
         $null = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($full, [Text.UTF8Encoding]::new($false, $true)))
     }
-    return ($segments -join '/')
+    # Each segment is encoded on its own, so '#', '%' and spaces can never change what the href
+    # means. The round trip then proves the URL still names exactly the file that was verified.
+    $encoded = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($segment in $segments) { $encoded.Add([Uri]::EscapeDataString($segment)) }
+    $url = ($encoded.ToArray() -join '/')
+    $decoded = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($part in @($url -split '/')) { $decoded.Add([Uri]::UnescapeDataString($part)) }
+    if (($decoded.ToArray() -join '/') -cne ($segments -join '/')) { throw 'Visual evidence link does not round trip through its URL form.' }
+    return $url
 }
 
 <#
@@ -426,7 +476,9 @@ function ConvertTo-UiVisualEntry {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] $Entry,
-        [Parameter(Mandatory)][string] $OutputDirectory
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [string] $RunToken,
+        [string] $OwnedRoot
     )
 
     if ($null -eq $Entry) { throw 'Visual entry is missing.' }
@@ -438,16 +490,21 @@ function ConvertTo-UiVisualEntry {
     $image = Get-UiVisualField -Value $Entry -Name 'image'
     $imageLink = $null
     if ($null -ne $image -and -not [string]::IsNullOrWhiteSpace([string]$image)) {
-        $imageLink = Get-UiVisualLink -Value $image -OutputDirectory $OutputDirectory -AllowedExtension @('.png')
+        $imageLink = Get-UiVisualLink -Value $image -OutputDirectory $OutputDirectory -AllowedExtension @('.png') -RunToken $RunToken -OwnedRoot $OwnedRoot
     }
     $uia = Get-UiVisualField -Value $Entry -Name 'uia'
     $uiaLink = $null
     if ($null -ne $uia -and -not [string]::IsNullOrWhiteSpace([string]$uia)) {
-        $uiaLink = Get-UiVisualLink -Value $uia -OutputDirectory $OutputDirectory -AllowedExtension @('.json')
+        $uiaLink = Get-UiVisualLink -Value $uia -OutputDirectory $OutputDirectory -AllowedExtension @('.json') -RunToken $RunToken -OwnedRoot $OwnedRoot
     }
     $synthetic = Get-UiVisualField -Value $Entry -Name 'synthetic'
     $syntheticValue = $null
-    if ($null -ne $synthetic) { $syntheticValue = [bool] $synthetic }
+    if ($null -ne $synthetic) {
+        # A string 'false' is not a boolean: coercing it would turn an unknown provenance into a
+        # definite one (and 'false' into true). Absent/null stays unknown.
+        if ($synthetic -isnot [bool]) { throw 'Visual entry synthetic flag must be a boolean or null.' }
+        $syntheticValue = [bool] $synthetic
+    }
 
     return [ordered]@{
         state        = [string] $state
@@ -484,7 +541,8 @@ function Write-UiVisualIndex {
         [Parameter(Mandatory)][string] $OutputDirectory,
         [Parameter(Mandatory)] $Visual,
         [string] $RunToken,
-        [string] $OwnedRoot
+        [string] $OwnedRoot,
+        [switch] $PrepareOnly
     )
 
     if (-not [IO.Directory]::Exists($OutputDirectory)) { throw 'Run output directory does not exist.' }
@@ -493,7 +551,7 @@ function Write-UiVisualIndex {
 
     $entries = New-Object System.Collections.ArrayList
     foreach ($entry in $entriesValue) {
-        [void] $entries.Add((ConvertTo-UiVisualEntry -Entry $entry -OutputDirectory $OutputDirectory))
+        [void] $entries.Add((ConvertTo-UiVisualEntry -Entry $entry -OutputDirectory $OutputDirectory -RunToken $RunToken -OwnedRoot $OwnedRoot))
     }
     $themesValue = Get-UiVisualField -Value $Visual -Name 'themes'
     $themes = @()
@@ -501,7 +559,13 @@ function Write-UiVisualIndex {
     $keyboardValue = Get-UiVisualField -Value $Visual -Name 'keyboard'
     $keyboard = @()
     if ($keyboardValue -is [array]) { $keyboard = $keyboardValue }
-    $syntheticValue = Get-UiVisualField -Value $Visual -Name 'synthetic'
+    $syntheticRaw = Get-UiVisualField -Value $Visual -Name 'synthetic'
+    $syntheticValue = $null
+    if ($null -ne $syntheticRaw) {
+        # Unknown provenance must stay unknown: only a real boolean states the source of the data.
+        if ($syntheticRaw -isnot [bool]) { throw 'Visual synthetic flag must be a boolean or null.' }
+        $syntheticValue = [bool] $syntheticRaw
+    }
     $generatedUtc = Get-UiVisualField -Value $Visual -Name 'generatedUtc'
 
     $doc = [ordered] @{
@@ -510,7 +574,7 @@ function Write-UiVisualIndex {
         themeMatrix         = Get-UiVisualField -Value $Visual -Name 'themeMatrix'
         productHash         = Get-UiVisualField -Value $Visual -Name 'productHash'
         generatedUtc        = $(if ($null -ne $generatedUtc) { [string] $generatedUtc } else { [DateTimeOffset]::UtcNow.ToString('o') })
-        synthetic           = [bool] $syntheticValue
+        synthetic           = $syntheticValue
         journal             = Get-UiVisualField -Value $Visual -Name 'journal'
         matrixPolicy        = Get-UiVisualField -Value $Visual -Name 'matrixPolicy'
         themes              = $themes
@@ -522,12 +586,20 @@ function Write-UiVisualIndex {
         reason              = Get-UiVisualField -Value $Visual -Name 'reason'
     }
     $safe = ConvertTo-UiSafeValue -Value $doc -RunToken $RunToken -OwnedRoot $OwnedRoot
+    # Redaction is field-agnostic and can rewrite a file name (GUID-shaped names, a token inside a
+    # name). A link that no longer names the verified file is refused instead of published.
+    $safeEntries = @($safe['entries'])
+    for ($index = 0; $index -lt $safeEntries.Count; $index++) {
+        foreach ($key in @('image', 'uia')) {
+            $before = $entries[$index][$key]
+            if ($null -eq $before) { continue }
+            if ([string] $safeEntries[$index][$key] -cne [string] $before) {
+                throw 'Visual evidence link would be rewritten by redaction.'
+            }
+        }
+    }
     $json = ConvertTo-Json -InputObject $safe -Depth 24
     Assert-UiAcceptanceNoCapabilityValue -Text $json -Value $RunToken -Code 'visual.capability_value_leak'
-
-    $dataTarget = Join-Path $OutputDirectory 'screenshots.json'
-    if ([IO.File]::Exists($dataTarget)) { throw 'Screenshot index data already exists.' }
-    [IO.File]::WriteAllText($dataTarget, $json, [Text.UTF8Encoding]::new($false))
 
     if (-not [IO.File]::Exists($script:ReportTemplatePath)) { throw 'visual.index_template_missing' }
     $embedded = $json.Replace('<', '\u003c')
@@ -536,15 +608,31 @@ function Write-UiVisualIndex {
     if ($template.IndexOf('__SCREENSHOTS_JSON__', [StringComparison]::Ordinal) -lt 0) { throw 'visual.index_template_placeholder_missing' }
     $html = $template.Replace('__SCREENSHOTS_JSON__', $embedded)
     Assert-UiAcceptanceNoCapabilityValue -Text $html -Value $RunToken -Code 'visual.capability_value_leak'
+
+    $dataTarget = Join-Path $OutputDirectory 'screenshots.json'
     $indexTarget = Join-Path $OutputDirectory 'index.html'
-    if ([IO.File]::Exists($indexTarget)) { throw 'Screenshot index already exists.' }
-    [IO.File]::WriteAllText($indexTarget, $html, [Text.UTF8Encoding]::new($false))
+    if ($PrepareOnly) {
+        # The report outlet validates and prepares both documents before it persists anything, so a
+        # refused link or an occupied target cannot leave a report without its index.
+        return [pscustomobject] @{
+            Json        = $json
+            Html        = $html
+            DataTarget  = $dataTarget
+            IndexTarget = $indexTarget
+            EntryCount  = $entries.Count
+            Synthetic   = $syntheticValue
+        }
+    }
+    if ([IO.File]::Exists($dataTarget) -or [IO.Directory]::Exists($dataTarget)) { throw 'Screenshot index data already exists.' }
+    if ([IO.File]::Exists($indexTarget) -or [IO.Directory]::Exists($indexTarget)) { throw 'Screenshot index already exists.' }
+    Write-UiUtf8NewFile -Path $dataTarget -Text $json
+    Write-UiUtf8NewFile -Path $indexTarget -Text $html
 
     return [pscustomobject] @{
         ScreenshotsPath = $dataTarget
         IndexPath       = $indexTarget
         EntryCount      = $entries.Count
-        Synthetic       = [bool] $syntheticValue
+        Synthetic       = $syntheticValue
     }
 }
 
