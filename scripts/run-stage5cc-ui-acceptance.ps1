@@ -9,26 +9,382 @@
 # same place. A missing or mismatched archive is reported as Blocked, never as a product
 # failure, and never triggers a download.
 #
+# Two invocation shapes:
+#
+#   source tree    the entry sits in a checkout. The pinned driver archive is verified against the
+#                  repository manifest and unpacked into this run's directory, and the support CLI
+#                  is published from its project, so the SDK is required.
+#
+#   moved toolkit  the package was unpacked somewhere else and carries its own support payload,
+#                  unpacked driver, modules, templates, contract and declared fixtures. Nothing is
+#                  compiled, downloaded or unpacked: toolkit.json is the package data contract and
+#                  every member is verified before the product, driver or support is started.
+#
 # Usage:
 #   pwsh -NoProfile -File scripts/run-stage5cc-ui-acceptance.ps1 `
 #       -ProductDirectory .superpowers/stage5cc-product `
 #       -WinAppCliArchivePath D:\downloads\winappcli-x64.zip `
 #       -OutputDirectory .superpowers/stage5cc-uia-gate `
 #       -Scenario StartupLayout
+#
+#   pwsh -NoProfile -File <toolkit>/scripts/run-stage5cc-ui-acceptance.ps1 `
+#       -ToolkitDirectory <toolkit> -ProductDirectory <product> -Scenario StartupLayout
 
 [CmdletBinding()]
 param(
+    # The first four parameters keep their original positions: an old call that binds them
+    # positionally (-File entry <product> <archive> <out> StartupLayout) must keep working, so the
+    # package switch is appended after them instead of inserted into the sequence.
     [Parameter(Mandatory)][string] $ProductDirectory,
-    [Parameter(Mandatory)][string] $WinAppCliArchivePath,
+    [string] $WinAppCliArchivePath,
     [string] $OutputDirectory,
     [ValidateSet('All','StartupLayout','MainChain','Conflict','ConflictKeepBoth','ConflictReplace','ConflictSkip','ProcessingFailureRetry','BatchMetadataUndo','LibraryFilterNaming','Library','Taxonomy','Diagnostics','SingleInstance','Visual')]
-    [string[]] $Scenario = @('All')
+    [string[]] $Scenario = @('All'),
+    [string] $ToolkitDirectory
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:repositoryRoot = Split-Path -Parent $PSScriptRoot
+$ExitInvalidArguments = 2
+$ExitBlocked = 1
+
+$sourceMode = -not [string]::IsNullOrWhiteSpace($WinAppCliArchivePath)
+$packageMode = -not [string]::IsNullOrWhiteSpace($ToolkitDirectory)
+if ($sourceMode -eq $packageMode) {
+    [Console]::Error.WriteLine('Specify exactly one of -WinAppCliArchivePath (source tree) or -ToolkitDirectory (moved package).')
+    exit $ExitInvalidArguments
+}
+
+<#
+.SYNOPSIS
+    Resolves one package-relative member path and refuses anything that leaves the package.
+
+.DESCRIPTION
+    The package manifest is data, so every path in it is treated as untrusted input: a rooted
+    path, a traversal segment, an empty or dot segment and a control character are refused
+    before anything is opened, and the resolved path must still sit under the package root.
+#>
+function Resolve-Stage5CCPackageRelativePath {
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $Relative,
+        [Parameter(Mandatory)][string] $Label
+    )
+
+    $text = [string] $Relative
+    if ([string]::IsNullOrWhiteSpace($text)) { throw ('toolkit.path_empty: ' + $Label) }
+    if ([IO.Path]::IsPathRooted($text)) { throw ('toolkit.path_rooted: ' + $Label + '=' + $text) }
+    $segments = @($text -split '[\\/]')
+    foreach ($segment in $segments) {
+        if ([string]::IsNullOrEmpty($segment) -or $segment -ceq '.') { throw ('toolkit.path_not_canonical: ' + $Label + '=' + $text) }
+        if ($segment -ceq '..') { throw ('toolkit.path_traversal: ' + $Label + '=' + $text) }
+        foreach ($character in $segment.ToCharArray()) {
+            if ([int] [char] $character -lt 32) { throw ('toolkit.path_control_character: ' + $Label + '=' + $text) }
+        }
+    }
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $full = [IO.Path]::GetFullPath((Join-Path $rootFull ($segments -join [IO.Path]::DirectorySeparatorChar)))
+    if (-not $full.StartsWith(($rootFull + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
+        throw ('toolkit.path_outside_root: ' + $Label + '=' + $text)
+    }
+    return $full
+}
+
+<#
+.SYNOPSIS
+    Walks every component of one member path and refuses a reparse point.
+#>
+function Assert-Stage5CCPackagePathChain {
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $Path
+    )
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $relative = [IO.Path]::GetFullPath($Path).Substring($rootFull.Length).TrimStart([IO.Path]::DirectorySeparatorChar)
+    $current = $rootFull
+    foreach ($segment in @($relative -split '[\\/]')) {
+        if ([string]::IsNullOrEmpty($segment)) { continue }
+        $current = Join-Path $current $segment
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw ('toolkit.path_reparse: ' + ($relative -replace '\\', '/'))
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Refuses a product directory and a toolkit that contain one another.
+#>
+function Assert-Stage5CCPathsDisjoint {
+    param(
+        [Parameter(Mandatory)][string] $Product,
+        [Parameter(Mandatory)][string] $Toolkit
+    )
+
+    $productFull = [IO.Path]::GetFullPath($Product).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $toolkitFull = [IO.Path]::GetFullPath($Toolkit).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $productBoundary = $productFull + [IO.Path]::DirectorySeparatorChar
+    $toolkitBoundary = $toolkitFull + [IO.Path]::DirectorySeparatorChar
+    $same = [string]::Equals($productFull, $toolkitFull, [StringComparison]::OrdinalIgnoreCase)
+    if ($same -or
+        $productFull.StartsWith($toolkitBoundary, [StringComparison]::OrdinalIgnoreCase) -or
+        $toolkitFull.StartsWith($productBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'toolkit.product_overlap: the product directory and the toolkit must not contain one another.'
+    }
+}
+
+<#
+.SYNOPSIS
+    Requires one consumed file to have a verified member row.
+
+.DESCRIPTION
+    The member table is only a contract if it covers what the entry actually loads, copies or
+    passes on. A file that exists in the package but has no row would never be hashed, so this
+    refuses it instead of letting the unverified file be imported or copied.
+#>
+function Assert-Stage5CCToolkitFileCovered {
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)] $Members,
+        [Parameter(Mandatory)][string] $Label
+    )
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $relative = [IO.Path]::GetFullPath($Path).Substring($rootFull.Length).TrimStart([IO.Path]::DirectorySeparatorChar) -replace '\\', '/'
+    if (-not $Members.Contains($relative)) {
+        throw ('toolkit.member_unlisted: ' + $Label + '=' + $relative)
+    }
+}
+
+<#
+.SYNOPSIS
+    Requires every file in one consumed directory to have a verified member row.
+
+.DESCRIPTION
+    Support is copied recursively and the templates are read as a tree, so a file that is present
+    but absent from the table would reach a scenario without ever being hashed. The walk refuses a
+    reparse point on sight and reports the first file that carries no row.
+#>
+function Assert-Stage5CCToolkitDirectoryCovered {
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $Directory,
+        [Parameter(Mandatory)] $Members,
+        [Parameter(Mandatory)][string] $Label
+    )
+
+    if (-not [IO.Directory]::Exists($Directory)) { throw ('toolkit.tree_missing: ' + $Label) }
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push([IO.Path]::GetFullPath($Directory).TrimEnd([IO.Path]::DirectorySeparatorChar))
+    while ($pending.Count -gt 0) {
+        $current = $pending.Pop()
+        foreach ($entry in @([IO.Directory]::GetFileSystemEntries($current))) {
+            $item = Get-Item -LiteralPath $entry -Force
+            $relative = $entry.Substring($rootFull.Length).TrimStart([IO.Path]::DirectorySeparatorChar) -replace '\\', '/'
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw ('toolkit.path_reparse: ' + $relative) }
+            if ([IO.Directory]::Exists($entry)) { $pending.Push($entry); continue }
+            if (-not $Members.Contains($relative)) { throw ('toolkit.member_unlisted: ' + $Label + '=' + $relative) }
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Reads and verifies the package data contract before anything is started.
+
+.DESCRIPTION
+    The manifest names the layout, the support and driver members that will actually run, and every
+    file this entry consumes. Each member is re-hashed here; the contract's declared fixture assets
+    are re-hashed too. A missing, duplicated, escaping, reparse-pointed or changed member stops the
+    invocation with an invalid-argument answer, before any support, driver or product is started.
+#>
+function Read-Stage5CCToolkitPackage {
+    param([Parameter(Mandatory)][string] $Root)
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if (-not [IO.Directory]::Exists($rootFull)) { throw ('toolkit.root_missing: ' + $Root) }
+    if (((Get-Item -LiteralPath $rootFull -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw ('toolkit.root_reparse: ' + $Root)
+    }
+    $manifestPath = Join-Path $rootFull 'toolkit.json'
+    if (-not [IO.File]::Exists($manifestPath)) { throw 'toolkit.manifest_missing: toolkit.json' }
+    Assert-Stage5CCPackagePathChain -Root $rootFull -Path $manifestPath
+
+    $document = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ([string] $document.schema -cne 'tracefold-ui-acceptance-toolkit') { throw 'toolkit.schema_mismatch: expected tracefold-ui-acceptance-toolkit' }
+    if ([int] $document.schemaVersion -ne 1) { throw ('toolkit.schema_version_unsupported: ' + [string] $document.schemaVersion) }
+    foreach ($key in @('layout', 'driver', 'support', 'members')) {
+        if ($null -eq $document.PSObject.Properties[$key]) { throw ('toolkit.manifest_key_missing: ' + $key) }
+    }
+    $layout = $document.layout
+    foreach ($key in @('supportRoot', 'driverRoot', 'contractPath', 'resultsRoot')) {
+        if ($null -eq $layout.PSObject.Properties[$key] -or [string]::IsNullOrWhiteSpace([string] $layout.$key)) {
+            throw ('toolkit.layout_key_missing: ' + $key)
+        }
+    }
+    $supportRoot = Resolve-Stage5CCPackageRelativePath -Root $rootFull -Relative ([string] $layout.supportRoot) -Label 'layout.supportRoot'
+    $driverRoot = Resolve-Stage5CCPackageRelativePath -Root $rootFull -Relative ([string] $layout.driverRoot) -Label 'layout.driverRoot'
+    $contractPath = Resolve-Stage5CCPackageRelativePath -Root $rootFull -Relative ([string] $layout.contractPath) -Label 'layout.contractPath'
+    $resultsRoot = Resolve-Stage5CCPackageRelativePath -Root $rootFull -Relative ([string] $layout.resultsRoot) -Label 'layout.resultsRoot'
+    if (-not [IO.Directory]::Exists($supportRoot)) { throw ('toolkit.support_root_missing: ' + [string] $layout.supportRoot) }
+    if (-not [IO.Directory]::Exists($driverRoot)) { throw ('toolkit.driver_root_missing: ' + [string] $layout.driverRoot) }
+    if (-not [IO.File]::Exists($contractPath)) { throw ('toolkit.contract_missing: ' + [string] $layout.contractPath) }
+
+    if ($null -eq $document.support.PSObject.Properties['executable']) { throw 'toolkit.support_executable_missing' }
+    $supportName = [string] $document.support.executable
+    if ([string]::IsNullOrWhiteSpace($supportName) -or $supportName -match '[\\/]') { throw 'toolkit.support_executable_invalid' }
+    # The entry, the Runner and the report all name this executable. A package that declares some
+    # other name would be verified under one name and consumed under another, so the other name is
+    # refused here, before anything starts, instead of being silently ignored later.
+    if ($supportName -cne 'TraceFold.Media.UiAcceptance.Support.exe') {
+        throw ('toolkit.support_executable_unsupported: this entry consumes TraceFold.Media.UiAcceptance.Support.exe, not ' + $supportName)
+    }
+    $supportExecutable = Join-Path $supportRoot $supportName
+    $driverName = 'winapp.exe'
+    if ($null -ne $document.driver.PSObject.Properties['memberName'] -and -not [string]::IsNullOrWhiteSpace([string] $document.driver.memberName)) {
+        $driverName = [string] $document.driver.memberName
+    }
+    if ($driverName -match '[\\/]') { throw 'toolkit.driver_member_invalid' }
+    # The run root, the scenario argument and the identity measurement all say winapp.exe.
+    if ($driverName -cne 'winapp.exe') {
+        throw ('toolkit.driver_member_unsupported: this entry consumes winapp.exe, not ' + $driverName)
+    }
+    $driverExecutable = Join-Path $driverRoot $driverName
+
+    $declaredRows = @($document.members)
+    if ($declaredRows.Count -eq 0) { throw 'toolkit.members_empty' }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $rows = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($member in $declaredRows) {
+        if ($null -eq $member) { throw 'toolkit.member_invalid: null entry' }
+        $relative = [string] $member.path
+        $source = [string] $member.source
+        if ([string]::IsNullOrWhiteSpace($source)) { throw ('toolkit.member_source_missing: ' + $relative) }
+        $full = Resolve-Stage5CCPackageRelativePath -Root $rootFull -Relative $relative -Label 'members[].path'
+        $key = $relative -replace '\\', '/'
+        if (-not $seen.Add($key)) { throw ('toolkit.member_duplicate: ' + $key) }
+        if (-not [IO.File]::Exists($full)) { throw ('toolkit.member_missing: ' + $key) }
+        Assert-Stage5CCPackagePathChain -Root $rootFull -Path $full
+        if ($null -eq $member.PSObject.Properties['bytes']) { throw ('toolkit.member_size_invalid: ' + $key) }
+        $declaredBytes = [long] $member.bytes
+        $declaredSha = ([string] $member.sha256).ToUpperInvariant()
+        if ($declaredSha -notmatch '^[0-9A-F]{64}$') { throw ('toolkit.member_hash_invalid: ' + $key) }
+        $actualBytes = [long] ((Get-Item -LiteralPath $full).Length)
+        if ($actualBytes -ne $declaredBytes) { throw ('toolkit.member_size_mismatch: ' + $key) }
+        $actualSha = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
+        if ($actualSha -cne $declaredSha) { throw ('toolkit.member_hash_mismatch: ' + $key) }
+        [void] $rows.Add([pscustomobject] @{ Key = $key; Bytes = $actualBytes; Sha256 = $actualSha; Source = $source })
+    }
+
+    $requiredMembers = @(
+        @{ Path = $supportExecutable; Label = 'support executable' },
+        @{ Path = $driverExecutable; Label = 'driver executable' },
+        @{ Path = $contractPath; Label = 'contract' }
+    )
+    $requiredRows = @{}
+    foreach ($item in $requiredMembers) {
+        $relative = [IO.Path]::GetFullPath($item.Path).Substring($rootFull.Length).TrimStart([IO.Path]::DirectorySeparatorChar)
+        $key = $relative -replace '\\', '/'
+        if (-not $seen.Contains($key)) { throw ('toolkit.required_member_absent: ' + $item.Label + '=' + $key) }
+        $requiredRows[$item.Label] = @($rows | Where-Object { $_.Key -ceq $key })[0]
+    }
+    $supportRow = $requiredRows['support executable']
+    $driverRow = $requiredRows['driver executable']
+    if ($null -ne $document.support.PSObject.Properties['sha256']) {
+        $declaredSupportSha = ([string] $document.support.sha256).ToUpperInvariant()
+        if ($declaredSupportSha -cne $supportRow.Sha256) { throw 'toolkit.support_declaration_mismatch: the support digest does not match its member' }
+    }
+    if ($null -ne $document.driver.PSObject.Properties['sha256']) {
+        $declaredDriverSha = ([string] $document.driver.sha256).ToUpperInvariant()
+        if ($declaredDriverSha -cne $driverRow.Sha256) { throw 'toolkit.driver_declaration_mismatch: the driver digest does not match its member' }
+    }
+
+    # What the entry actually consumes must be exactly what was verified: the entry file itself,
+    # the module set it imports, the template tree the report writer reads, and the complete
+    # support and driver payloads that are copied into the run root. A file that is present but
+    # unlisted would otherwise be imported or copied without ever being hashed.
+    $uiRootFull = Join-Path $rootFull 'scripts/ui-acceptance'
+    $moduleNames = @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')
+    $memberIndex = @{}
+    foreach ($row in $rows) { $memberIndex[[string] $row.Key] = $row }
+    Assert-Stage5CCToolkitFileCovered -Root $rootFull -Path (Join-Path $rootFull 'scripts/run-stage5cc-ui-acceptance.ps1') -Members $seen -Label 'entry'
+    foreach ($moduleName in $moduleNames) {
+        $modulePath = Join-Path $uiRootFull ('TraceFold.UiAcceptance.' + $moduleName + '.psm1')
+        if (-not [IO.File]::Exists($modulePath)) { throw ('toolkit.module_missing: ' + $moduleName) }
+        Assert-Stage5CCToolkitFileCovered -Root $rootFull -Path $modulePath -Members $seen -Label 'module'
+    }
+    foreach ($presentModule in @(Get-ChildItem -LiteralPath $uiRootFull -File -Filter '*.psm1')) {
+        Assert-Stage5CCToolkitFileCovered -Root $rootFull -Path $presentModule.FullName -Members $seen -Label 'module'
+    }
+    Assert-Stage5CCToolkitDirectoryCovered -Root $rootFull -Directory (Join-Path $uiRootFull 'report-template') -Members $seen -Label 'template'
+    # The report writer reads this file by name whenever an index is produced. A tree guard alone
+    # would accept an empty template directory, so the file is required and bound to its row.
+    $indexTemplatePath = Join-Path $uiRootFull 'report-template/index.html'
+    if (-not [IO.File]::Exists($indexTemplatePath)) { throw 'toolkit.template_missing: scripts/ui-acceptance/report-template/index.html' }
+    Assert-Stage5CCToolkitFileCovered -Root $rootFull -Path $indexTemplatePath -Members $seen -Label 'template'
+    Assert-Stage5CCToolkitDirectoryCovered -Root $rootFull -Directory $supportRoot -Members $seen -Label 'support'
+    Assert-Stage5CCToolkitDirectoryCovered -Root $rootFull -Directory $driverRoot -Members $seen -Label 'driver'
+
+    # The contract declares the fixture assets this toolkit owes. They are re-hashed here, from the
+    # package itself, so a moved toolkit never reaches a scenario with a stale or missing fixture.
+    $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
+    $fixtureAssets = @()
+    if ($null -ne $contract.PSObject.Properties['fixtureAssets']) { $fixtureAssets = @($contract.fixtureAssets) }
+    foreach ($asset in $fixtureAssets) {
+        if ($null -eq $asset) { throw 'toolkit.fixture_invalid: null entry' }
+        $relative = [string] $asset.repositoryPath
+        $full = Resolve-Stage5CCPackageRelativePath -Root $rootFull -Relative $relative -Label 'fixtureAssets[].repositoryPath'
+        $key = $relative -replace '\\', '/'
+        if (-not [IO.File]::Exists($full)) { throw ('toolkit.fixture_missing: ' + $key) }
+        Assert-Stage5CCPackagePathChain -Root $rootFull -Path $full
+        if ($null -eq $asset.PSObject.Properties['sizeBytes'] -or $null -eq $asset.PSObject.Properties['sha256']) {
+            throw ('toolkit.fixture_declaration_incomplete: ' + $key)
+        }
+        if ([long] ((Get-Item -LiteralPath $full).Length) -ne [long] $asset.sizeBytes) { throw ('toolkit.fixture_size_mismatch: ' + $key) }
+        if ((Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -cne ([string] $asset.sha256).ToUpperInvariant()) { throw ('toolkit.fixture_hash_mismatch: ' + $key) }
+    }
+
+    return [pscustomobject] @{
+        Root             = $rootFull
+        ManifestPath     = $manifestPath
+        SupportRoot      = $supportRoot
+        SupportExecutable = $supportExecutable
+        SupportSha256    = [string] $supportRow.Sha256
+        DriverRoot       = $driverRoot
+        DriverExecutable = $driverExecutable
+        DriverMemberName = $driverName
+        DriverSha256     = [string] $driverRow.Sha256
+        ContractPath     = $contractPath
+        ResultsRoot      = $resultsRoot
+        MemberCount      = $rows.Count
+        MemberRows       = $memberIndex
+        ModuleNames      = $moduleNames
+        FixtureCount     = $fixtureAssets.Count
+    }
+}
+
+$script:toolkitPackage = $null
+if ($packageMode) {
+    try { $script:toolkitPackage = Read-Stage5CCToolkitPackage -Root $ToolkitDirectory }
+    catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit $ExitInvalidArguments
+    }
+    $entryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if (-not [string]::Equals($entryRoot, [string] $script:toolkitPackage.Root, [StringComparison]::OrdinalIgnoreCase)) {
+        [Console]::Error.WriteLine('toolkit.entry_root_mismatch: -ToolkitDirectory and the running entry file name different packages.')
+        exit $ExitInvalidArguments
+    }
+    $script:repositoryRoot = [string] $script:toolkitPackage.Root
+}
+else {
+    $script:repositoryRoot = Split-Path -Parent $PSScriptRoot
+}
 $script:uiRoot = Join-Path $script:repositoryRoot 'scripts/ui-acceptance'
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Contracts.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Processes.psm1') -Force -DisableNameChecking
@@ -36,11 +392,115 @@ Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Runner.psm1') -F
 # Metadata and provenance producers: one implementation per field family, consumed below.
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Metadata.psm1') -Force -DisableNameChecking
 
-$ExitInvalidArguments = 2
-$ExitBlocked = 1
+# Registry entries that load the aggregate engine themselves. Each one resolves the sibling copy
+# under scenarios/ first and falls back to the parent directory, so the package check below reads
+# the same two candidates in the same order.
+$script:scenarioEngineModule = [ordered] @{
+    'Conflict' = 'TraceFold.UiAcceptance.Aggregate.psm1'
+    'Library'  = 'TraceFold.UiAcceptance.Aggregate.psm1'
+}
 
-function Write-Stage5CCIndexEntry {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.ArrayList] $Index, [Parameter(Mandatory)][hashtable] $Entry)
+<#
+.SYNOPSIS
+    Requires the module a request's scenario will import to be a verified package member.
+
+.DESCRIPTION
+    Two registry entries load the aggregate engine at dispatch time, choosing the sibling copy
+    first and the parent copy second. A package that carries the engine without a row, or carries
+    neither, would otherwise be discovered only after the support tool has already created the run
+    root. The same candidate order is used here, and the file that would be imported is the file
+    that is checked.
+#>
+function Assert-Stage5CCToolkitScenarioDependencies {
+    param(
+        [Parameter(Mandatory)] $Package,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Names
+    )
+
+    foreach ($name in $Names) {
+        if (-not $script:scenarioEngineModule.Contains($name)) { continue }
+        # An entry that is not there is the completeness gate's refusal; this check only binds the
+        # dependency of a scenario that will really be loaded.
+        $scenarioFile = Get-UiAcceptanceScenarioFile -Name $name
+        if (-not [IO.File]::Exists((Join-Path ([string] $Package.Root) ('scripts/ui-acceptance/scenarios/' + $scenarioFile)))) { continue }
+        $moduleName = [string] $script:scenarioEngineModule[$name]
+        $candidates = @(
+            ('scripts/ui-acceptance/scenarios/' + $moduleName),
+            ('scripts/ui-acceptance/' + $moduleName)
+        )
+        $chosen = $null
+        foreach ($relative in $candidates) {
+            $candidatePath = Join-Path ([string] $Package.Root) ($relative -replace '/', '\')
+            if ([IO.File]::Exists($candidatePath)) { $chosen = $relative; break }
+        }
+        if ($null -eq $chosen) { throw ('toolkit.scenario_dependency_missing: ' + $name + '=' + $moduleName) }
+        $row = $Package.MemberRows[$chosen]
+        if ($null -eq $row) { throw ('toolkit.member_unlisted: dependency=' + $chosen) }
+        $chosenPath = Join-Path ([string] $Package.Root) ($chosen -replace '/', '\')
+        if ([long] ((Get-Item -LiteralPath $chosenPath).Length) -ne [long] $row.Bytes) { throw ('toolkit.member_size_mismatch: ' + $chosen) }
+        if ((Get-FileHash -LiteralPath $chosenPath -Algorithm SHA256).Hash -cne [string] $row.Sha256) { throw ('toolkit.member_hash_mismatch: ' + $chosen) }
+    }
+}
+
+<#
+.SYNOPSIS
+    Refuses an existing path whose components include a reparse point.
+
+.DESCRIPTION
+    A junction inside an existing part of a path redirects everything created below it, so a fresh
+    leaf name says nothing about where the run actually writes. The walk stops at the first
+    component that does not exist yet: those are the ones this run would create itself.
+#>
+function Assert-Stage5CCExistingPathNotAliased {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $Code
+    )
+
+    $full = [IO.Path]::GetFullPath($Path)
+    $pathRoot = [IO.Path]::GetPathRoot($full)
+    if ([string]::IsNullOrEmpty($pathRoot)) { return }
+    $current = $pathRoot.TrimEnd([IO.Path]::DirectorySeparatorChar)
+    foreach ($segment in @($full.Substring($pathRoot.Length) -split '[\\/]')) {
+        if ([string]::IsNullOrEmpty($segment)) { continue }
+        $current = Join-Path $current $segment
+        if (-not [IO.File]::Exists($current) -and -not [IO.Directory]::Exists($current)) { break }
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw ($Code + ': ' + $full) }
+    }
+}
+
+<#
+.SYNOPSIS
+    Requires every scenario entry this request will load to be a verified package member.
+
+.DESCRIPTION
+    A scenario file is dispatched by path, so the file that runs must be the file the manifest
+    hashed. The row is looked up in the same table the package validator built, and the bytes are
+    read again here because this check runs after the request is resolved and immediately before
+    the scenario could be dispatched.
+#>
+function Assert-Stage5CCToolkitScenarioMembers {
+    param(
+        [Parameter(Mandatory)] $Package,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Names
+    )
+
+    foreach ($name in $Names) {
+        $file = Get-UiAcceptanceScenarioFile -Name $name
+        $relative = 'scripts/ui-acceptance/scenarios/' + $file
+        $full = Join-Path ([string] $Package.Root) ($relative -replace '/', '\')
+        # An entry that is not there is the completeness gate's refusal (scenario_entry_missing),
+        # not this one: 'All' must still answer Blocked rather than an invalid package.
+        if (-not [IO.File]::Exists($full)) { continue }
+        $row = $Package.MemberRows[$relative]
+        if ($null -eq $row) { throw ('toolkit.member_unlisted: scenario=' + $relative) }
+        if ([long] ((Get-Item -LiteralPath $full).Length) -ne [long] $row.Bytes) { throw ('toolkit.member_size_mismatch: ' + $relative) }
+        if ((Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -cne [string] $row.Sha256) { throw ('toolkit.member_hash_mismatch: ' + $relative) }
+    }
+}
+
+function Write-Stage5CCIndexEntry {    param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.ArrayList] $Index, [Parameter(Mandatory)][hashtable] $Entry)
     foreach ($field in @('reportPath','outputDirectory')) {
         $value = [string] $Entry[$field]
         if ([IO.Path]::IsPathRooted($value) -or $value -match '(^|[\\/])\.\.([\\/]|$)') {
@@ -222,13 +682,53 @@ function Write-Stage5CCHostEvidence {
 
 $product = [IO.Path]::GetFullPath($ProductDirectory)
 $productExecutable = Join-Path $product 'TraceFold.Media.exe'
-$driverManifestPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/winapp/win-x64/manifest.json'
-$driverManifest = Get-Content -LiteralPath $driverManifestPath -Raw | ConvertFrom-Json
+if ($packageMode) {
+    # A product that carries the toolkit, or a toolkit inside the product, is one tree pretending to
+    # be two: the boundary is refused before anything is read from either side. A junction on the
+    # product path makes the lexical answer meaningless, so it is refused first.
+    try {
+        Assert-Stage5CCExistingPathNotAliased -Path $product -Code 'toolkit.product_reparse'
+        Assert-Stage5CCPathsDisjoint -Product $product -Toolkit ([string] $script:toolkitPackage.Root)
+    }
+    catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit $ExitInvalidArguments
+    }
+}
+$driverManifest = $null
+if (-not $packageMode) {
+    $driverManifestPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/winapp/win-x64/manifest.json'
+    $driverManifest = Get-Content -LiteralPath $driverManifestPath -Raw | ConvertFrom-Json
+}
 $archivePath = $WinAppCliArchivePath
+$contractPath = if ($packageMode) {
+    [string] $script:toolkitPackage.ContractPath
+}
+else {
+    Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
+}
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    $defaultParent = Join-Path $script:repositoryRoot '.superpowers/stage5cc-uia-gate'
+    # A moved toolkit writes into the results directory its own manifest declares; a source tree
+    # keeps its .superpowers gate directory. Neither falls back to the other's location.
+    $defaultParent = if ($packageMode) { [string] $script:toolkitPackage.ResultsRoot } else { Join-Path $script:repositoryRoot '.superpowers/stage5cc-uia-gate' }
+    if ($packageMode) {
+        try { Assert-Stage5CCExistingPathNotAliased -Path $defaultParent -Code 'toolkit.results_reparse' }
+        catch {
+            [Console]::Error.WriteLine($_.Exception.Message)
+            exit $ExitInvalidArguments
+        }
+    }
     [void][IO.Directory]::CreateDirectory($defaultParent)
     $OutputDirectory = Join-Path $defaultParent ('run-' + [guid]::NewGuid().ToString('N'))
+}
+else {
+    # An explicit destination keeps its old rules and gains one: an existing junction inside it
+    # would move the whole run somewhere the caller did not name.
+    try { Assert-Stage5CCExistingPathNotAliased -Path $OutputDirectory -Code 'toolkit.output_reparse' }
+    catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit $ExitInvalidArguments
+    }
 }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if ([IO.Directory]::Exists($output) -or [IO.File]::Exists($output)) {
@@ -281,6 +781,20 @@ if ($completeness.IncludesAll -and -not $completeness.Complete) {
     exit $ExitBlocked
 }
 
+if ($packageMode) {
+    # The selected entries are the scenario files that can actually be loaded, and the aggregate
+    # engine two of them import is a real conditional dependency. Both are checked here: after the
+    # completeness gate has had its say, and before any support, driver or product is started.
+    try {
+        Assert-Stage5CCToolkitScenarioMembers -Package $script:toolkitPackage -Names $requested
+        Assert-Stage5CCToolkitScenarioDependencies -Package $script:toolkitPackage -Names $requested
+    }
+    catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit $ExitInvalidArguments
+    }
+}
+
 $missingIds = @($completeness.Missing | ForEach-Object { [string] $_.id })
 $missingRecorded = @()
 
@@ -307,6 +821,13 @@ if ($pending.Count -gt 0) {
     if (-not [IO.File]::Exists($productExecutable)) {
         $blockedReason = 'published_product_unavailable'
     }
+    elseif ($packageMode) {
+        # The package validator already proved this member; the second read keeps a tree that
+        # changed after validation from being driven as if it were the verified one.
+        if (-not [IO.File]::Exists([string] $script:toolkitPackage.DriverExecutable)) {
+            $blockedReason = 'toolkit_driver_unavailable'
+        }
+    }
     elseif (-not [IO.File]::Exists($archivePath)) {
         $blockedReason = 'pinned_driver_archive_unavailable'
     }
@@ -319,18 +840,43 @@ if ($pending.Count -gt 0) {
     }
     if ([string]::IsNullOrWhiteSpace($blockedReason) -and $pending -contains 'MainChain') {
         $mediaManifestPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ffmpeg/win-x64/manifest.json'
-        $mediaManifest = [IO.File]::ReadAllText($mediaManifestPath) | ConvertFrom-Json
-        foreach ($fileName in @('ffmpeg.exe','ffprobe.exe')) {
-            $toolPath = Join-Path $product ('tools/ffmpeg/' + $fileName)
-            if (-not [IO.File]::Exists($toolPath)) {
-                $blockedReason = 'pinned_media_tools_unavailable'
-                break
+        if (-not [IO.File]::Exists($mediaManifestPath)) {
+            # A moved toolkit that does not carry the media-tools declaration cannot promise the
+            # MainChain digest check; it says so instead of reading a path that is not there.
+            $blockedReason = 'pinned_media_tools_declaration_unavailable'
+        }
+        else {
+            # This declaration is consumed only by MainChain, and in a package it has to be one of
+            # the members that were verified: a file that exists but carries no row would otherwise
+            # decide the media-tool gate without ever being hashed.
+            if ($packageMode) {
+                try {
+                    $mediaRelative = 'apps/media-desktop/tools/ffmpeg/win-x64/manifest.json'
+                    $mediaRow = $script:toolkitPackage.MemberRows[$mediaRelative]
+                    if ($null -eq $mediaRow) { throw ('toolkit.member_unlisted: media-manifest=' + $mediaRelative) }
+                    if ([long] ((Get-Item -LiteralPath $mediaManifestPath).Length) -ne [long] $mediaRow.Bytes) { throw ('toolkit.member_size_mismatch: ' + $mediaRelative) }
+                    if ((Get-FileHash -LiteralPath $mediaManifestPath -Algorithm SHA256).Hash -cne [string] $mediaRow.Sha256) { throw ('toolkit.member_hash_mismatch: ' + $mediaRelative) }
+                }
+                catch {
+                    [Console]::Error.WriteLine($_.Exception.Message)
+                    $blockedReason = 'pinned_media_tools_declaration_unverified'
+                }
             }
-            $expected = $mediaManifest.files.PSObject.Properties[$fileName].Value
-            if ((Get-Item -LiteralPath $toolPath).Length -ne [long]$expected.size -or
-                (Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash -cne [string]$expected.sha256) {
-                $blockedReason = 'pinned_media_tools_mismatch'
-                break
+            if ([string]::IsNullOrWhiteSpace($blockedReason)) {
+                $mediaManifest = [IO.File]::ReadAllText($mediaManifestPath) | ConvertFrom-Json
+                foreach ($fileName in @('ffmpeg.exe', 'ffprobe.exe')) {
+                    $toolPath = Join-Path $product ('tools/ffmpeg/' + $fileName)
+                    if (-not [IO.File]::Exists($toolPath)) {
+                        $blockedReason = 'pinned_media_tools_unavailable'
+                        break
+                    }
+                    $expected = $mediaManifest.files.PSObject.Properties[$fileName].Value
+                    if ((Get-Item -LiteralPath $toolPath).Length -ne [long] $expected.size -or
+                        (Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash -cne [string] $expected.sha256) {
+                        $blockedReason = 'pinned_media_tools_mismatch'
+                        break
+                    }
+                }
             }
         }
     }
@@ -374,17 +920,25 @@ if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
 # --- per scenario ----------------------------------------------------------------------
 
 [void][IO.Directory]::CreateDirectory($output)
-$supportProject = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/TraceFold.Media.UiAcceptance.Support.csproj'
-$supportRoot = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/bin/stage5cc-bootstrap'
-$packageCache = Join-Path $script:repositoryRoot 'apps/media-desktop/.packages'
-& dotnet publish $supportProject -c Release -o $supportRoot -p:RestorePackagesPath=$packageCache | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    [Console]::Error.WriteLine('The support CLI could not be published.')
-    exit $ExitBlocked
+if ($packageMode) {
+    # The package already carries the published support payload. Compiling here would need the SDK
+    # the moved toolkit is supposed to run without, so the verified payload is used as it is.
+    $supportRoot = [string] $script:toolkitPackage.SupportRoot
+    $supportExecutable = [string] $script:toolkitPackage.SupportExecutable
 }
-$supportExecutable = Join-Path $supportRoot 'TraceFold.Media.UiAcceptance.Support.exe'
+else {
+    $supportProject = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/TraceFold.Media.UiAcceptance.Support.csproj'
+    $supportRoot = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/bin/stage5cc-bootstrap'
+    $packageCache = Join-Path $script:repositoryRoot 'apps/media-desktop/.packages'
+    & dotnet publish $supportProject -c Release -o $supportRoot -p:RestorePackagesPath=$packageCache | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine('The support CLI could not be published.')
+        exit $ExitBlocked
+    }
+    $supportExecutable = Join-Path $supportRoot 'TraceFold.Media.UiAcceptance.Support.exe'
+}
 if (-not [IO.File]::Exists($supportExecutable)) {
-    [Console]::Error.WriteLine('The support CLI is missing after publish.')
+    [Console]::Error.WriteLine($(if ($packageMode) { 'The packaged support CLI is missing.' } else { 'The support CLI is missing after publish.' }))
     exit $ExitBlocked
 }
 
@@ -514,7 +1068,16 @@ foreach ($name in $pending) {
         $runDriver = Join-Path $runRoot 'winapp'
         Copy-Item -LiteralPath $supportRoot -Destination $runSupport -Recurse -Force
         [void][IO.Directory]::CreateDirectory($runDriver)
-        Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
+        if ($packageMode) {
+            # The package ships the driver unpacked: this is a copy into the owned run root, not an
+            # extraction, and it stays byte-identical to the member the package validator verified.
+            foreach ($driverItem in @(Get-ChildItem -LiteralPath ([string] $script:toolkitPackage.DriverRoot) -Force)) {
+                Copy-Item -LiteralPath $driverItem.FullName -Destination $runDriver -Recurse -Force
+            }
+        }
+        else {
+            Expand-Archive -LiteralPath $archivePath -DestinationPath $runDriver
+        }
         if (-not [IO.File]::Exists((Join-Path $runDriver 'winapp.exe'))) { throw 'pinned_driver_executable_missing' }
 
         # [D0203-E2 INSTANCE-FACTS]
@@ -528,14 +1091,14 @@ foreach ($name in $pending) {
         $instanceFacts = [ordered] @{
             support = [ordered] @{
                 sourceRoot = ''; instanceRoot = ''
-                members = @(); memberCount = 0; allMatchSource = $false; captureState = 'unknown'; error = ''
+                members = @(); memberCount = 0; allMatchSource = $false; allMatchManifest = $null; captureState = 'unknown'; error = ''
             }
             driver = [ordered] @{
-                archivePath = ''; archiveBytes = $null; archiveSha256 = ''
-                manifestSha256 = ''; manifestArchiveSize = $null; matchesManifest = $false
-                winappExePath = ''; winappExeBytes = $null; winappExeSha256 = ''; winappExeFileVersion = ''
-                archiveMemberName = ''; archiveMemberBytes = $null; archiveMemberSha256 = ''
-                matchesArchiveMember = $false; memberReadState = 'unknown'; error = ''
+                archivePath = $null; archiveBytes = $null; archiveSha256 = $null
+                manifestSha256 = $null; manifestArchiveSize = $null; matchesManifest = $null
+                winappExePath = ''; winappExeBytes = $null; winappExeSha256 = $null; winappExeFileVersion = ''
+                archiveMemberName = $null; archiveMemberBytes = $null; archiveMemberSha256 = $null
+                matchesArchiveMember = $null; memberReadState = 'unknown'; error = ''
             }
         }
         try {
@@ -544,9 +1107,13 @@ foreach ($name in $pending) {
             $instanceFacts.support.sourceRoot = Protect-UiAcceptanceText -Value $supportSourceFull -RunToken $runToken -OwnedRoot $runRoot
             $instanceFacts.support.instanceRoot = Protect-UiAcceptanceText -Value $supportInstanceFull -RunToken $runToken -OwnedRoot $runRoot
             $memberRows = New-Object System.Collections.ArrayList
+            $supportPrefix = ''
+            if ($packageMode) {
+                $supportPrefix = ([string] $script:toolkitPackage.SupportRoot).Substring(([string] $script:toolkitPackage.Root).Length).TrimStart([char] 92) -replace '\\', '/'
+            }
             foreach ($memberFile in @(Get-ChildItem -LiteralPath $supportInstanceFull -Recurse -File | Sort-Object FullName)) {
                 $relative = $memberFile.FullName.Substring($supportInstanceFull.Length).TrimStart([char] 92)
-                $memberRow = [ordered] @{ relative = $relative; instanceBytes = $null; instanceSha256 = ''; sourceBytes = $null; sourceSha256 = ''; matchesSource = $false; state = 'unknown'; error = '' }
+                $memberRow = [ordered] @{ relative = $relative; instanceBytes = $null; instanceSha256 = ''; sourceBytes = $null; sourceSha256 = ''; matchesSource = $false; manifestSha256 = $null; matchesManifestMember = $null; state = 'unknown'; error = '' }
                 try {
                     $memberRow.instanceBytes = [long] $memberFile.Length
                     $memberRow.instanceSha256 = (Get-FileHash -LiteralPath $memberFile.FullName -Algorithm SHA256).Hash
@@ -555,6 +1122,16 @@ foreach ($name in $pending) {
                     $memberRow.sourceBytes = [long] ((Get-Item -LiteralPath $sourceMember).Length)
                     $memberRow.sourceSha256 = (Get-FileHash -LiteralPath $sourceMember -Algorithm SHA256).Hash
                     $memberRow.matchesSource = ($memberRow.instanceSha256 -ceq $memberRow.sourceSha256 -and $memberRow.instanceBytes -eq $memberRow.sourceBytes)
+                    if ($packageMode) {
+                        # The copy that will run is compared with the member the manifest bound, not
+                        # only with the directory it was copied from: a package whose source tree
+                        # changed after validation cannot launder the change through the copy.
+                        $manifestKey = $supportPrefix + '/' + ($relative -replace '\\', '/')
+                        $manifestRow = $script:toolkitPackage.MemberRows[$manifestKey]
+                        if ($null -eq $manifestRow) { throw ('the run copy carries a member the package does not declare: ' + $manifestKey) }
+                        $memberRow.manifestSha256 = [string] $manifestRow.Sha256
+                        $memberRow.matchesManifestMember = ($memberRow.instanceSha256 -ceq [string] $manifestRow.Sha256 -and $memberRow.instanceBytes -eq [long] $manifestRow.Bytes)
+                    }
                     $memberRow.state = 'captured'
                 }
                 catch { $memberRow.error = [string] $_.Exception.Message }
@@ -563,46 +1140,71 @@ foreach ($name in $pending) {
             $instanceFacts.support.members = $memberRows.ToArray()
             $instanceFacts.support.memberCount = $memberRows.Count
             $instanceFacts.support.allMatchSource = ($memberRows.Count -gt 0 -and @($memberRows | Where-Object { -not [bool] $_.matchesSource }).Count -eq 0)
+            if ($packageMode) {
+                $instanceFacts.support.allMatchManifest = ($memberRows.Count -gt 0 -and @($memberRows | Where-Object { -not [bool] $_.matchesManifestMember }).Count -eq 0)
+            }
             $instanceFacts.support.captureState = 'captured'
         }
         catch { $instanceFacts.support.error = [string] $_.Exception.Message }
         try {
-            $instanceFacts.driver.archivePath = Protect-UiAcceptanceText -Value $archivePath -RunToken $runToken -OwnedRoot $runRoot
-            $instanceFacts.driver.archiveBytes = [long] ((Get-Item -LiteralPath $archivePath).Length)
-            $instanceFacts.driver.archiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
-            $instanceFacts.driver.manifestSha256 = [string] $driverManifest.sha256
-            $instanceFacts.driver.manifestArchiveSize = [long] $driverManifest.archiveSize
-            $instanceFacts.driver.matchesManifest = ($instanceFacts.driver.archiveSha256 -ceq [string] $driverManifest.sha256 -and $instanceFacts.driver.archiveBytes -eq [long] $driverManifest.archiveSize)
             $winappInstance = Join-Path $runDriver 'winapp.exe'
             $instanceFacts.driver.winappExePath = Protect-UiAcceptanceText -Value $winappInstance -RunToken $runToken -OwnedRoot $runRoot
             $instanceFacts.driver.winappExeBytes = [long] ((Get-Item -LiteralPath $winappInstance).Length)
             $instanceFacts.driver.winappExeSha256 = (Get-FileHash -LiteralPath $winappInstance -Algorithm SHA256).Hash
             $instanceFacts.driver.winappExeFileVersion = [string] ((Get-Item -LiteralPath $winappInstance).VersionInfo.FileVersion)
-            # Both loader names are attempted so the same text runs on both hosts: Windows PowerShell
-            # needs the compression assemblies loaded before their types can be used.
-            try { Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop } catch { }
-            try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
-            $driverZip = [IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($archivePath))
-            try {
-                $driverMember = @($driverZip.Entries | Where-Object { $_.FullName -ceq 'winapp.exe' })
-                if ($driverMember.Count -ne 1) { throw ('the archive carries ' + $driverMember.Count + ' winapp.exe members') }
-                $memberStream = $driverMember[0].Open()
-                try {
-                    $memberBuffer = New-Object IO.MemoryStream
-                    try { $memberStream.CopyTo($memberBuffer); $memberBytes = $memberBuffer.ToArray() }
-                    finally { $memberBuffer.Dispose() }
-                }
-                finally { $memberStream.Dispose() }
-                $memberHasher = [Security.Cryptography.SHA256]::Create()
-                try { $memberHash = ([BitConverter]::ToString($memberHasher.ComputeHash($memberBytes))).Replace('-', '') }
-                finally { $memberHasher.Dispose() }
-                $instanceFacts.driver.archiveMemberName = 'winapp.exe'
-                $instanceFacts.driver.archiveMemberBytes = [long] $memberBytes.Length
-                $instanceFacts.driver.archiveMemberSha256 = $memberHash
-                $instanceFacts.driver.matchesArchiveMember = ($instanceFacts.driver.winappExeSha256 -ceq $memberHash -and $instanceFacts.driver.winappExeBytes -eq [long] $memberBytes.Length)
-                $instanceFacts.driver.memberReadState = 'captured'
+            if ($packageMode) {
+                # A moved toolkit has no driver archive. Every archive class stays null - a false
+                # comparison or an empty string would read as an observation that was never made -
+                # and the copy that will actually run is compared with the verified package member.
+                $instanceFacts.driver.archivePath = $null
+                $instanceFacts.driver.archiveBytes = $null
+                $instanceFacts.driver.archiveSha256 = $null
+                $instanceFacts.driver.manifestSha256 = $null
+                $instanceFacts.driver.manifestArchiveSize = $null
+                $instanceFacts.driver.matchesManifest = $null
+                $instanceFacts.driver.archiveMemberName = $null
+                $instanceFacts.driver.archiveMemberBytes = $null
+                $instanceFacts.driver.archiveMemberSha256 = $null
+                $instanceFacts.driver.matchesArchiveMember = $null
+                $instanceFacts.driver.memberReadState = 'not-packaged'
+                $instanceFacts.driver['archiveState'] = 'not-packaged'
+                $instanceFacts.driver['packageMemberName'] = [string] $script:toolkitPackage.DriverMemberName
+                $instanceFacts.driver['packageMemberSha256'] = [string] $script:toolkitPackage.DriverSha256
+                $instanceFacts.driver['matchesPackageMember'] = [bool] ($instanceFacts.driver.winappExeSha256 -ceq [string] $script:toolkitPackage.DriverSha256)
             }
-            finally { $driverZip.Dispose() }
+            else {
+                $instanceFacts.driver.archivePath = Protect-UiAcceptanceText -Value $archivePath -RunToken $runToken -OwnedRoot $runRoot
+                $instanceFacts.driver.archiveBytes = [long] ((Get-Item -LiteralPath $archivePath).Length)
+                $instanceFacts.driver.archiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+                $instanceFacts.driver.manifestSha256 = [string] $driverManifest.sha256
+                $instanceFacts.driver.manifestArchiveSize = [long] $driverManifest.archiveSize
+                $instanceFacts.driver.matchesManifest = ($instanceFacts.driver.archiveSha256 -ceq [string] $driverManifest.sha256 -and $instanceFacts.driver.archiveBytes -eq [long] $driverManifest.archiveSize)
+                # Both loader names are attempted so the same text runs on both hosts: Windows PowerShell
+                # needs the compression assemblies loaded before their types can be used.
+                try { Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop } catch { }
+                try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
+                $driverZip = [IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($archivePath))
+                try {
+                    $driverMember = @($driverZip.Entries | Where-Object { $_.FullName -ceq 'winapp.exe' })
+                    if ($driverMember.Count -ne 1) { throw ('the archive carries ' + $driverMember.Count + ' winapp.exe members') }
+                    $memberStream = $driverMember[0].Open()
+                    try {
+                        $memberBuffer = New-Object IO.MemoryStream
+                        try { $memberStream.CopyTo($memberBuffer); $memberBytes = $memberBuffer.ToArray() }
+                        finally { $memberBuffer.Dispose() }
+                    }
+                    finally { $memberStream.Dispose() }
+                    $memberHasher = [Security.Cryptography.SHA256]::Create()
+                    try { $memberHash = ([BitConverter]::ToString($memberHasher.ComputeHash($memberBytes))).Replace('-', '') }
+                    finally { $memberHasher.Dispose() }
+                    $instanceFacts.driver.archiveMemberName = 'winapp.exe'
+                    $instanceFacts.driver.archiveMemberBytes = [long] $memberBytes.Length
+                    $instanceFacts.driver.archiveMemberSha256 = $memberHash
+                    $instanceFacts.driver.matchesArchiveMember = ($instanceFacts.driver.winappExeSha256 -ceq $memberHash -and $instanceFacts.driver.winappExeBytes -eq [long] $memberBytes.Length)
+                    $instanceFacts.driver.memberReadState = 'captured'
+                }
+                finally { $driverZip.Dispose() }
+            }
         }
         catch { $instanceFacts.driver.error = [string] $_.Exception.Message }
         $scenarioEvidence.instances = $instanceFacts
@@ -611,7 +1213,7 @@ foreach ($name in $pending) {
         $entryArguments = @{
             ScenarioId        = (ConvertTo-UiAcceptanceSlug -Value $name)
             ExecutablePath    = $productExecutable
-            ContractPath      = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
+            ContractPath      = $contractPath
             OwnedRoot         = $runRoot
             RunToken          = $runToken
             OutputDirectory   = $runOutput
@@ -630,10 +1232,19 @@ foreach ($name in $pending) {
         # each field family has one producer, and a value that could not be read stays null beside
         # its own state. The legacy ten-key hashtable the Runner requires is projected from the
         # block below; the Runner keeps the values' types instead of collapsing them to text.
-        $contractPath = Join-Path $script:repositoryRoot 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json'
-        $metadataSourceProvenance = Get-UiMetadataSourceProvenance -ProductExecutable $productExecutable -RepositoryRoot $script:repositoryRoot -CandidateSha256 $null
-        $metadataProductIdentity = Get-UiMetadataProductIdentity -ProductExecutable $productExecutable -ProductDirectory (Split-Path -Parent $productExecutable)
-        $metadataDriverIdentity = Get-UiMetadataDriverIdentity -ArchivePath $WinAppCliArchivePath -ExtractedExePath (Join-Path $runDriver 'winapp.exe') -ManifestVersion ([string] $driverManifest.version) -ManifestSha256 ([string] $driverManifest.sha256) -ManifestArchiveSize ([long] $driverManifest.archiveSize)
+        if ($packageMode) {
+            # A moved toolkit is not a checkout, and it ships the driver unpacked: no repository
+            # commit is probed and no archive version/hash is claimed, while the executable that
+            # will run is still measured below.
+            $metadataSourceProvenance = Get-UiMetadataSourceProvenance -ProductExecutable $productExecutable -RepositoryRoot $script:repositoryRoot -CandidateSha256 $null -NoRepositoryProbe
+            $metadataProductIdentity = Get-UiMetadataProductIdentity -ProductExecutable $productExecutable -ProductDirectory (Split-Path -Parent $productExecutable)
+            $metadataDriverIdentity = Get-UiMetadataDriverIdentity -ArchivePath '' -ExtractedExePath (Join-Path $runDriver 'winapp.exe') -ManifestVersion $null -ManifestSha256 $null -ManifestArchiveSize $null -MemberName ([string] $script:toolkitPackage.DriverMemberName)
+        }
+        else {
+            $metadataSourceProvenance = Get-UiMetadataSourceProvenance -ProductExecutable $productExecutable -RepositoryRoot $script:repositoryRoot -CandidateSha256 $null
+            $metadataProductIdentity = Get-UiMetadataProductIdentity -ProductExecutable $productExecutable -ProductDirectory (Split-Path -Parent $productExecutable)
+            $metadataDriverIdentity = Get-UiMetadataDriverIdentity -ArchivePath $WinAppCliArchivePath -ExtractedExePath (Join-Path $runDriver 'winapp.exe') -ManifestVersion ([string] $driverManifest.version) -ManifestSha256 ([string] $driverManifest.sha256) -ManifestArchiveSize ([long] $driverManifest.archiveSize)
+        }
         $declaredFixtureAssets = @()
         if ([IO.File]::Exists($contractPath)) {
             $contractDocument = Read-UiMetadataJsonDocument -Path $contractPath

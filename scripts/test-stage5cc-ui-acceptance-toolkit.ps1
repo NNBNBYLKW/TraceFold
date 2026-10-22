@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata')]
+    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata', 'OfflineEntry')]
     [string] $Suite = 'All'
 )
 
@@ -56,6 +56,11 @@ $script:suites = [ordered] @{
     # fresh attempt directory and must prove it gone before the case passes.
     Metadata = @(
         'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Metadata.Tests.ps1'
+    )
+    # The moved-toolkit entry cases: the real public entry is started through -File from outside
+    # the package, and every rejection is checked against "nothing was started", not a message.
+    OfflineEntry = @(
+        'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.OfflineEntry.Tests.ps1'
     )
 }
 

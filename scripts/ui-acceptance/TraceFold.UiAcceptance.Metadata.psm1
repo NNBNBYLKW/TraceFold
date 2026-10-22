@@ -316,7 +316,10 @@ function Get-UiMetadataSourceProvenance {
     param(
         [Parameter(Mandatory)][string] $ProductExecutable,
         [Parameter(Mandatory)][string] $RepositoryRoot,
-        [AllowNull()][string] $CandidateSha256 = $null
+        [AllowNull()][string] $CandidateSha256 = $null,
+        # A moved toolkit is not a checkout: asking git about its folder would answer for whatever
+        # repository happens to contain it. Package mode keeps the script head unobserved instead.
+        [switch] $NoRepositoryProbe
     )
 
     $fact = [ordered]@{
@@ -363,7 +366,10 @@ function Get-UiMetadataSourceProvenance {
         $fact.productBuildCommitError = $_.Exception.Message
     }
 
-    if ([string]::IsNullOrWhiteSpace($RepositoryRoot) -or -not [IO.Directory]::Exists($RepositoryRoot)) {
+    if ($NoRepositoryProbe) {
+        $fact.scriptRepositoryHeadError = 'Package mode does not observe a script repository commit.'
+    }
+    elseif ([string]::IsNullOrWhiteSpace($RepositoryRoot) -or -not [IO.Directory]::Exists($RepositoryRoot)) {
         $fact.scriptRepositoryHeadError = 'The script repository root was not supplied or does not exist.'
     }
     else {
@@ -521,7 +527,9 @@ function Get-UiMetadataProductIdentity {
 function Get-UiMetadataDriverIdentity {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string] $ArchivePath,
+        # A moved toolkit ships the driver already unpacked, so there is no archive to digest.
+        # An empty path records that absence instead of turning it into a false archive fact.
+        [AllowNull()][AllowEmptyString()][string] $ArchivePath = '',
         [Parameter(Mandatory)][string] $ExtractedExePath,
         [AllowNull()][string] $ManifestVersion = $null,
         [AllowNull()][string] $ManifestSha256 = $null,
@@ -531,11 +539,13 @@ function Get-UiMetadataDriverIdentity {
 
     $fact = [ordered]@{
         archiveDigest      = $null
+        archiveState       = 'unknown'
         manifestVersion    = $null
         manifestSha256     = $null
         manifestArchiveSize = $null
         extractedExeDigest = $null
         archiveMemberDigest = $null
+        archiveMemberState = 'unknown'
         archiveMemberName  = $MemberName
         peFileVersion      = $null
         peFileVersionState = 'unknown'
@@ -544,13 +554,24 @@ function Get-UiMetadataDriverIdentity {
         errors             = @()
     }
 
+    $archiveSupplied = -not [string]::IsNullOrWhiteSpace($ArchivePath)
     try {
-        $fact.archiveDigest = Get-UiMetadataFileDigest -Path $ArchivePath
-        if ($fact.archiveDigest.state -cne 'captured') {
-            $fact.errors += ,([ordered]@{ stage='archive-digest'; message = $fact.archiveDigest.error })
+        if (-not $archiveSupplied) {
+            # No archive in this package: the digest stays absent, and the executable digest that
+            # is measured later never stands in for the archive digest.
+            $fact.archiveDigest = [ordered]@{ path = $null; bytes = $null; sha256 = $null; state = 'not-packaged'; error = $null }
+            $fact.archiveState = 'not-packaged'
+        }
+        else {
+            $fact.archiveDigest = Get-UiMetadataFileDigest -Path $ArchivePath
+            $fact.archiveState = [string] $fact.archiveDigest.state
+            if ($fact.archiveDigest.state -cne 'captured') {
+                $fact.errors += ,([ordered]@{ stage='archive-digest'; message = $fact.archiveDigest.error })
+            }
         }
     }
     catch {
+        $fact.archiveState = 'error'
         $fact.errors += ,([ordered]@{ stage='archive-digest'; message = $_.Exception.Message })
     }
 
@@ -594,22 +615,27 @@ function Get-UiMetadataDriverIdentity {
         $fact.errors += ,([ordered]@{ stage='pe-version'; message = $_.Exception.Message })
     }
 
-    try {
-        $null = Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
-    }
-    catch {
-        # Already loaded, or a host where the type resolves without the explicit load.
-    }
-    try {
-        $null = Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
-    }
-    catch {
-        # Windows PowerShell needs the compression assemblies before ZipFile resolves; a
-        # second load of the same assembly is harmless.
+    if ($archiveSupplied) {
+        try {
+            $null = Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
+        }
+        catch {
+            # Already loaded, or a host where the type resolves without the explicit load.
+        }
+        try {
+            $null = Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        }
+        catch {
+            # Windows PowerShell needs the compression assemblies before ZipFile resolves; a
+            # second load of the same assembly is harmless.
+        }
     }
 
     try {
-        if (-not [IO.File]::Exists($ArchivePath)) {
+        if (-not $archiveSupplied) {
+            $fact.archiveMemberState = 'not-packaged'
+        }
+        elseif (-not [IO.File]::Exists($ArchivePath)) {
             $fact.errors += ,([ordered]@{ stage='archive-member'; message = 'The driver archive was not found, so no member digest could be read.' })
         }
         else {
@@ -639,7 +665,7 @@ function Get-UiMetadataDriverIdentity {
                         state      = 'captured'
                         error      = $null
                     }
-
+                    $fact.archiveMemberState = 'captured'
                     if ($fact.extractedExeDigest.state -cne 'captured') {
                         $fact.matchesArchiveMember = $null
                     }
@@ -1111,7 +1137,9 @@ function New-UiMetadataReportBlock {
                 extractedExeSha256   = (Protect-UiMetadataText (Get-UiMetadataNodeValue -Node $extractedExeDigest -Name 'sha256'))
                 extractedExeState    = (Get-UiMetadataNodeValue -Node $extractedExeDigest -Name 'state')
                 archiveMemberSha256  = (Protect-UiMetadataText (Get-UiMetadataNodeValue -Node $archiveMemberDigest -Name 'sha256'))
-                archiveMemberState   = (Get-UiMetadataNodeValue -Node $archiveMemberDigest -Name 'state')
+                # A package has no archive member to read. Projecting the identity's own state keeps
+                # that absence visible as 'not-packaged' instead of collapsing it to null.
+                archiveMemberState   = $(if ($null -ne $archiveMemberDigest) { Get-UiMetadataNodeValue -Node $archiveMemberDigest -Name 'state' } else { Get-UiMetadataNodeValue -Node $DriverIdentity -Name 'archiveMemberState' })
                 peFileVersion        = (Protect-UiMetadataText (Get-UiMetadataNodeValue -Node $DriverIdentity -Name 'peFileVersion'))
                 peFileVersionState   = (Get-UiMetadataNodeValue -Node $DriverIdentity -Name 'peFileVersionState')
                 matchesManifest      = (Get-UiMetadataNodeValue -Node $DriverIdentity -Name 'matchesManifest')
