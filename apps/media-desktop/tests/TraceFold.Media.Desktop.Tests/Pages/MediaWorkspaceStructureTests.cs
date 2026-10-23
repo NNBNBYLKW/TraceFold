@@ -8,6 +8,183 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 public sealed class MediaWorkspaceStructureTests
 {
     [Fact]
+    public void Inbox_uses_one_responsive_inspector_and_fixed_height_list_rows()
+    {
+        string xaml = File.ReadAllText(DesktopSource("Pages", "InboxPage.xaml"));
+        XDocument document = XDocument.Parse(xaml);
+        XElement host = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost");
+        Assert.Equal("WorkspaceHost", (string?)host.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName == "Name"));
+        XElement list = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ListView"
+            && (string?)element.Attribute("{http://schemas.microsoft.com/winfx/2006/xaml}Name") == "InboxGrid");
+        XElement header = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "InboxListHeader");
+        Assert.Equal("32,*,160,110", (string?)header.Attribute("ColumnDefinitions"));
+        Assert.Equal("{StaticResource TraceFoldMediaListStyle}", (string?)list.Attribute("Style"));
+        Assert.Equal("Disabled", (string?)list.Attribute("ScrollViewer.HorizontalScrollMode"));
+        XElement row = Assert.Single(list.Descendants(), element =>
+            element.Name.LocalName == "DataTemplate");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("ColumnDefinitions") == "32,*,160,110");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("Height") == "{StaticResource TraceFoldFileRowHeight}");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("AutomationProperties.Name") == "{x:Bind AccessibleName, Mode=OneWay}");
+        Assert.DoesNotContain("ItemsWrapGrid", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Width=\"190\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("RowDefinitions=\"120,", xaml, StringComparison.Ordinal);
+
+        foreach (string id in new[]
+        {
+            "InboxListHeader", "InboxInspectorOpenButton", "InboxInspectorCloseButton", "InboxInspectorHeading"
+        })
+        {
+            AssertElementHasAccessibleName(xaml, id);
+        }
+
+        XElement heading = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "InboxInspectorHeading");
+        Assert.DoesNotContain(heading.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "InspectorVisibility", StringComparison.Ordinal) == true);
+
+        Assert.Contains("Key=\"Escape\"", xaml, StringComparison.Ordinal);
+        string code = File.ReadAllText(DesktopSource("Pages", "InboxPage.xaml.cs"));
+        Assert.Contains("WorkspaceHost.CloseDrawer()", code, StringComparison.Ordinal);
+        Assert.Contains("FocusSelectedInboxItem", code, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.SetName(args.ItemContainer, card.AccessibleName)",
+            code, StringComparison.Ordinal);
+        Assert.DoesNotContain("GridViewItem", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Taxonomy_uses_one_responsive_inspector_and_compact_buttons()
+    {
+        string xaml = File.ReadAllText(DesktopSource("Pages", "TaxonomyPage.xaml"));
+        XDocument document = XDocument.Parse(xaml);
+        XElement host = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost");
+        Assert.Equal("WorkspaceHost", (string?)host.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName == "Name"));
+        Assert.DoesNotContain("ColumnDefinitions=\"176,12,*,12,320\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("ColumnDefinitions=\"176,12,*\"", xaml, StringComparison.Ordinal);
+
+        foreach (string id in new[]
+        {
+            "TaxonomyInspectorOpenButton", "TaxonomyInspectorCloseButton", "TaxonomyInspectorHeading"
+        })
+        {
+            AssertElementHasAccessibleName(xaml, id);
+        }
+
+        XElement open = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "TaxonomyInspectorOpenButton");
+        Assert.DoesNotContain(open.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "InspectorVisibility", StringComparison.Ordinal) == true);
+        Assert.DoesNotContain(open.Ancestors(), element =>
+            ((string?)element.Attribute("Body"))?.Contains(
+                "SingleInspectorVisibility", StringComparison.Ordinal) == true);
+
+        XElement heading = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "TaxonomyInspectorHeading");
+        Assert.DoesNotContain(heading.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "InspectorVisibility", StringComparison.Ordinal) == true);
+
+        Assert.Contains("Key=\"Escape\"", xaml, StringComparison.Ordinal);
+        string code = File.ReadAllText(DesktopSource("Pages", "TaxonomyPage.xaml.cs"));
+        Assert.Contains("WorkspaceHost.CloseDrawer()", code, StringComparison.Ordinal);
+        Assert.Contains("FocusSelectedTaxonomyItem", code, StringComparison.Ordinal);
+        Assert.Contains("ListViewItem", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("GridViewItem", code, StringComparison.Ordinal);
+        int loadedStart = code.IndexOf("private async void OnLoaded", StringComparison.Ordinal);
+        int unloadedStart = code.IndexOf("private void OnUnloaded", StringComparison.Ordinal);
+        Assert.True(loadedStart >= 0 && unloadedStart > loadedStart);
+        Assert.Contains("UpdateInspectorButtonVisibility()",
+            code[loadedStart..unloadedStart], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Library_uses_one_responsive_inspector_and_fixed_height_list_rows()
+    {
+        string xaml = File.ReadAllText(DesktopSource("Pages", "LibraryPage.xaml"));
+        XDocument document = XDocument.Parse(xaml);
+        XElement host = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost");
+        Assert.Equal("WorkspaceHost", (string?)host.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName == "Name"));
+        XElement list = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "ListView"
+            && (string?)element.Attribute("{http://schemas.microsoft.com/winfx/2006/xaml}Name") == "LibraryGrid");
+        Assert.Equal("Extended", (string?)list.Attribute("SelectionMode"));
+        XElement header = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibraryListHeader");
+        Assert.Equal("32,*,180,90", (string?)header.Attribute("ColumnDefinitions"));
+        Assert.Equal("{StaticResource TraceFoldMediaListStyle}", (string?)list.Attribute("Style"));
+        Assert.Equal("Disabled", (string?)list.Attribute("ScrollViewer.HorizontalScrollMode"));
+        XElement row = Assert.Single(list.Descendants(), element =>
+            element.Name.LocalName == "DataTemplate");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("ColumnDefinitions") == "32,*,180,90");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("Height") == "{StaticResource TraceFoldFileRowHeight}");
+        Assert.Contains(row.DescendantsAndSelf(), element =>
+            (string?)element.Attribute("AutomationProperties.Name") == "{x:Bind AccessibleName, Mode=OneWay}");
+        Assert.DoesNotContain("ItemsWrapGrid", list.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Width=\"190\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("RowDefinitions=\"120,", xaml, StringComparison.Ordinal);
+
+        foreach (string id in new[]
+        {
+            "LibraryListHeader", "LibraryInspectorOpenButton", "LibraryInspectorCloseButton",
+            "LibraryInspectorHeading", "LibraryDisplayNameBox"
+        })
+        {
+            AssertElementHasAccessibleName(xaml, id);
+        }
+
+        XElement heading = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibraryInspectorHeading");
+        Assert.DoesNotContain(heading.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "SelectionVisibility", StringComparison.Ordinal) == true);
+        XElement openButton = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibraryInspectorOpenButton");
+        Assert.DoesNotContain(openButton.Ancestors(), element =>
+            ((string?)element.Attribute("Visibility"))?.Contains(
+                "ActiveFiltersVisibility", StringComparison.Ordinal) == true);
+        Assert.Equal("*,150,112,Auto,Auto", (string?)openButton.Parent?.Attribute("ColumnDefinitions"));
+        Assert.Equal("4", (string?)openButton.Attribute("Grid.Column"));
+        XElement summary = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibrarySelectionSummary");
+        Assert.Equal("1", (string?)summary.Attribute("Grid.Row"));
+        XElement inspector = Assert.Single(document.Descendants(), element =>
+            (string?)element.Attribute("AutomationProperties.AutomationId") == "LibraryInspectorPane");
+        Assert.Contains(inspector.Descendants(), element =>
+            element.Name.LocalName == "KeyboardAccelerator"
+            && (string?)element.Attribute("Key") == "Escape");
+
+        Assert.Contains("Key=\"Escape\"", xaml, StringComparison.Ordinal);
+        string code = File.ReadAllText(DesktopSource("Pages", "LibraryPage.xaml.cs"));
+        Assert.Contains("WorkspaceHost.CloseDrawer()", code, StringComparison.Ordinal);
+        Assert.Contains("FocusSelectedLibraryItem", code, StringComparison.Ordinal);
+        Assert.Contains("IsFocusWithinLibraryList", code, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.SetName(args.ItemContainer, card.AccessibleName)",
+            code, StringComparison.Ordinal);
+        Assert.DoesNotContain("GridViewItem", code, StringComparison.Ordinal);
+        int layoutStart = code.IndexOf(
+            "private void OnWorkspaceLayoutModeChanged", StringComparison.Ordinal);
+        Assert.True(layoutStart >= 0, "LibraryPage must react to layout mode changes.");
+        Assert.DoesNotContain(
+            "ViewModel.LoadAsync",
+            code[layoutStart..code.IndexOf("private ", layoutStart + 10, StringComparison.Ordinal)],
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Inbox_page_contains_native_workspace_and_preview_controls()
     {
         string inboxXaml = await File.ReadAllTextAsync(
@@ -208,10 +385,9 @@ public sealed class MediaWorkspaceStructureTests
         XAttribute? openPaneLength = navigation.Attribute("OpenPaneLength");
 
         Assert.NotNull(openPaneLength);
-        double width = double.Parse(
-            openPaneLength.Value,
-            CultureInfo.InvariantCulture);
-        Assert.InRange(width, 180, 240);
+        Assert.Equal(
+            "{StaticResource TraceFoldNavigationOpenPaneWidth}",
+            openPaneLength.Value);
     }
 
     [Fact]

@@ -5,8 +5,14 @@
     xmlns:controls="using:TraceFold.Media.Desktop.Controls"
     xmlns:metadata="using:TraceFold.Media.Application.Metadata"
     xmlns:pages="using:TraceFold.Media.Desktop.Pages">
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" ColumnDefinitions="*,360">
-        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto,*">
+    <controls:ResponsiveInspectorHost
+        x:Name="WorkspaceHost"
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+        DrawerOpened="OnInspectorDrawerOpened"
+        DrawerClosed="OnInspectorDrawerClosed"
+        LayoutModeChanged="OnWorkspaceLayoutModeChanged">
+        <controls:ResponsiveInspectorHost.PrimaryContent>
+        <Grid AutomationProperties.AutomationId="LibraryPageRoot" AutomationProperties.Name="正式文件库工作区" RowDefinitions="Auto,Auto,Auto,Auto,Auto,*">
             <StackPanel Margin="24,18,20,8">
                 <TextBlock Style="{ThemeResource TitleTextBlockStyle}" Text="正式文件库" />
                 <TextBlock
@@ -41,7 +47,7 @@
             <Grid
                 Grid.Row="1"
                 Margin="24,8,20,10"
-                ColumnDefinitions="*,150,112,Auto"
+                ColumnDefinitions="*,150,112,Auto,Auto"
                 ColumnSpacing="8">
                 <AutoSuggestBox
                     AutomationProperties.AutomationId="LibrarySearchBox"
@@ -262,6 +268,16 @@
                         </Flyout>
                     </Button.Flyout>
                 </Button>
+                <Button
+                    x:Name="LibraryInspectorOpenButton"
+                    Grid.Column="4"
+                    AutomationProperties.AutomationId="LibraryInspectorOpenButton"
+                    AutomationProperties.HelpText="先选择正式文件，才能查看资料"
+                    AutomationProperties.Name="打开正式文件资料面板"
+                    Click="OnInspectorOpenClick"
+                    Content="查看资料"
+                    IsEnabled="{x:Bind ViewModel.Selection.HasSelection, Mode=OneWay}"
+                    Visibility="Collapsed" />
             </Grid>
 
             <Grid
@@ -310,6 +326,8 @@
                     <TextBlock
                         Grid.Column="1"
                         VerticalAlignment="Center"
+                        AutomationProperties.AutomationId="LibrarySelectedCount"
+                        AutomationProperties.Name="已选择的正式文件数量"
                         FontWeight="SemiBold"
                         Text="{x:Bind ViewModel.Selection.SelectedCount, Mode=OneWay}" />
                     <Button
@@ -328,81 +346,121 @@
                 </Grid>
             </Border>
 
-            <GridView
-                x:Name="LibraryGrid"
+            <Grid
                 Grid.Row="4"
+                Margin="36,0,32,4"
+                AutomationProperties.AutomationId="LibraryListHeader"
+                AutomationProperties.Name="正式文件列表表头"
+                ColumnDefinitions="32,*,180,90"
+                ColumnSpacing="8"
+                Style="{StaticResource TraceFoldMediaRowHeaderStyle}">
+                <TextBlock Grid.Column="1" Text="显示名称" />
+                <TextBlock Grid.Column="2" Text="实际文件名" />
+                <TextBlock Grid.Column="3" Text="媒体类型" />
+            </Grid>
+
+            <ListView
+                x:Name="LibraryGrid"
+                Grid.Row="5"
                 Margin="16,0,12,16"
-                Padding="8"
                 AutomationProperties.AutomationId="LibraryGrid"
                 AutomationProperties.Name="正式文件列表"
                 IsItemClickEnabled="True"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
+                ContainerContentChanging="OnLibraryContainerContentChanging"
                 SelectionChanged="OnSelectionChanged"
-                SelectionMode="Extended">
-                <GridView.KeyboardAccelerators>
+                SelectionMode="Extended"
+                ScrollViewer.HorizontalScrollMode="Disabled"
+                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                Style="{StaticResource TraceFoldMediaListStyle}">
+                <ListView.KeyboardAccelerators>
                     <KeyboardAccelerator Modifiers="Control" Key="A" Invoked="OnSelectAllAccelerator" />
                     <KeyboardAccelerator Key="Escape" Invoked="OnClearSelectionAccelerator" />
-                </GridView.KeyboardAccelerators>
-                <GridView.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <ItemsWrapGrid Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </GridView.ItemsPanel>
-                <GridView.ItemTemplate>
+                </ListView.KeyboardAccelerators>
+                <ListView.ItemTemplate>
                     <DataTemplate x:DataType="pages:LibraryCardViewModel">
-                        <Border
-                            Width="190"
-                            Margin="4"
-                            Padding="10"
+                        <Grid
+                            Height="{StaticResource TraceFoldFileRowHeight}"
+                            ColumnDefinitions="32,*,180,90"
+                            ColumnSpacing="8"
                             AutomationProperties.AutomationId="{x:Bind AutomationId}"
-                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8">
-                            <Grid RowDefinitions="120,Auto,Auto">
-                                <Border
-                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                                    CornerRadius="5">
-                                    <Grid>
-                                        <Image
-                                            Source="{x:Bind ThumbnailSource}"
-                                            Stretch="UniformToFill"
-                                            Visibility="{x:Bind ThumbnailVisibility}" />
-                                        <FontIcon
-                                            FontSize="30"
-                                            Glyph="{x:Bind FallbackGlyph}"
-                                            Visibility="{x:Bind FallbackVisibility}" />
-                                    </Grid>
-                                </Border>
-                                <TextBlock
-                                    Grid.Row="1"
-                                    Margin="0,9,0,0"
-                                    FontWeight="SemiBold"
-                                    Text="{x:Bind DisplayName}"
-                                    TextTrimming="CharacterEllipsis" />
-                                <TextBlock
-                                    Grid.Row="2"
-                                    Margin="0,3,0,0"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="{x:Bind ActualFilename}"
-                                    TextTrimming="CharacterEllipsis" />
-                            </Grid>
-                        </Border>
+                            AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}">
+                            <Border
+                                Width="28"
+                                Height="28"
+                                VerticalAlignment="Center"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                CornerRadius="4">
+                                <Grid>
+                                    <Image
+                                        Source="{x:Bind ThumbnailSource}"
+                                        Stretch="UniformToFill"
+                                        Visibility="{x:Bind ThumbnailVisibility}" />
+                                    <FontIcon
+                                        FontSize="16"
+                                        Glyph="{x:Bind FallbackGlyph}"
+                                        Visibility="{x:Bind FallbackVisibility}" />
+                                </Grid>
+                            </Border>
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                FontWeight="SemiBold"
+                                Text="{x:Bind DisplayName, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis"
+                                TextWrapping="NoWrap" />
+                            <TextBlock
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ActualFilename, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis"
+                                TextWrapping="NoWrap" />
+                            <TextBlock
+                                Grid.Column="3"
+                                VerticalAlignment="Center"
+                                Text="{x:Bind MediaKindText, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis"
+                                TextWrapping="NoWrap" />
+                        </Grid>
                     </DataTemplate>
-                </GridView.ItemTemplate>
-            </GridView>
+                </ListView.ItemTemplate>
+            </ListView>
         </Grid>
-
+        </controls:ResponsiveInspectorHost.PrimaryContent>
+        <controls:ResponsiveInspectorHost.InspectorContent>
         <Border
-            Grid.Column="1"
             Padding="20"
             AutomationProperties.AutomationId="LibraryInspectorPane"
+            AutomationProperties.Name="正式文件资料检查器"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1,0,0,0">
+            <Border.KeyboardAccelerators>
+                <KeyboardAccelerator Key="Escape" Invoked="OnClearSelectionAccelerator" />
+            </Border.KeyboardAccelerators>
             <ScrollViewer>
-                <Grid>
+                <Grid RowDefinitions="Auto,*">
+                    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <TextBlock
+                            x:Name="LibraryInspectorHeading"
+                            AutomationProperties.AutomationId="LibraryInspectorHeading"
+                            AutomationProperties.Name="正式文件资料标题"
+                            IsTabStop="True"
+                            Style="{ThemeResource SubtitleTextBlockStyle}"
+                            Text="资料" />
+                        <Button
+                            x:Name="LibraryInspectorCloseButton"
+                            Grid.Column="1"
+                            AutomationProperties.AutomationId="LibraryInspectorCloseButton"
+                            AutomationProperties.Name="关闭正式文件资料面板"
+                            Click="OnInspectorCloseClick"
+                            Content="关闭"
+                            Visibility="Collapsed" />
+                    </Grid>
+
                     <StackPanel
+                        Grid.Row="1"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         Spacing="10"
@@ -414,9 +472,9 @@
                     </StackPanel>
 
                     <StackPanel
+                        Grid.Row="1"
                         Spacing="12"
                         Visibility="{x:Bind ViewModel.SingleSelectionVisibility, Mode=OneWay}">
-                        <TextBlock Style="{ThemeResource SubtitleTextBlockStyle}" Text="资料" />
                         <controls:MediaPreviewControl
                             x:Name="PreviewControl"
                             Descriptor="{x:Bind ViewModel.Inspector.Preview, Mode=OneWay}" />
@@ -429,22 +487,38 @@
                             Text="{x:Bind ViewModel.Inspector.TechnicalSummary, Mode=OneWay}"
                             TextTrimming="CharacterEllipsis" />
                         <TextBox
+                            AutomationProperties.AutomationId="LibraryDisplayNameBox"
+                            AutomationProperties.Name="正式文件显示名称输入框"
                             Header="显示名称"
                             PlaceholderText="不修改实际文件名"
                             Text="{x:Bind ViewModel.Inspector.Metadata.DisplayName, Mode=TwoWay}" />
                         <TextBlock FontWeight="SemiBold" Text="作者" />
                         <controls:TaxonomyPickerControl
                             x:Name="AuthorPicker"
+                            InputAutomationId="LibraryAuthorInput"
+                            InputAutomationName="输入正式文件库资料的作者"
+                            SelectedTermsAutomationId="LibraryAuthorInputTerms"
+                            SelectedTermsAutomationName="已添加的正式文件库资料作者"
                             SelectionChanged="OnAuthorSelectionChanged" />
                         <TextBlock FontWeight="SemiBold" Text="系列" />
                         <controls:TaxonomyPickerControl
                             x:Name="SeriesPicker"
+                            InputAutomationId="LibrarySeriesInput"
+                            InputAutomationName="输入正式文件库资料的系列"
+                            SelectedTermsAutomationId="LibrarySeriesInputTerms"
+                            SelectedTermsAutomationName="已添加的正式文件库资料系列"
                             SelectionChanged="OnSeriesSelectionChanged" />
                         <TextBlock FontWeight="SemiBold" Text="内容标签" />
                         <controls:TaxonomyPickerControl
                             x:Name="TagPicker"
+                            InputAutomationId="LibraryTagInput"
+                            InputAutomationName="输入正式文件库资料的内容标签"
+                            SelectedTermsAutomationId="LibraryTagInputTerms"
+                            SelectedTermsAutomationName="已添加的正式文件库资料内容标签"
                             SelectionChanged="OnTagSelectionChanged" />
                         <TextBlock
+                            AutomationProperties.AutomationId="LibraryStatusMessage"
+                            AutomationProperties.Name="正式文件库状态消息"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
                             TextWrapping="Wrap" />
@@ -457,6 +531,7 @@
                     </StackPanel>
 
                     <StackPanel
+                        Grid.Row="1"
                         AutomationProperties.AutomationId="LibrarySelectionSummary"
                         AutomationProperties.Name="正式文件多选摘要"
                         Spacing="16"
@@ -492,6 +567,12 @@
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Text="使用上方“批量编辑”统一修改资料与显示名称；提交前会逐项预览。"
                             TextWrapping="Wrap" />
+                        <TextBlock
+                            AutomationProperties.AutomationId="LibraryBatchStatusMessage"
+                            AutomationProperties.Name="正式文件批量操作状态消息"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+                            TextWrapping="Wrap" />
                         <Button
                             AutomationProperties.AutomationId="LibrarySummaryClearSelectionButton"
                             AutomationProperties.Name="取消正式文件多选"
@@ -501,5 +582,6 @@
                 </Grid>
             </ScrollViewer>
         </Border>
-    </Grid>
+        </controls:ResponsiveInspectorHost.InspectorContent>
+    </controls:ResponsiveInspectorHost>
 </Page>

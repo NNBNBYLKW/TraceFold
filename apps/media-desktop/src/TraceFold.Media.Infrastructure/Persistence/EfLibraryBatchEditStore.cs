@@ -111,6 +111,9 @@ public sealed class EfLibraryBatchEditStore(
                     draft.Metadata,
                     resolver,
                     cancellationToken);
+            // ResolveEditsAsync may add a new series term. ExecuteUpdateAsync below bypasses
+            // change tracking, so its series_id must not reference an unflushed term.
+            await context.SaveChangesAsync(cancellationToken);
             ProposedAsset[] proposed = selection
                 .OrderBy(item => item.Ordinal)
                 .Select(item => ProposeMetadata(

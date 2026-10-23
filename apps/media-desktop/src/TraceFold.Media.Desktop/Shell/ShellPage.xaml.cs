@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using TraceFold.Media.Desktop.Controls;
 using TraceFold.Media.Desktop.Pages;
 
 namespace TraceFold.Media.Desktop.Shell;
@@ -27,12 +28,33 @@ public sealed partial class ShellPage : Page
         InitializeComponent();
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         Loaded += OnLoaded;
+        SizeChanged += OnSizeChanged;
     }
 
     public ShellViewModel ViewModel { get; }
 
-    private void OnLoaded(object sender, RoutedEventArgs e) =>
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
         SelectAndShow(ViewModel.SelectedPageKey);
+        ApplyNavigationMode(ActualWidth);
+    }
+
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e) =>
+        ApplyNavigationMode(e.NewSize.Width);
+
+    /// <summary>
+    /// Keeps the navigation rail in step with the real window width. The decision comes from
+    /// the shared policy and the result stays in the view: no layout state is written into
+    /// the shell view model.
+    /// </summary>
+    private void ApplyNavigationMode(double widthDip)
+    {
+        bool wide = WorkspaceLayoutPolicy.GetMode(widthDip) == WorkspaceLayoutMode.Wide;
+        Navigation.PaneDisplayMode = wide
+            ? NavigationViewPaneDisplayMode.Left
+            : NavigationViewPaneDisplayMode.LeftCompact;
+        Navigation.IsPaneOpen = wide;
+    }
 
     private void OnSelectionChanged(
         NavigationView sender,

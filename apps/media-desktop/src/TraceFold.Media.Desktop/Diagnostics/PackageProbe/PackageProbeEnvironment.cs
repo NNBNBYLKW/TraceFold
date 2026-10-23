@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using TraceFold.Media.Application;
 using TraceFold.Media.Application.Common;
 using TraceFold.Media.Application.Ingest;
@@ -14,6 +15,7 @@ using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Ingest;
 using TraceFold.Media.Domain.Processing;
 using TraceFold.Media.Infrastructure;
+using TraceFold.Media.Infrastructure.Persistence;
 
 namespace TraceFold.Media.Desktop.Diagnostics;
 
@@ -86,10 +88,15 @@ public sealed class PackageProbeEnvironment
 
     public IHost BuildHost(ProbeTimeProvider clock, IIngestFaultInjector? faultInjector = null) =>
         Host.CreateDefaultBuilder([])
+            .ConfigureLogging(logging => logging.AddProvider(new PackageProbeLogProvider()))
             .ConfigureServices(services =>
             {
                 services.AddMediaApplication();
                 services.AddMediaInfrastructure(DataDirectory, MediaToolRootOverride);
+                var connectionTrace = new PackageProbeConnectionTrace();
+                var commandTrace = new PackageProbeCommandTrace();
+                services.ConfigureDbContext<MediaDesktopDbContext>(options =>
+                    options.AddInterceptors(connectionTrace, commandTrace));
                 services.AddSingleton<TimeProvider>(clock);
                 if (faultInjector is not null)
                 {
@@ -119,10 +126,12 @@ public sealed class PackageProbeEnvironment
 
         await host.Services.GetRequiredService<IStartupCoordinator>()
             .InitializeAsync(cancellationToken);
+        WriteDatabaseFileState(host, "startup");
     }
 
     public static async Task StopHostAsync(IHost host)
     {
+        WriteDatabaseFileState(host, "shutdown_before");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try
         {
@@ -131,6 +140,8 @@ public sealed class PackageProbeEnvironment
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
         }
+
+        WriteDatabaseFileState(host, "shutdown_after");
     }
 
     public async Task<Guid> SeedAssetAsync(
@@ -144,8 +155,16 @@ public sealed class PackageProbeEnvironment
             host, fixtureFilename, targetFilename, clock, cancellationToken);
         IngestResult result = await host.Services.GetRequiredService<IIngestService>()
             .IngestAsync(card.Id, cancellationToken);
-        Require(result.Outcome == IngestOutcome.Completed && result.AssetId.HasValue,
-            "probe.seed_asset_failed");
+        if (result.Outcome != IngestOutcome.Completed || !result.AssetId.HasValue)
+        {
+            // The persisted result keeps the stable code; the state that explains it
+            // goes to the probe trace, which only tests consume.
+            PackageProbeTrace.Write("probe.seed_asset_failed; outcome=" + result.Outcome
+                + "; message=" + result.Message
+                + "; card=" + card.State);
+            throw new ProbeFailureException("probe.seed_asset_failed");
+        }
+
         return result.AssetId.GetValueOrDefault();
     }
 
@@ -442,6 +461,38 @@ public sealed class PackageProbeEnvironment
             ]);
     }
 
+    /// <summary>
+    /// Records the probe's own database files at a lifecycle point. It only reads file
+    /// metadata and never opens a connection, so it cannot move the WAL state it
+    /// observes.
+    /// </summary>
+    internal static void WriteDatabaseFileState(IHost host, string phase)
+    {
+        if (!PackageProbeTrace.CaptureEnabled)
+        {
+            return;
+        }
+
+        string database;
+        try
+        {
+            database = host.Services.GetRequiredService<IAppDataPathProvider>()
+                .GetPaths()
+                .DatabasePath;
+        }
+        catch (Exception error)
+        {
+            PackageProbeTrace.Write("dbstate " + phase
+                + "; unavailable=" + error.GetType().Name);
+            return;
+        }
+
+        foreach (string role in new[] { "main", "wal", "shm" })
+        {
+            PackageProbeTrace.WriteFileState(database, phase, role);
+        }
+    }
+
     internal static void Require(bool condition, string errorCode)
     {
         if (!condition)
@@ -449,6 +500,31 @@ public sealed class PackageProbeEnvironment
             throw new ProbeFailureException(errorCode);
         }
     }
+
+    /// <summary>
+    /// Keeps the historical stable probe error code in the persisted result and reports
+    /// the observed state, with every predicate that did not hold, on the probe trace.
+    /// </summary>
+    internal static void RequireStep(
+        string errorCode,
+        string detail,
+        params (string Name, bool Holds)[] conditions)
+    {
+        string[] failed = [.. conditions
+            .Where(condition => !condition.Holds)
+            .Select(condition => condition.Name)];
+        if (failed.Length == 0)
+        {
+            return;
+        }
+
+        PackageProbeTrace.Write(errorCode + "; failed=" + string.Join("+", failed)
+            + "; " + detail);
+        throw new ProbeFailureException(errorCode);
+    }
+
+    internal static string Describe(IngestResult result) =>
+        result.Outcome + "/" + result.Message;
 
     private void EnsureResultDoesNotExist(string filename)
     {

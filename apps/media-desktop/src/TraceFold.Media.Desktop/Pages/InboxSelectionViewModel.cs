@@ -13,6 +13,8 @@ public sealed class InboxSelectionViewModel : ObservableObject
 
     public int SelectedCount => _selected.Count;
 
+    public bool HasSelection => _selected.Count > 0;
+
     public bool IsSingleSelection => _selected.Count == 1;
 
     public bool IsBatchSelection => _selected.Count >= 2;
@@ -90,6 +92,7 @@ public sealed class InboxSelectionViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(SelectedIds));
         OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(IsSingleSelection));
         OnPropertyChanged(nameof(IsBatchSelection));
         OnPropertyChanged(nameof(SingleSelectedItem));

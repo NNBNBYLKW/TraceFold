@@ -226,6 +226,25 @@ public sealed class Stage5CBDiagnosticsProbeScenario : IPackageProbeScenario
                 databaseAfter,
                 table => table != "app_settings"
                     && !BackgroundTables.Contains(table));
+            if (!businessDataUnchanged)
+            {
+                string[] changedTables =
+                [
+                    .. databaseBefore.Tables.Keys
+                        .Union(databaseAfter.Tables.Keys, StringComparer.Ordinal)
+                        .Where(table => table != "app_settings"
+                            && !BackgroundTables.Contains(table))
+                        .Where(table => !databaseBefore.Tables.TryGetValue(
+                                table, out string[]? beforeRows)
+                            || !databaseAfter.Tables.TryGetValue(
+                                table, out string[]? afterRows)
+                            || !beforeRows.SequenceEqual(afterRows,
+                                StringComparer.Ordinal))
+                        .Order(StringComparer.Ordinal)
+                ];
+                PackageProbeTrace.Write("database_changed tables="
+                    + string.Join(",", changedTables));
+            }
             mediaFilesUnchanged = mediaBefore.SequenceEqual(mediaAfter);
             temporaryArtifactsClean = NoTemporaryArtifacts(environment)
                 && databaseAfter.Tables.Keys.All(table => !table.Contains(

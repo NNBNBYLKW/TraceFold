@@ -52,11 +52,12 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
             IngestResult registeredResult = await ResolveAsync(
                 host, registeredConflict, ConflictResolution.Replace,
                 match => match.AssetId == registeredAssetId, cancellationToken);
-            PackageProbeEnvironment.Require(
-                registeredResult.Outcome == IngestOutcome.Completed
-                && registeredResult.AssetId == registeredAssetId
-                && !File.Exists(Path.Combine(environment.InboxDirectory, "registered.jpg")),
-                "probe.registered_replace_failed");
+            PackageProbeEnvironment.RequireStep("probe.registered_replace_failed",
+                PackageProbeEnvironment.Describe(registeredResult),
+                ("outcome", registeredResult.Outcome == IngestOutcome.Completed),
+                ("asset", registeredResult.AssetId == registeredAssetId),
+                ("inbox_removed", !File.Exists(
+                    Path.Combine(environment.InboxDirectory, "registered.jpg"))));
             registeredReplace = true;
 
             InboxCardDto keepBothCard = await environment.CopyAndObserveAsync(
@@ -65,12 +66,13 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
                 .GetRequiredService<IIngestService>().IngestAsync(keepBothCard.Id, cancellationToken);
             IngestResult keepBothResult = await ResolveAsync(
                 host, keepBothConflict, ConflictResolution.KeepBoth, null, cancellationToken);
-            PackageProbeEnvironment.Require(
-                keepBothResult.Outcome == IngestOutcome.Completed
-                && File.Exists(Path.Combine(environment.LibraryDirectory, "registered (2).jpg"))
-                && await CountAssetsWithFilenameAsync(
-                    host, "registered.jpg", "registered (2).jpg", cancellationToken) == 2,
-                "probe.keep_both_failed");
+            PackageProbeEnvironment.RequireStep("probe.keep_both_failed",
+                PackageProbeEnvironment.Describe(keepBothResult),
+                ("outcome", keepBothResult.Outcome == IngestOutcome.Completed),
+                ("library_copy", File.Exists(
+                    Path.Combine(environment.LibraryDirectory, "registered (2).jpg"))),
+                ("library_count", await CountAssetsWithFilenameAsync(
+                    host, "registered.jpg", "registered (2).jpg", cancellationToken) == 2));
             contentKeepBoth = true;
 
             File.Copy(
@@ -84,21 +86,24 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
                 host, unmanagedConflict, ConflictResolution.Replace,
                 match => !match.IsRegistered && match.ActualFilename.Equals(
                     "unmanaged.jpg", StringComparison.OrdinalIgnoreCase), cancellationToken);
-            PackageProbeEnvironment.Require(
-                unmanagedResult.Outcome == IngestOutcome.Completed
-                && unmanagedResult.AssetId.HasValue
-                && !File.Exists(Path.Combine(environment.InboxDirectory, "unmanaged.jpg"))
-                && await CountAssetsWithFilenameAsync(host, "unmanaged.jpg", null, cancellationToken) == 1,
-                "probe.unmanaged_replace_failed");
+            PackageProbeEnvironment.RequireStep("probe.unmanaged_replace_failed",
+                PackageProbeEnvironment.Describe(unmanagedResult),
+                ("outcome", unmanagedResult.Outcome == IngestOutcome.Completed),
+                ("asset", unmanagedResult.AssetId.HasValue),
+                ("inbox_removed", !File.Exists(
+                    Path.Combine(environment.InboxDirectory, "unmanaged.jpg"))),
+                ("library_count", await CountAssetsWithFilenameAsync(
+                    host, "unmanaged.jpg", null, cancellationToken) == 1));
             unmanagedReplace = true;
 
             InboxCardDto reopenCard = await environment.CopyAndObserveAsync(
                 host, PhotoFixture, "reopen.jpg", clock, cancellationToken);
             IngestResult reopenConflict = await host.Services
                 .GetRequiredService<IIngestService>().IngestAsync(reopenCard.Id, cancellationToken);
-            PackageProbeEnvironment.Require(
-                reopenConflict.Outcome == IngestOutcome.ConflictBlocked
-                && reopenConflict.ConflictCaseId.HasValue, "probe.reopen_case_missing");
+            PackageProbeEnvironment.RequireStep("probe.reopen_case_missing",
+                PackageProbeEnvironment.Describe(reopenConflict),
+                ("blocked", reopenConflict.Outcome == IngestOutcome.ConflictBlocked),
+                ("case", reopenConflict.ConflictCaseId.HasValue));
             Guid reopenCaseId = reopenConflict.ConflictCaseId.GetValueOrDefault();
 
             await PackageProbeEnvironment.StopHostAsync(host);
@@ -110,10 +115,11 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
             PackageProbeEnvironment.Require(persisted?.Id == reopenCaseId, "probe.reopen_case_not_persisted");
             IngestResult skipped = await host.Services.GetRequiredService<IConflictResolutionService>()
                 .ResolveAsync(reopenCaseId, ConflictResolution.Skip, null, cancellationToken);
-            PackageProbeEnvironment.Require(
-                skipped.Outcome == IngestOutcome.Skipped
-                && File.Exists(Path.Combine(environment.InboxDirectory, "reopen.jpg")),
-                "probe.reopen_skip_failed");
+            PackageProbeEnvironment.RequireStep("probe.reopen_skip_failed",
+                PackageProbeEnvironment.Describe(skipped),
+                ("skipped", skipped.Outcome == IngestOutcome.Skipped),
+                ("source_retained", File.Exists(
+                    Path.Combine(environment.InboxDirectory, "reopen.jpg"))));
             reopened = true;
 
             File.Copy(Path.Combine(environment.FixturesDirectory, VideoFixture),
@@ -138,12 +144,16 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
                 "probe.processed_item_not_ready");
             IngestResult processedResult = await host.Services.GetRequiredService<IIngestService>()
                 .IngestAsync(processedCard.Id, cancellationToken);
-            PackageProbeEnvironment.Require(
-                processedResult.Outcome == IngestOutcome.Completed
-                && !File.Exists(Path.Combine(environment.InboxDirectory, VideoFixture))
-                && !File.Exists(Path.Combine(environment.InboxDirectory, AudioFixture))
-                && File.Exists(Path.Combine(environment.LibraryDirectory, VideoFixture))
-                && environment.ProcessingWorkspaceIsEmpty(), "probe.processed_ingest_failed");
+            PackageProbeEnvironment.RequireStep("probe.processed_ingest_failed",
+                PackageProbeEnvironment.Describe(processedResult),
+                ("outcome", processedResult.Outcome == IngestOutcome.Completed),
+                ("video_source_removed", !File.Exists(
+                    Path.Combine(environment.InboxDirectory, VideoFixture))),
+                ("audio_source_removed", !File.Exists(
+                    Path.Combine(environment.InboxDirectory, AudioFixture))),
+                ("library_video", File.Exists(
+                    Path.Combine(environment.LibraryDirectory, VideoFixture))),
+                ("workspace_empty", environment.ProcessingWorkspaceIsEmpty()));
             processedMedia = true;
 
             IReadOnlyList<LibraryAssetDto> assets = await host.Services
@@ -168,12 +178,23 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
         }
         catch (ProbeFailureException error)
         {
+            if (host is not null)
+            {
+                PackageProbeEnvironment.WriteDatabaseFileState(host, "first_error");
+            }
+
             await WriteFailureAsync(environment, registeredReplace, contentKeepBoth,
                 unmanagedReplace, reopened, processedMedia, toolPath, error.ErrorCode);
             return 1;
         }
-        catch
+        catch (Exception error)
         {
+            PackageProbeTrace.WriteException("stage4", error);
+            if (host is not null)
+            {
+                PackageProbeEnvironment.WriteDatabaseFileState(host, "first_error");
+            }
+
             await WriteFailureAsync(environment, registeredReplace, contentKeepBoth,
                 unmanagedReplace, reopened, processedMedia, toolPath, "probe.unexpected_failure");
             return 1;
@@ -196,8 +217,10 @@ public sealed class Stage4ConflictProbeScenario : IPackageProbeScenario
         IHost host, IngestResult blocked, ConflictResolution resolution,
         Func<ConflictMatchRecord, bool>? matchSelector, CancellationToken cancellationToken)
     {
-        PackageProbeEnvironment.Require(blocked.Outcome == IngestOutcome.ConflictBlocked
-            && blocked.ConflictCaseId.HasValue, "probe.conflict_missing");
+        PackageProbeEnvironment.RequireStep("probe.conflict_missing",
+            PackageProbeEnvironment.Describe(blocked),
+            ("blocked", blocked.Outcome == IngestOutcome.ConflictBlocked),
+            ("case", blocked.ConflictCaseId.HasValue));
         IConflictCaseStore store = host.Services.GetRequiredService<IConflictCaseStore>();
         ConflictCaseRecord conflict = (await store.LoadAsync(
             blocked.ConflictCaseId!.Value, cancellationToken))!;

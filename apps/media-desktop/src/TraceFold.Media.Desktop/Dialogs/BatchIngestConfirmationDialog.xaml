@@ -7,7 +7,12 @@
     AutomationProperties.Name="确认批量入库"
     DefaultButton="None"
     Title="确认批量入库">
-    <Grid RowDefinitions="Auto,Auto" RowSpacing="18">
+    <Grid x:Name="DialogRoot" RowDefinitions="*,Auto" RowSpacing="18">
+        <ScrollViewer
+            x:Name="BatchIngestScrollRoot"
+            AutomationProperties.AutomationId="BatchIngestScrollRoot"
+            AutomationProperties.Name="批量入库确认滚动区域"
+            VerticalScrollBarVisibility="Auto">
         <StackPanel Spacing="8">
             <TextBlock
                 Text="请确认本次选择的状态统计。只有可直接入库的项目会开始执行。"
@@ -18,16 +23,19 @@
             <TextBlock Text="{x:Bind ViewModel.RecoveryText}" />
             <TextBlock Text="{x:Bind ViewModel.ChangedText}" />
         </StackPanel>
+        </ScrollViewer>
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <TextBlock
                 VerticalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Text="冲突项不会在批量流程中弹出单项冲突对话框。"
                 TextWrapping="Wrap" />
-            <Button Grid.Column="1" Click="OnCancelClicked" Content="取消" />
+            <Button x:Name="CancelButton" Grid.Column="1" Click="OnCancelClicked" Content="取消" />
             <Button
+                x:Name="ConfirmButton"
                 Grid.Column="2"
                 AutomationProperties.AutomationId="BatchIngestConfirmButton"
+                AutomationProperties.HelpText="没有可直接入库的项目，无法确认"
                 AutomationProperties.Name="确认开始批量入库"
                 Click="OnConfirmClicked"
                 Content="确认入库"

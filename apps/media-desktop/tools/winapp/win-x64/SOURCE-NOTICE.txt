@@ -1,0 +1,20 @@
+TraceFold UI acceptance driver — pinned source notice
+=====================================================
+
+Pinned release/tag : v0.5.0 (Microsoft winapp CLI)
+Asset URL          : https://github.com/microsoft/winappCli/releases/download/v0.5.0/winappcli-x64.zip
+Asset name         : winappcli-x64.zip
+Archive size       : 37881954 bytes
+Archive SHA-256    : 88735CE6C2582AC5FAC6200194BF62467FDD72B44B2D230F3A4ED059FA79EE7D
+Release commit     : fd7cb6f235fa54dd2c6e26386e65e967a2c8797a
+Project support    : Windows 11 x64 (x64 architecture only)
+Capabilities used  : inspect, search, invoke, set-value, get-value, get-property, focus,
+                     wait-for, scroll-into-view, screenshot, send-keys
+
+TraceFold does not modify, patch, rebuild or install the driver. The toolkit stages the
+official archive read-only, verifies the four identity fields above (name, version, size,
+SHA-256) before use, and preserves every license/notice file that ships inside the archive.
+
+The driver archive and its extracted executables are never committed to source control; only
+this notice and the pinned license copy are. A clean Windows VM run is still outstanding, so
+no driver behaviour is claimed as verified here.

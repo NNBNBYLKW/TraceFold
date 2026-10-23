@@ -8,6 +8,26 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 public sealed class LibrarySelectionViewModelTests
 {
     [Fact]
+    public void Selection_reports_has_selection_and_notifies()
+    {
+        LibraryCardViewModel card = Card("photo.jpg", 4);
+        var selection = new LibrarySelectionViewModel();
+        List<string?> changed = [];
+        selection.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.False(selection.HasSelection);
+
+        selection.ReplaceFromGrid([card], [card]);
+
+        Assert.True(selection.HasSelection);
+        Assert.Contains(nameof(LibrarySelectionViewModel.HasSelection), changed);
+
+        selection.Clear();
+
+        Assert.False(selection.HasSelection);
+    }
+
+    [Fact]
     public void Capture_uses_current_query_order_after_sort()
     {
         LibraryCardViewModel first = Card("first.jpg", version: 4);

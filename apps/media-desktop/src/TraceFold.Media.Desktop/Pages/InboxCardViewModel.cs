@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -6,7 +7,7 @@ using TraceFold.Media.Domain.Inbox;
 
 namespace TraceFold.Media.Desktop.Pages;
 
-public sealed class InboxCardViewModel
+public sealed class InboxCardViewModel : INotifyPropertyChanged
 {
     private readonly Uri? _thumbnailUri;
     private ImageSource? _thumbnailSource;
@@ -23,7 +24,9 @@ public sealed class InboxCardViewModel
             : new Uri(thumbnailSource);
     }
 
-    public InboxCardDto Card { get; }
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public InboxCardDto Card { get; private set; }
 
     public Guid Id => Card.Id;
 
@@ -38,6 +41,12 @@ public sealed class InboxCardViewModel
     public string DisplayName => Card.DisplayName;
 
     public string StatusText => Card.StatusText;
+
+    /// <summary>
+    /// Deterministic accessible name for the row. It carries the localized display name
+    /// and status only: never a database identifier or an absolute path.
+    /// </summary>
+    public string AccessibleName => $"待入库文件 {DisplayName}，状态 {StatusText}";
 
     public string ProgressText => Card.Processing is null
         ? string.Empty
@@ -81,5 +90,34 @@ public sealed class InboxCardViewModel
         }
 
         _metadataVersion = Math.Max(_metadataVersion, version);
+    }
+
+    /// <summary>
+    /// Applies refreshed card data and notifies exactly the projections that changed, so a
+    /// row keeps its AutomationId while its accessible name follows the new state.
+    /// </summary>
+    public void Update(InboxCardDto card)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+        string displayName = DisplayName;
+        string status = StatusText;
+        string actualFilename = ActualFilename;
+        string accessibleName = AccessibleName;
+
+        Card = card;
+        _metadataVersion = Math.Max(_metadataVersion, card.MetadataVersion);
+
+        RaiseIfChanged(nameof(DisplayName), displayName, DisplayName);
+        RaiseIfChanged(nameof(StatusText), status, StatusText);
+        RaiseIfChanged(nameof(ActualFilename), actualFilename, ActualFilename);
+        RaiseIfChanged(nameof(AccessibleName), accessibleName, AccessibleName);
+    }
+
+    private void RaiseIfChanged(string propertyName, string before, string after)
+    {
+        if (!StringComparer.Ordinal.Equals(before, after))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
     }
 }

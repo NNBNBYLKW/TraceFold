@@ -235,10 +235,19 @@ public sealed class SystemDiagnosticsReadOnlyIntegrationTests
                      "*",
                      SearchOption.AllDirectories))
         {
-            byte[] content = File.ReadAllBytes(path);
+            // WAL and SHM contain SQLite connection bookkeeping; the logical
+            // database snapshot above checks the data exposed to the app.
+            if (path.EndsWith("-wal", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith("-shm", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
             result[Path.GetRelativePath(root, path)] = new FileSnapshot(
-                content.LongLength,
-                Convert.ToHexString(SHA256.HashData(content)));
+                stream.Length,
+                Convert.ToHexString(SHA256.HashData(stream)));
         }
 
         return result;

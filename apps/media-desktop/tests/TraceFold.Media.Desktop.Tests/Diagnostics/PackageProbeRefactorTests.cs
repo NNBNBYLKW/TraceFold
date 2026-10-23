@@ -115,6 +115,7 @@ public sealed class PackageProbeRefactorTests
     [Fact]
     public async Task Common_runner_preserves_the_stage4_conflict_result_schema()
     {
+        using var trace = new PackageProbeTraceCapture();
         using OwnedProbeRoot root = OwnedProbeRoot.CreateWithFixtures();
         PackageProbeRequest request = PackageProbeRequests.Stage4Conflict(root);
 
@@ -126,7 +127,10 @@ public sealed class PackageProbeRefactorTests
             Path.Combine(root.Path, Stage4PackageProbeOptions.ResultFilename),
             TestContext.Current.CancellationToken));
 
-        Assert.Equal(0, exitCode);
+        Assert.True(exitCode == 0,
+            "Probe failed with " + result.RootElement.GetProperty("ErrorCode").GetString() + "."
+            + Environment.NewLine + trace.Summary
+            + Environment.NewLine + result.RootElement.GetRawText());
         foreach (string property in new[]
         {
             "Succeeded", "RegisteredReplacePassed", "ContentKeepBothPassed",

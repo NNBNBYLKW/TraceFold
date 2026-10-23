@@ -2,5 +2,10 @@
     x:Class="TraceFold.Media.Desktop.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid x:Name="ShellRoot" />
+    <Grid
+        x:Name="ShellRoot"
+        AutomationProperties.AutomationId="TraceFoldMainWindow"
+        AutomationProperties.Name="TraceFold 主窗口"
+        MinWidth="{StaticResource TraceFoldMinViewportWidth}"
+        MinHeight="{StaticResource TraceFoldMinViewportHeight}" />
 </Window>

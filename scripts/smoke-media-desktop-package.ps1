@@ -1,10 +1,33 @@
 [CmdletBinding()]
 param(
     [string] $PackageDirectory,
-    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C','5C-B')][string] $StageCheckpoint
+    [Parameter(Mandatory)][ValidateSet('4A','4B','5A','5B','5C','5C-B','5C-C')][string] $StageCheckpoint,
+    # Test stand-in: when supplied, the four Stage 5C-C probe requests are built and executed
+    # against this executable instead of the packaged product, so request construction and error
+    # propagation can be verified without opening a window. The real launch layer is then
+    # reported NotRun, never Passed.
+    [string] $ProbeExecutable,
+    # Independent read-only check: the package exists, names its checkpoint and source commit, and
+    # carries the media tools by name. Nothing is started, created or written. It is not a
+    # promotion qualification - promotion runs the complete smoke - and it does not verify the
+    # FFmpeg pins: the producer and the toolkit structure smoke own those.
+    [switch] $IdentityOnly,
+    # How long one probe may take. Lowered only by tests that prove the timeout path.
+    [ValidateRange(5, 600)][int] $ProbeTimeoutSeconds = 60
 )
 
 $ErrorActionPreference = 'Stop'
+if ($IdentityOnly -and -not [string]::IsNullOrWhiteSpace($ProbeExecutable)) {
+    throw 'IdentityOnly and ProbeExecutable are different modes; choose one.'
+}
+
+function Read-JsonDocument {
+    # Windows PowerShell decodes a BOM-less UTF-8 file as ANSI, which corrupts every non-ASCII
+    # string before ConvertFrom-Json sees it. ReadAllText detects the BOM and defaults to UTF-8.
+    param([Parameter(Mandatory)][string] $Path)
+    return ([IO.File]::ReadAllText($Path) | ConvertFrom-Json)
+}
+
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($PackageDirectory)) {
     $PackageDirectory = Join-Path $repoRoot "dist\TraceFold-MediaDesktop-Stage$StageCheckpoint-win-x64"
@@ -25,7 +48,7 @@ if (-not (Test-Path -LiteralPath $packageFfmpegPath -PathType Leaf) -or
 if (-not (Test-Path -LiteralPath $packageVersionPath -PathType Leaf)) {
     throw 'Package version manifest is missing.'
 }
-$packageVersion = Get-Content -LiteralPath $packageVersionPath -Raw | ConvertFrom-Json
+$packageVersion = Read-JsonDocument -Path $packageVersionPath
 if ($packageVersion.StageCheckpoint -ne $StageCheckpoint -or
     [string]$packageVersion.SourceCommit -notmatch '^[0-9a-f]{40}$') {
     throw 'Package version manifest does not identify the checkpoint source commit.'
@@ -35,6 +58,25 @@ if ($StageCheckpoint -eq '5C-B') {
     if ([string]$packageVersion.InformationalVersion -cne $expectedStage5CBVersion) {
         throw 'Stage 5C-B manifest version does not match its source commit.'
     }
+}
+if ($StageCheckpoint -eq '5C-C') {
+    $expectedStage5CCVersion = "4.0.0-stage5cc+$($packageVersion.SourceCommit)"
+    if ([string]$packageVersion.InformationalVersion -cne $expectedStage5CCVersion) {
+        throw 'Stage 5C-C manifest version does not match its source commit.'
+    }
+    if ($null -ne $packageVersion.PSObject.Properties['ProductLaunchProbe'] -and
+        [string]$packageVersion.ProductLaunchProbe -notin @('NotRun', 'Passed')) {
+        throw 'Stage 5C-C manifest records an unknown product launch probe result.'
+    }
+}
+
+if ($IdentityOnly) {
+    # Read-only stop: every check above is a presence/version fact. The FFmpeg pins are verified
+    # by the producer and the toolkit structure smoke, not here. This branch is never used as a
+    # promotion gate; a publish runs the complete smoke below.
+    Write-Output 'PASS: package presence and version verified (nothing was started)'
+    Write-Output 'realProbe=NotRun'
+    exit 0
 }
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -66,6 +108,12 @@ $probeName = "$probePrefix$([Guid]::NewGuid().ToString('N'))"
 $probeRoot = [IO.Path]::GetFullPath((Join-Path $tempBase $probeName))
 $probeMarker = Join-Path $probeRoot 'probe-owner.txt'
 $crashProbeRoots = [Collections.Generic.List[object]]::new()
+# Every root and process a Stage 5C-C probe creates is registered here as soon as it exists, so
+# the single finally below can stop what it owns and then remove the root - including after a
+# timeout, a non-zero exit, a missing result or a failed assertion.
+$stageProbeRoots = New-Object System.Collections.ArrayList
+$stageProbeProcesses = New-Object System.Collections.ArrayList
+$standInProcesses = New-Object System.Collections.ArrayList
 
 function Get-TrimmedFullPath {
     param([Parameter(Mandatory)][string] $Path)
@@ -190,6 +238,218 @@ function Assert-NoReparseTree {
     }
 }
 
+function Stop-OwnedProbeLauncher {
+    # A stand-in may be a script, in which case the started image is the command interpreter that
+    # opened it. Ownership is then the exact process this run started plus its command line naming
+    # the launcher - never "any cmd.exe".
+    param(
+        [Parameter(Mandatory)][Diagnostics.Process] $Process,
+        [Parameter(Mandatory)][string] $LauncherPath
+    )
+    try {
+        $Process.Refresh()
+        if ($Process.HasExited) { return }
+    }
+    catch {
+        return
+    }
+    $owned = $false
+    try {
+        $owned = [StringComparer]::OrdinalIgnoreCase.Equals(
+            [IO.Path]::GetFullPath($Process.Path),
+            [IO.Path]::GetFullPath($LauncherPath))
+    }
+    catch { }
+    if (-not $owned) {
+        try {
+            $info = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $Process.Id) -ErrorAction Stop
+            if ($null -ne $info -and
+                -not [string]::IsNullOrWhiteSpace([string] $info.CommandLine) -and
+                ([string] $info.CommandLine).IndexOf($LauncherPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $owned = $true
+            }
+        }
+        catch { }
+    }
+    if (-not $owned) {
+        throw "Refusing to stop an unowned probe stand-in: $($Process.Id)"
+    }
+    Stop-Process -Id $Process.Id -Force -ErrorAction Stop
+    if (-not $Process.WaitForExit(5000)) {
+        throw "Probe stand-in did not exit within five seconds: $($Process.Id)"
+    }
+}
+
+function Assert-ProbeRootOwnership {
+    # The product's own rule, applied before the process is started: a probe root is a direct
+    # child of the temp directory, named with the prefix of the scenario it runs, carrying the
+    # owner marker with exactly this token, and free of reparse points. If this fails, the
+    # product would refuse the request anyway, so the smoke reports the reason itself.
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $RootName,
+        [Parameter(Mandatory)][string] $Prefix,
+        [Parameter(Mandatory)][string] $Marker,
+        [Parameter(Mandatory)][string] $Token,
+        [Parameter(Mandatory)][string] $Label
+    )
+    Assert-DirectTempChild -Path $Root -ExpectedName $RootName
+    if (-not $RootName.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label probe root name does not carry the contract prefix: $RootName"
+    }
+    Assert-NoReparseTree -Path $Root
+    if (-not (Test-Path -LiteralPath $Marker -PathType Leaf) -or
+        [IO.File]::ReadAllText($Marker) -ne $Token) {
+        throw "$Label probe cleanup ownership marker is missing or changed."
+    }
+}
+
+function Assert-Stage5CCProbeResult {
+    param(
+        [Parameter(Mandatory)][string] $Stage,
+        [Parameter(Mandatory)] $Result,
+        [Parameter(Mandatory)][string] $Json,
+        [Parameter(Mandatory)][string] $Root
+    )
+
+    switch ($Stage) {
+        '5A' {
+            foreach ($caseProperty in @(
+                    'Succeeded',
+                    'AtomicMetadata',
+                    'GenericProcessingQueued',
+                    'ProcessingCompleted',
+                    'ConflictSourceRetained',
+                    'InternalStorageClean')) {
+                if (-not [bool]$Result.$caseProperty) { throw "Stage 5A package probe case failed: $caseProperty" }
+            }
+            if ([int]$Result.CompletedIngestCount -ne 3 -or
+                [int]$Result.ConflictCount -ne 1 -or
+                -not [string]::IsNullOrEmpty([string]$Result.ErrorCode)) {
+                throw 'Stage 5A package probe result fields are invalid.'
+            }
+            if ((Test-Path -LiteralPath (Join-Path $Root 'inbox\paired.mp4')) -or
+                (Test-Path -LiteralPath (Join-Path $Root 'inbox\paired.m4a')) -or
+                -not (Test-Path -LiteralPath (Join-Path $Root 'inbox\photo-copy.jpg'))) {
+                throw 'Stage 5A probe sources were not retained and cleaned as expected.'
+            }
+            foreach ($formalFile in @('photo.jpg', 'ordinary.mp4', 'paired.mp4')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $Root "library\$formalFile"))) {
+                    throw 'Stage 5A probe formal asset is missing.'
+                }
+            }
+        }
+        '5B' {
+            foreach ($caseProperty in @(
+                    'Succeeded',
+                    'StrictIntersectionPassed',
+                    'AtomicBatchPassed',
+                    'NamingPreviewMatchedApply',
+                    'UndoPassed',
+                    'PhysicalFilesUnchanged',
+                    'InternalStorageClean')) {
+                if (-not [bool]$Result.$caseProperty) { throw "Stage 5B package probe case failed: $caseProperty" }
+            }
+            if (-not [string]::IsNullOrEmpty([string]$Result.ErrorCode)) {
+                throw 'Stage 5B package probe reported an unexpected error code.'
+            }
+            foreach ($formalFile in @(
+                    'stage5b-asset-1.jpg',
+                    'stage5b-asset-2.jpg',
+                    'stage5b-asset-3.jpg',
+                    'stage5b-asset-4.jpg')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $Root "library\$formalFile"))) {
+                    throw 'Stage 5B probe formal asset is missing.'
+                }
+            }
+        }
+        '5C' {
+            foreach ($caseProperty in @(
+                    'Succeeded',
+                    'QueryPassed',
+                    'MergePassed',
+                    'MixedDeleteBlocked',
+                    'DeleteUndoPassed',
+                    'MergeUndoPassed',
+                    'VersioningPassed',
+                    'PhysicalFilesUnchanged',
+                    'InternalStorageClean')) {
+                if (-not [bool]$Result.$caseProperty) { throw "Stage 5C package probe case failed: $caseProperty" }
+            }
+            if (-not [string]::IsNullOrEmpty([string]$Result.ErrorCode)) {
+                throw 'Stage 5C package probe reported an unexpected error code.'
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $Root 'library\stage5c-formal.jpg')) -or
+                -not (Test-Path -LiteralPath (Join-Path $Root 'inbox\stage5c-pending.jpg'))) {
+                throw 'Stage 5C probe media fixture is missing.'
+            }
+        }
+        '5C-B' {
+            foreach ($caseProperty in @(
+                    'Succeeded',
+                    'AllCategoriesObserved',
+                    'PackagedEnvironmentHealthy',
+                    'FailureIsolationPassed',
+                    'RedactionPassed',
+                    'BusinessDataUnchanged',
+                    'SettingsUnchanged',
+                    'BackgroundStateUnchanged',
+                    'MediaFilesUnchanged',
+                    'TemporaryArtifactsClean',
+                    'ToolProcessesClean')) {
+                if (-not [bool]$Result.$caseProperty) { throw "Stage 5C-B package probe case failed: $caseProperty" }
+            }
+            if (-not [string]::IsNullOrEmpty([string]$Result.ErrorCode)) {
+                throw 'Stage 5C-B package probe reported an unexpected error code.'
+            }
+            foreach ($privateValue in @(
+                    $Root,
+                    '.db',
+                    '.log',
+                    '.jpg',
+                    'stage5cb-formal',
+                    'stage5cb-pending',
+                    'Metadata Sentinel')) {
+                if ($Json.IndexOf($privateValue, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    throw 'Stage 5C-B result JSON contains a private value.'
+                }
+            }
+            if ($Json -match '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}') {
+                throw 'Stage 5C-B result JSON contains an identifier.'
+            }
+            if (@(Get-PackageFfmpegProcesses).Count -ne 0) {
+                throw 'Stage 5C-B probe left a package media-tool process running.'
+            }
+        }
+        default { throw "Unknown Stage 5C-C probe: $Stage" }
+    }
+
+    $processingRoot = Join-Path $Root 'work\.tracefold\processing'
+    if ((Test-Path -LiteralPath $processingRoot) -and
+        @(Get-ChildItem -LiteralPath $processingRoot -Force).Count -ne 0) {
+        throw "Probe processing workspace was not cleaned: $Stage"
+    }
+    foreach ($storageCategory in @('commit', 'recovery')) {
+        $storageRoot = Join-Path $Root "library\.tracefold\$storageCategory"
+        if ((Test-Path -LiteralPath $storageRoot) -and
+            @(Get-ChildItem -LiteralPath $storageRoot -Force).Count -ne 0) {
+            throw "Probe retained internal storage content: $Stage/$storageCategory"
+        }
+    }
+}
+
+function Get-Stage5CCProbeSpec {
+    # The prefix is the product's own contract, one per scenario: the desktop probe refuses a root
+    # whose basename does not start with the prefix of the scenario it was asked to run. Both the
+    # real launch and the stand-in therefore consume this single value.
+    return @(
+        [pscustomobject]@{ Stage = '5A'; Scenario = 'stage5a-batch'; Result = 'stage5a-probe-result.json'; Label = 'Stage 5A'; Prefix = 'tracefold-media-desktop-stage5a-probe-' },
+        [pscustomobject]@{ Stage = '5B'; Scenario = 'stage5b-library'; Result = 'stage5b-probe-result.json'; Label = 'Stage 5B'; Prefix = 'tracefold-media-desktop-stage5b-probe-' },
+        [pscustomobject]@{ Stage = '5C'; Scenario = 'stage5c-taxonomy'; Result = 'stage5c-probe-result.json'; Label = 'Stage 5C'; Prefix = 'tracefold-media-desktop-stage5c-probe-' },
+        [pscustomobject]@{ Stage = '5C-B'; Scenario = 'stage5cb-diagnostics'; Result = 'stage5cb-diagnostics-probe-result.json'; Label = 'Stage 5C-B'; Prefix = 'tracefold-media-desktop-stage5cb-probe-' }
+    )
+}
+
 function Invoke-CrashRecoveryProbe {
     param([Parameter(Mandatory)][string] $FaultPoint)
 
@@ -238,7 +498,7 @@ function Invoke-CrashRecoveryProbe {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         throw "Stage 4B crash manifest is missing: $FaultPoint"
     }
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $manifest = Read-JsonDocument -Path $manifestPath
     if ([string]$manifest.OwnerToken -ne $token -or
         [string]$manifest.FaultPoint -ne $FaultPoint -or
         [string]$manifest.ReachedFaultPoint -ne $FaultPoint -or
@@ -270,7 +530,7 @@ function Invoke-CrashRecoveryProbe {
     if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
         throw "Stage 4B crash result is missing: $FaultPoint"
     }
-    $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    $result = Read-JsonDocument -Path $resultPath
     if (-not [bool]$result.Succeeded -or
         -not [bool]$result.CrashRecoveryPassed -or
         [string]$result.FaultPoint -ne $FaultPoint -or
@@ -287,6 +547,77 @@ if ($preExistingProcesses.Count -ne 0) {
 $preExistingFfmpeg = @(Get-PackageFfmpegProcesses)
 if ($preExistingFfmpeg.Count -ne 0) {
     throw "Refusing to run while package FFmpeg processes already exist: $($preExistingFfmpeg.Id -join ', ')"
+}
+
+if ($StageCheckpoint -eq '5C-C' -and -not [string]::IsNullOrWhiteSpace($ProbeExecutable)) {
+    # Stand-in mode: the same request construction, the same wait and the same exit-code rules,
+    # but the process is the caller's test double. Nothing opens a window, and the real launch
+    # layer is reported NotRun rather than being claimed as passed.
+    $standInPath = [IO.Path]::GetFullPath($ProbeExecutable)
+    if (-not [IO.File]::Exists($standInPath)) { throw "Probe stand-in is missing: $standInPath" }
+    $standInRoots = New-Object System.Collections.ArrayList
+    try {
+        foreach ($spec in @(Get-Stage5CCProbeSpec)) {
+            $rootName = "$($spec.Prefix)$([guid]::NewGuid().ToString('N'))"
+            $root = [IO.Path]::GetFullPath((Join-Path $tempBase $rootName))
+            $token = [Guid]::NewGuid().ToString('D')
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $marker = Join-Path $root 'probe-owner.txt'
+            [IO.File]::WriteAllText($marker, $token)
+            [void] $standInRoots.Add([pscustomobject] @{ Root = $root; Name = $rootName; Marker = $marker; Token = $token })
+            Assert-ProbeRootOwnership -Root $root -RootName $rootName -Prefix $spec.Prefix `
+                -Marker $marker -Token $token -Label $spec.Label
+
+            $arguments = @(
+                '--package-probe-root',
+                ('"{0}"' -f $root),
+                '--package-probe-token',
+                $token,
+                '--package-probe-scenario',
+                $spec.Scenario)
+            [pscustomobject] @{
+                stage      = $spec.Stage
+                scenario   = $spec.Scenario
+                executable = $standInPath
+                arguments  = $arguments
+            } | ConvertTo-Json -Depth 4 | Set-Content `
+                -LiteralPath (Join-Path $root 'probe-request.json') `
+                -Encoding UTF8
+
+            $process = Start-Process `
+                -FilePath $standInPath `
+                -ArgumentList $arguments `
+                -PassThru `
+                -WindowStyle Hidden
+            [void] $standInProcesses.Add($process)
+            if (-not $process.WaitForExit($ProbeTimeoutSeconds * 1000)) {
+                throw "$($spec.Label) package probe did not exit within $ProbeTimeoutSeconds seconds."
+            }
+            if ($process.ExitCode -ne 0) {
+                throw "$($spec.Label) package probe failed with exit code $($process.ExitCode)."
+            }
+        }
+    }
+    finally {
+        # Owned processes first: a root cannot be removed while its probe still holds a file in it.
+        foreach ($ownedProcess in $standInProcesses) {
+            Stop-OwnedProbeLauncher -Process $ownedProcess -LauncherPath $standInPath
+        }
+        foreach ($owned in $standInRoots) {
+            Assert-DirectTempChild -Path $owned.Root -ExpectedName $owned.Name
+            if (Test-Path -LiteralPath $owned.Root) {
+                Assert-NoReparseTree -Path $owned.Root
+                if (-not (Test-Path -LiteralPath $owned.Marker -PathType Leaf) -or
+                    [IO.File]::ReadAllText($owned.Marker) -ne $owned.Token) {
+                    throw 'Probe stand-in cleanup ownership marker is missing or changed.'
+                }
+                Remove-Item -LiteralPath $owned.Root -Recurse -Force
+            }
+        }
+    }
+    Write-Output 'PASS: Stage 5C-C probe requests built and executed against a stand-in'
+    Write-Output 'realProbe=NotRun: the packaged product was not started'
+    exit 0
 }
 
 try {
@@ -329,6 +660,66 @@ try {
         throw "Application opened a browser process: $($newBrowserIds -join ', ')"
     }
 
+    if ($StageCheckpoint -eq '5C-C') {
+        # Four earlier business probes, each in its own owned root: batch/preprocessing, library
+        # naming/undo, taxonomy maintenance and diagnostics. They are the existing per-stage
+        # probes; no product-only 5C-C switch is introduced.
+        $fixtureSource = Join-Path $repoRoot 'apps\media-api\tests\fixtures\media'
+        foreach ($spec in @(Get-Stage5CCProbeSpec)) {
+            $rootName = "$($spec.Prefix)$([guid]::NewGuid().ToString('N'))"
+            $root = [IO.Path]::GetFullPath((Join-Path $tempBase $rootName))
+            $token = [Guid]::NewGuid().ToString('D')
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+            $marker = Join-Path $root 'probe-owner.txt'
+            [IO.File]::WriteAllText($marker, $token)
+            [void] $stageProbeRoots.Add([pscustomobject] @{ Root = $root; Name = $rootName; Marker = $marker; Token = $token; Label = $spec.Label })
+            Assert-ProbeRootOwnership -Root $root -RootName $rootName -Prefix $spec.Prefix `
+                -Marker $marker -Token $token -Label $spec.Label
+            $stageFixtures = Join-Path $root 'fixtures'
+            New-Item -ItemType Directory -Path $stageFixtures -Force | Out-Null
+            foreach ($fixtureName in @('paired.mp4', 'paired.m4a', 'photo.jpg')) {
+                Copy-Item `
+                    -LiteralPath (Join-Path $fixtureSource $fixtureName) `
+                    -Destination $stageFixtures
+            }
+
+            $stageArguments = @(
+                '--package-probe-root',
+                ('"{0}"' -f $root),
+                '--package-probe-token',
+                $token,
+                '--package-probe-scenario',
+                $spec.Scenario)
+            $stageProcess = Start-Process `
+                -FilePath $exePath `
+                -ArgumentList $stageArguments `
+                -PassThru `
+                -WindowStyle Hidden
+            [void] $stageProbeProcesses.Add($stageProcess)
+            if (-not $stageProcess.WaitForExit($ProbeTimeoutSeconds * 1000)) {
+                throw "$($spec.Label) package probe did not exit within $ProbeTimeoutSeconds seconds."
+            }
+            if ($stageProcess.ExitCode -ne 0) {
+                throw "$($spec.Label) package probe failed with exit code $($stageProcess.ExitCode)."
+            }
+
+            $stageResultPath = Join-Path $root $spec.Result
+            if (-not (Test-Path -LiteralPath $stageResultPath -PathType Leaf)) {
+                throw "$($spec.Label) package probe result is missing."
+            }
+            $stageJson = Get-Content -LiteralPath $stageResultPath -Raw
+            Assert-Stage5CCProbeResult `
+                -Stage $spec.Stage `
+                -Result ($stageJson | ConvertFrom-Json) `
+                -Json $stageJson `
+                -Root $root
+
+            Assert-ProbeRootOwnership -Root $root -RootName $rootName -Prefix $spec.Prefix `
+                -Marker $marker -Token $token -Label $spec.Label
+            Remove-Item -LiteralPath $root -Recurse -Force
+        }
+    }
+    else {
     New-Item -ItemType Directory -Path $probeRoot | Out-Null
     [IO.File]::WriteAllText($probeMarker, $probeToken)
     $probeFixtures = Join-Path $probeRoot 'fixtures'
@@ -565,6 +956,7 @@ try {
             throw 'Probe formal file is missing.'
         }
     }
+    }
     $processingRoot = Join-Path $probeRoot 'work\.tracefold\processing'
     if ((Test-Path -LiteralPath $processingRoot) -and
         @(Get-ChildItem -LiteralPath $processingRoot -Force).Count -ne 0) {
@@ -634,6 +1026,10 @@ try {
         Write-Output 'PASS: Stage 5C taxonomy query, merge, delete guards, and undo verified'
         Write-Output 'PASS: Stage 5C versioning, physical-file invariance, and clean storage verified'
     }
+    elseif ($StageCheckpoint -eq '5C-C') {
+        Write-Output 'PASS: Stage 5C-C probe coverage verified: stage5a-batch, stage5b-library, stage5c-taxonomy, stage5cb-diagnostics'
+        Write-Output 'PASS: Stage 5C-C four probe scenarios ran and their results were checked'
+    }
     else {
         Write-Output 'PASS: Stage 4A registered replace, Keep Both, unmanaged replace, and reopen flows verified'
         Write-Output 'PASS: Stage 4A package-local FFmpeg processing and clean storage verified'
@@ -652,6 +1048,21 @@ finally {
         ForEach-Object {
             Stop-OwnedProcessAndWait -Process $_ -AllowedPaths @($exePath)
         }
+    # Stage 5C-C probes: stop what this run started before touching the roots it created.
+    foreach ($stageProbeProcess in $stageProbeProcesses) {
+        Stop-OwnedProcessAndWait -Process $stageProbeProcess -AllowedPaths @($exePath)
+    }
+    foreach ($ownedStageRoot in $stageProbeRoots) {
+        Assert-DirectTempChild -Path $ownedStageRoot.Root -ExpectedName $ownedStageRoot.Name
+        if (Test-Path -LiteralPath $ownedStageRoot.Root) {
+            Assert-NoReparseTree -Path $ownedStageRoot.Root
+            if (-not (Test-Path -LiteralPath $ownedStageRoot.Marker -PathType Leaf) -or
+                [IO.File]::ReadAllText($ownedStageRoot.Marker) -ne $ownedStageRoot.Token) {
+                throw 'Stage probe cleanup ownership marker is missing or changed.'
+            }
+            Remove-Item -LiteralPath $ownedStageRoot.Root -Recurse -Force
+        }
+    }
     if ($null -eq $oldDataRoot) {
         Remove-Item Env:\TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT -ErrorAction SilentlyContinue
     }

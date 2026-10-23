@@ -10,11 +10,14 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
 {
     private CancellationToken _operationToken;
     private bool _synchronizingRuleEditor;
+    private bool _initialized;
 
     public LibraryBatchEditDialog(LibraryBatchEditDialogViewModel viewModel)
     {
         ViewModel = viewModel;
         InitializeComponent();
+        _initialized = true;
+        SizeChanged += OnViewportSizeChanged;
     }
 
     public LibraryBatchEditDialogViewModel ViewModel { get; }
@@ -38,6 +41,8 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        UpdateViewportBounds();
+        MetadataFirstInput.StartBringIntoView();
         MetadataFirstInput.Focus(FocusState.Programmatic);
         try
         {
@@ -58,6 +63,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         ViewModel.SelectedTab = EditorTabs.SelectedIndex == 1
             ? LibraryBatchEditTab.Naming
             : LibraryBatchEditTab.Metadata;
@@ -69,6 +75,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         int selected = Math.Max(0, MetadataModeList.SelectedIndex);
         ViewModel.Metadata.Mode = selected switch
         {
@@ -174,6 +181,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         ViewModel.Naming.Source = NamingSourceSelector.SelectedIndex == 1
             ? NamingSource.CurrentDisplayName
             : NamingSource.ActualFilename;
@@ -185,6 +193,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (PresetList.SelectedItem is NamingPresetDto preset)
         {
             ViewModel.Naming.LoadPreset(preset);
@@ -241,6 +250,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         ViewModel.Naming.SelectedRule =
             RuleList.SelectedItem as NamingRuleRowViewModel;
         SynchronizeRuleEditor();
@@ -282,6 +292,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (!_synchronizingRuleEditor
             && ViewModel.Naming.SelectedRule is { IsBracketRule: true } row
             && BracketPairSelector.SelectedIndex >= 0)
@@ -297,6 +308,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (!_synchronizingRuleEditor
             && ViewModel.Naming.SelectedRule is { IsCaseRule: true } row
             && CaseModeSelector.SelectedIndex >= 0)
@@ -311,6 +323,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        if (!_initialized) return;
         if (!_synchronizingRuleEditor
             && ViewModel.Naming.SelectedRule is { IsSequenceRule: true } row
             && SequencePlacementSelector.SelectedIndex >= 0)
@@ -384,12 +397,41 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
                 && ViewModel.Naming.PreviewRows.Count > 0)
             {
                 PreviewList.SelectedIndex = 0;
+                PreviewList.StartBringIntoView();
                 PreviewList.Focus(FocusState.Programmatic);
             }
             else
             {
+                DialogStatus.StartBringIntoView();
                 DialogStatus.Focus(FocusState.Programmatic);
             }
+        }
+    }
+
+    private void OnViewportSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        UpdateViewportBounds();
+    }
+
+    private void UpdateViewportBounds()
+    {
+        if (XamlRoot is null)
+        {
+            return;
+        }
+
+        double maxWidth = Math.Max(320, XamlRoot.Size.Width - 112);
+        double maxHeight = Math.Max(240, XamlRoot.Size.Height - 160);
+        if (DialogRoot.MaxWidth != maxWidth)
+        {
+            DialogRoot.MaxWidth = maxWidth;
+        }
+
+        if (DialogRoot.MaxHeight != maxHeight)
+        {
+            DialogRoot.MaxHeight = maxHeight;
         }
     }
 
@@ -405,7 +447,7 @@ public sealed partial class LibraryBatchEditDialog : ContentDialog
         ContentDialogClosingEventArgs args)
     {
         _ = sender;
-        if (ViewModel.IsSubmitting && !_operationToken.IsCancellationRequested)
+        if (ViewModel.IsSubmitting && !Result.Applied && !_operationToken.IsCancellationRequested)
         {
             args.Cancel = true;
         }

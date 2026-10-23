@@ -5,6 +5,8 @@
     <StackPanel Spacing="6">
         <AutoSuggestBox
             x:Name="SearchBox"
+            AutomationProperties.AutomationId="{x:Bind InputAutomationId, Mode=OneWay}"
+            AutomationProperties.Name="{x:Bind InputAutomationName, Mode=OneWay}"
             ItemsSource="{x:Bind ViewModel.Suggestions, Mode=OneWay}"
             PlaceholderText="输入名称后按 Enter"
             QuerySubmitted="OnQuerySubmitted"
@@ -16,7 +18,10 @@
                 </DataTemplate>
             </AutoSuggestBox.ItemTemplate>
         </AutoSuggestBox>
-        <ItemsControl ItemsSource="{x:Bind ViewModel.SelectedTerms, Mode=OneWay}">
+        <ItemsControl
+            AutomationProperties.AutomationId="{x:Bind SelectedTermsAutomationId, Mode=OneWay}"
+            AutomationProperties.Name="{x:Bind SelectedTermsAutomationName, Mode=OneWay}"
+            ItemsSource="{x:Bind ViewModel.SelectedTerms, Mode=OneWay}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
                     <Border
@@ -32,6 +37,7 @@
                             <Button
                                 Grid.Column="1"
                                 Margin="8,0,0,0"
+                                AutomationProperties.Name="移除所选词条"
                                 Click="OnRemoveClicked"
                                 Content="&#xE711;"
                                 FontFamily="Segoe Fluent Icons"

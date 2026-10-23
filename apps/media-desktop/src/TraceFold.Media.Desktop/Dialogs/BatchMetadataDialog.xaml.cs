@@ -23,6 +23,7 @@ public sealed partial class BatchMetadataDialog : ContentDialog
         _submit = submit;
         ViewModel.Load(editor, selection);
         InitializeComponent();
+        SizeChanged += OnViewportSizeChanged;
     }
 
     public BatchMetadataDialogViewModel ViewModel { get; }
@@ -46,7 +47,24 @@ public sealed partial class BatchMetadataDialog : ContentDialog
     {
         _ = sender;
         _ = args;
+        UpdateViewportBounds();
         AddAuthorInput.Focus(FocusState.Programmatic);
+    }
+
+    private void OnViewportSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        _ = sender;
+        _ = args;
+        UpdateViewportBounds();
+    }
+
+    private void UpdateViewportBounds()
+    {
+        if (XamlRoot is null) return;
+        double width = Math.Max(320, XamlRoot.Size.Width - 112);
+        double height = Math.Max(240, XamlRoot.Size.Height - 160);
+        if (DialogRoot.MaxWidth != width) DialogRoot.MaxWidth = width;
+        if (DialogRoot.MaxHeight != height) DialogRoot.MaxHeight = height;
     }
 
     private void OnModeTabSelectionChanged(
@@ -194,7 +212,8 @@ public sealed partial class BatchMetadataDialog : ContentDialog
         ContentDialogClosingEventArgs args)
     {
         _ = sender;
-        if (ViewModel.IsSubmitting && !_operationToken.IsCancellationRequested)
+        if (ViewModel.IsSubmitting && !Result.Applied
+            && !_operationToken.IsCancellationRequested)
         {
             args.Cancel = true;
         }

@@ -8,6 +8,25 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 public sealed class InboxSelectionViewModelTests
 {
     [Fact]
+    public void Has_selection_follows_selection_and_notifies_on_change()
+    {
+        InboxCardViewModel item = Card("photo.jpg");
+        var selection = new InboxSelectionViewModel();
+        var changed = new List<string?>();
+        selection.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.False(selection.HasSelection);
+        selection.ReplaceFromGrid([item], [item]);
+        Assert.True(selection.HasSelection);
+        Assert.Contains(nameof(selection.HasSelection), changed);
+
+        changed.Clear();
+        selection.Clear();
+        Assert.False(selection.HasSelection);
+        Assert.Contains(nameof(selection.HasSelection), changed);
+    }
+
+    [Fact]
     public void Replace_uses_query_order_even_when_grid_reports_click_order()
     {
         InboxCardViewModel a = Card("a.jpg", version: 1);

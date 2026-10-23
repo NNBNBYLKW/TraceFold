@@ -1,0 +1,781 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Xml.Linq;
+using TraceFold.Media.Desktop.Controls;
+using Xunit;
+
+namespace TraceFold.Media.Desktop.Tests.Pages;
+
+/// <summary>
+/// Locks the static UI Automation contract before any visual migration: every logical
+/// control that the acceptance toolkit drives has one language-independent static
+/// AutomationId, a concise Chinese accessible name, and keeps its native WinUI control
+/// type so the expected UIA pattern stays available.
+/// </summary>
+public sealed class UiAutomationContractTests
+{
+    private const string ProductRoot =
+        "apps/media-desktop/src/TraceFold.Media.Desktop";
+    private const string ManifestPath =
+        "apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json";
+
+    private static readonly string[] ManifestFiles =
+    [
+        "MainWindow.xaml", "Shell/ShellPage.xaml",
+        "Pages/InboxPage.xaml", "Pages/LibraryPage.xaml",
+        "Pages/TaxonomyPage.xaml", "Pages/SettingsPage.xaml",
+        "Dialogs/BatchMetadataDialog.xaml",
+        "Dialogs/BatchIngestConfirmationDialog.xaml",
+        "Dialogs/ConflictComparisonDialog.xaml",
+        "Dialogs/LibraryBatchEditDialog.xaml",
+        "Dialogs/TaxonomyMergeDialog.xaml",
+    ];
+
+    private static readonly string[] RequiredAfterMigration =
+    [
+        "TraceFoldMainWindow", "TraceFoldShell", "NavInbox", "NavLibrary",
+        "NavTaxonomy", "NavSettings", "InboxPageRoot", "LibraryPageRoot",
+        "TaxonomyPageRoot", "SettingsPageRoot", "InboxSelectedCount",
+        "LibrarySelectedCount", "TaxonomySelectedCount",
+        "InboxInspectorOpenButton", "InboxInspectorCloseButton", "InspectorPane",
+        "LibraryInspectorOpenButton", "LibraryInspectorCloseButton",
+        "LibraryInspectorPane", "TaxonomyInspectorOpenButton",
+        "TaxonomyInspectorCloseButton", "TaxonomyInspectorPane",
+        "InboxListHeader", "LibraryListHeader", "BatchMetadataScrollRoot",
+        "BatchIngestScrollRoot", "ConflictScrollRoot",
+        "LibraryBatchEditScrollRoot", "TaxonomyMergeScrollRoot",
+        "ConflictSkipButton", "ConflictKeepBothButton", "ConflictReplaceButton",
+        "InboxBatchMetadataButton", "InboxBatchIngestButton",
+        "LibraryBatchApplyButton", "LibraryBatchUndoButton",
+        "LibraryNamingPreviewList", "TaxonomyMergeApplyButton",
+        "TaxonomyDeleteButton", "SettingsTabs", "SystemDiagnosticsTab",
+        "DiagnosticsOverallStatus", "DiagnosticsLastChecked",
+        "InboxOperationStatus", "InboxRecoveryStatus", "LibraryStatusMessage",
+        "LastScanStatus", "ProcessingToolStatus", "SettingsStatusMessage",
+        "TaxonomyMergeStatus", "LibraryBatchDialogStatus",
+    ];
+
+    [Fact]
+    public void Shared_manifest_covers_every_static_id_with_exact_native_semantics()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement entries = manifest.RootElement.GetProperty("entries");
+        Assert.Equal(JsonValueKind.Array, entries.ValueKind);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (JsonElement entry in entries.EnumerateArray())
+        {
+            string file = entry.GetProperty("file").GetString()!;
+            string id = entry.GetProperty("automationId").GetString()!;
+            string name = entry.GetProperty("name").GetString()!;
+            string type = entry.GetProperty("controlType").GetString()!;
+            string scope = entry.GetProperty("scope").GetString()!;
+            string policy = entry.GetProperty("dynamicSelectorPolicy").GetString()!;
+            Assert.Contains(file, ManifestFiles);
+            Assert.True(seen.Add(id), "Duplicate manifest AutomationId: " + id);
+            Assert.Matches("[\u4e00-\u9fff]", name);
+            Assert.False(string.IsNullOrWhiteSpace(scope));
+            Assert.Equal("static_id", policy);
+            JsonElement patterns = entry.GetProperty("requiredPatterns");
+            Assert.Equal(JsonValueKind.Array, patterns.ValueKind);
+            foreach (JsonElement pattern in patterns.EnumerateArray())
+            {
+                Assert.Contains(pattern.GetString(), new[]
+                {
+                    "Invoke", "Toggle", "Value", "Selection", "SelectionItem",
+                    "ExpandCollapse", "Scroll", "Window",
+                });
+            }
+            if (type == "Button")
+            {
+                Assert.Contains(patterns.EnumerateArray(), pattern =>
+                    pattern.GetString() == "Invoke");
+            }
+            if (id is "InspectorPane" or "LibraryInspectorPane" or "TaxonomyInspectorPane")
+            {
+                Assert.StartsWith("page_host:", scope);
+            }
+
+            XDocument page = LoadProductXaml(file);
+            int occurrences = page.Root!.DescendantsAndSelf().Count(element =>
+                element.Attribute("AutomationProperties.AutomationId")?.Value == id)
+                + page.Root!.DescendantsAndSelf().Count(element =>
+                    element.Attribute("InputAutomationId")?.Value == id
+                    || element.Attribute("SelectedTermsAutomationId")?.Value == id);
+            Assert.Equal(1, occurrences);
+            (XElement element, string actualName) = ResolveControl(file, id);
+            Assert.Equal(type, element.Name.LocalName);
+            Assert.Equal(name, actualName);
+        }
+
+        foreach (string file in ManifestFiles)
+        {
+            XDocument xaml = LoadProductXaml(file);
+            string[] ids = [.. xaml.Root!.DescendantsAndSelf()
+                .Select(element => element.Attribute("AutomationProperties.AutomationId")?.Value)
+                .Concat(xaml.Root!.DescendantsAndSelf().SelectMany(element => new[]
+                {
+                    element.Attribute("InputAutomationId")?.Value,
+                    element.Attribute("SelectedTermsAutomationId")?.Value,
+                }))
+                .Where(id => !string.IsNullOrWhiteSpace(id) && !id!.StartsWith('{'))
+                .Select(id => id!)];
+            Assert.All(ids, id => Assert.Contains(id, seen));
+        }
+
+        Assert.All(RequiredAfterMigration, id => Assert.Contains(id, seen));
+    }
+
+    [Fact]
+    public void Dynamic_row_policy_uses_fixed_accessible_names_without_guid_selectors()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement rows = manifest.RootElement.GetProperty("dynamicRows");
+        Assert.Equal(2, rows.GetArrayLength());
+        foreach (JsonElement row in rows.EnumerateArray())
+        {
+            string file = row.GetProperty("file").GetString()!;
+            string fixedName = row.GetProperty("fixedAccessibleName").GetString()!;
+            Assert.Contains(file, new[] { "Pages/InboxPage.xaml", "Pages/LibraryPage.xaml" });
+            Assert.False(string.IsNullOrWhiteSpace(fixedName));
+            Assert.DoesNotContain("guid", fixedName, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("accessible_name_prefix", row.GetProperty("selector").GetString());
+            Assert.True(row.GetProperty("forbidGuidSelectors").GetBoolean());
+            if (file == "Pages/InboxPage.xaml")
+            {
+                Assert.True(row.GetProperty("stateSuffixVaries").GetBoolean());
+            }
+            Assert.Contains(row.GetProperty("fixedFilename").GetString()!, fixedName);
+            Assert.Equal("{x:Bind AccessibleName, Mode=OneWay}",
+                LoadProductXaml(file).Descendants().Single(element =>
+                    element.Attribute("AutomationProperties.AutomationId")?.Value
+                        == "{x:Bind AutomationId}")
+                    .Attribute("AutomationProperties.Name")?.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("Pages/InboxPage.xaml", "InspectorPane")]
+    [InlineData("Pages/LibraryPage.xaml", "LibraryInspectorPane")]
+    [InlineData("Pages/TaxonomyPage.xaml", "TaxonomyInspectorPane")]
+    public void Shared_inspector_uses_the_page_owned_id(string file, string inspectorId)
+    {
+        XDocument page = LoadProductXaml(file);
+        XElement host = Assert.Single(page.Descendants(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost");
+        Assert.Null(host.Attribute("AutomationProperties.AutomationId"));
+        XElement inspector = Assert.Single(host.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == inspectorId);
+        Assert.Contains(inspector.Ancestors(), element =>
+            element.Name.LocalName == "ResponsiveInspectorHost.InspectorContent");
+    }
+
+    [Fact]
+    public void Programmatic_delete_confirmation_is_in_the_shared_contract()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement controls = manifest.RootElement.GetProperty("runtimeControls");
+        string source = File.ReadAllText(FindFile(ProductRoot
+            + "/Dialogs/WindowsTaxonomyMaintenanceDialogService.cs"));
+        Assert.Equal(2, controls.GetArrayLength());
+        foreach (JsonElement control in controls.EnumerateArray())
+        {
+            string id = control.GetProperty("automationId").GetString()!;
+            string name = control.GetProperty("name").GetString()!;
+            Assert.Contains(id, new[]
+            {
+                "TaxonomyDeleteConfirmDialog", "TaxonomyDeleteTermList",
+            });
+            Assert.Matches("[\u4e00-\u9fff]", name);
+            Assert.Contains($"AutomationProperties.SetAutomationId({(id == "TaxonomyDeleteConfirmDialog" ? "dialog" : "terms")}, \"{id}\")", source);
+            Assert.Contains($"AutomationProperties.SetName({(id == "TaxonomyDeleteConfirmDialog" ? "dialog" : "terms")}, \"{name}\")", source);
+            Assert.Equal("dialog:taxonomy_delete", control.GetProperty("scope").GetString());
+            Assert.Equal("static_id", control.GetProperty("dynamicSelectorPolicy").GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData("InboxPage.xaml", "InboxOperationStatus", "待入库操作状态")]
+    [InlineData("LibraryPage.xaml", "LibraryStatusMessage", "正式文件库状态消息")]
+    [InlineData("SettingsPage.xaml", "SettingsStatusMessage", "设置状态消息")]
+    [InlineData("InboxPage.xaml", "InboxAuthorInput", "输入待入库资料的作者")]
+    [InlineData("InboxPage.xaml", "InboxAuthorInputTerms", "已添加的待入库资料作者")]
+    [InlineData("InboxPage.xaml", "InboxSeriesInput", "输入待入库资料的系列")]
+    [InlineData("InboxPage.xaml", "InboxSeriesInputTerms", "已添加的待入库资料系列")]
+    [InlineData("InboxPage.xaml", "InboxTagInput", "输入待入库资料的内容标签")]
+    [InlineData("InboxPage.xaml", "InboxTagInputTerms", "已添加的待入库资料内容标签")]
+    [InlineData("LibraryPage.xaml", "LibraryAuthorInput", "输入正式文件库资料的作者")]
+    [InlineData("LibraryPage.xaml", "LibraryAuthorInputTerms", "已添加的正式文件库资料作者")]
+    [InlineData("LibraryPage.xaml", "LibrarySeriesInput", "输入正式文件库资料的系列")]
+    [InlineData("LibraryPage.xaml", "LibrarySeriesInputTerms", "已添加的正式文件库资料系列")]
+    [InlineData("LibraryPage.xaml", "LibraryTagInput", "输入正式文件库资料的内容标签")]
+    [InlineData("LibraryPage.xaml", "LibraryTagInputTerms", "已添加的正式文件库资料内容标签")]
+    public void Task_zero_name_stays_exact(string file, string id, string name) =>
+        Assert.Equal(name, ResolveControl(file, id).Name);
+
+    [Theory]
+    [InlineData("Pages/InboxPage.xaml")]
+    [InlineData("Pages/LibraryPage.xaml")]
+    [InlineData("Pages/TaxonomyPage.xaml")]
+    [InlineData("Dialogs/BatchIngestConfirmationDialog.xaml")]
+    [InlineData("Dialogs/BatchMetadataDialog.xaml")]
+    [InlineData("Dialogs/ConflictComparisonDialog.xaml")]
+    [InlineData("Dialogs/LibraryBatchEditDialog.xaml")]
+    [InlineData("Dialogs/TaxonomyMergeDialog.xaml")]
+    public void Disabled_buttons_explain_the_required_action(string file)
+    {
+        XElement[] buttons = [.. LoadProductXaml(file).Descendants()
+            .Where(element => element.Name.LocalName == "Button"
+                && element.Attribute("IsEnabled") is not null
+                && element.Attribute("AutomationProperties.AutomationId") is { Value: var id }
+                && !id.StartsWith('{'))];
+        Assert.NotEmpty(buttons);
+        Assert.All(buttons, button => Assert.Matches("[\u4e00-\u9fff]",
+            button.Attribute("AutomationProperties.HelpText")?.Value ?? string.Empty));
+    }
+
+    public static TheoryData<string, string, string> RequiredControls => new()
+    {
+        { "InboxPage.xaml", "InboxAuthorInput", "AutoSuggestBox" },
+        { "InboxPage.xaml", "InboxOperationStatus", "TextBlock" },
+        { "LibraryPage.xaml", "LibraryAuthorInput", "AutoSuggestBox" },
+        { "LibraryPage.xaml", "LibraryStatusMessage", "TextBlock" },
+        { "SettingsPage.xaml", "SettingsStatusMessage", "TextBlock" },
+    };
+
+    [Theory]
+    [MemberData(nameof(RequiredControls))]
+    public void Required_control_has_stable_id_name_and_native_control(
+        string file,
+        string id,
+        string expectedElement)
+    {
+        (XElement element, string name) = ResolveControl(file, id);
+
+        Assert.Equal(expectedElement, element.Name.LocalName);
+        Assert.False(string.IsNullOrWhiteSpace(name));
+        Assert.Matches("[\u4e00-\u9fff]", name);
+    }
+
+    [Theory]
+    [InlineData("InboxPage.xaml")]
+    [InlineData("LibraryPage.xaml")]
+    [InlineData("TaxonomyPage.xaml")]
+    [InlineData("SettingsPage.xaml")]
+    [InlineData("Dialogs/BatchMetadataDialog.xaml")]
+    [InlineData("Dialogs/LibraryBatchEditDialog.xaml")]
+    public void Static_automation_ids_are_unique_within_a_xaml_file(string file)
+    {
+        string[] ids = [.. LoadProductXaml(file)
+            .Descendants()
+            .Select(element => element.Attribute("AutomationProperties.AutomationId")?.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value) && !value!.StartsWith('{'))
+            .Select(value => value!)];
+
+        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Theory]
+    [InlineData("InboxPage.xaml", "InboxAuthorInput", "InboxSeriesInput", "InboxTagInput")]
+    [InlineData("LibraryPage.xaml", "LibraryAuthorInput", "LibrarySeriesInput", "LibraryTagInput")]
+    public void Taxonomy_picker_use_sites_supply_distinct_input_and_term_ids(
+        string file,
+        string authorId,
+        string seriesId,
+        string tagId)
+    {
+        XDocument page = LoadProductXaml(file);
+        XElement[] pickers = [.. page.Descendants()
+            .Where(element => element.Name.LocalName == "TaxonomyPickerControl")];
+
+        Assert.Equal(3, pickers.Length);
+        string[] expected = [authorId, seriesId, tagId];
+        for (int index = 0; index < pickers.Length; index++)
+        {
+            Assert.Equal(expected[index], Required(pickers[index], "InputAutomationId"));
+            Assert.Matches("[\u4e00-\u9fff]", Required(pickers[index], "InputAutomationName"));
+            Assert.False(string.IsNullOrWhiteSpace(
+                Required(pickers[index], "SelectedTermsAutomationId")));
+            Assert.Matches("[\u4e00-\u9fff]", Required(pickers[index], "SelectedTermsAutomationName"));
+        }
+    }
+
+    [Fact]
+    public void Taxonomy_picker_ids_are_unique_across_pages_and_dialogs()
+    {
+        string[] files =
+        [
+            "InboxPage.xaml",
+            "LibraryPage.xaml",
+            "TaxonomyPage.xaml",
+            "Dialogs/BatchMetadataDialog.xaml",
+            "Dialogs/LibraryBatchEditDialog.xaml",
+        ];
+        string[] ids = [.. files
+            .SelectMany(file => LoadProductXaml(file).Descendants()
+                .Where(element => element.Name.LocalName == "TaxonomyPickerControl")
+                .SelectMany(element => new[]
+                {
+                    element.Attribute("InputAutomationId")?.Value,
+                    element.Attribute("SelectedTermsAutomationId")?.Value,
+                }))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)];
+
+        Assert.NotEmpty(ids);
+        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Taxonomy_picker_inner_controls_expose_the_parent_supplied_ids()
+    {
+        XDocument picker = LoadProductXaml("Controls/TaxonomyPickerControl.xaml");
+        XElement input = picker.Descendants()
+            .Single(element => element.Name.LocalName == "AutoSuggestBox");
+        XElement terms = picker.Descendants()
+            .Single(element => element.Name.LocalName == "ItemsControl");
+
+        Assert.Equal("{x:Bind InputAutomationId, Mode=OneWay}",
+            input.Attribute("AutomationProperties.AutomationId")?.Value);
+        Assert.Equal("{x:Bind InputAutomationName, Mode=OneWay}",
+            input.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Equal("{x:Bind SelectedTermsAutomationId, Mode=OneWay}",
+            terms.Attribute("AutomationProperties.AutomationId")?.Value);
+        Assert.Equal("{x:Bind SelectedTermsAutomationName, Mode=OneWay}",
+            terms.Attribute("AutomationProperties.Name")?.Value);
+    }
+
+    [Fact]
+    public void Taxonomy_picker_icon_only_remove_action_has_an_explicit_name()
+    {
+        XDocument picker = LoadProductXaml("Controls/TaxonomyPickerControl.xaml");
+        XElement[] iconButtons = [.. picker.Descendants()
+            .Where(element => element.Name.LocalName == "Button")
+            .Where(element => (element.Attribute("FontFamily")?.Value ?? string.Empty)
+                .Contains("Segoe Fluent Icons", StringComparison.Ordinal))];
+
+        Assert.NotEmpty(iconButtons);
+        Assert.All(iconButtons, button =>
+            Assert.Matches("[\u4e00-\u9fff]", AutomationName(button)));
+    }
+
+    [Theory]
+    [InlineData("InboxPage.xaml")]
+    [InlineData("LibraryPage.xaml")]
+    public void Media_row_binds_its_deterministic_accessible_name(string file)
+    {
+        XElement row = LoadProductXaml(file).Descendants().Single(element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value
+                == "{x:Bind AutomationId}");
+
+        Assert.Equal("{x:Bind AccessibleName, Mode=OneWay}",
+            row.Attribute("AutomationProperties.Name")?.Value);
+    }
+
+    /// <summary>
+    /// The real-window startup gate reads its scopes, its probe targets and its three client
+    /// sizes from this manifest, so the manifest must agree with the production layout policy
+    /// the gate compares it against. Drift here would let the gate prove the wrong layout.
+    /// </summary>
+    [Fact]
+    public void Startup_scopes_and_layout_policy_agree_with_the_production_policy()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement root = manifest.RootElement;
+
+        string[] entryIds = [.. root.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("automationId").GetString()!)];
+        string[] allScopes = [.. root.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("scope").GetString()!)
+            .Distinct(StringComparer.Ordinal)];
+
+        string[] startupScopes = [.. root.GetProperty("startupScopes").EnumerateArray()
+            .Select(scope => scope.GetString()!)];
+        Assert.Equal(["window", "shell", "pages_inboxpage", "page_host:inbox"], startupScopes);
+        Assert.All(startupScopes, scope => Assert.Contains(scope, allScopes));
+        // Dialog scopes are not reachable at startup, so the gate must not require them there.
+        Assert.All(startupScopes, scope =>
+            Assert.DoesNotContain("dialog", scope, StringComparison.Ordinal));
+
+        // Exactly one entry owns the window scope: the gate waits for the window by that id.
+        Assert.Single(root.GetProperty("entries").EnumerateArray(),
+            entry => entry.GetProperty("scope").GetString() == "window");
+
+        JsonElement probe = root.GetProperty("layoutProbe");
+        string[] probeTargets =
+        [
+            "navigationItemAutomationId",
+            "inlineInspectorAutomationId",
+            "inspectorOpenButtonAutomationId",
+        ];
+        foreach (string target in probeTargets)
+        {
+            Assert.Contains(probe.GetProperty(target).GetString(), entryIds);
+        }
+
+        Assert.True(probe.GetProperty("pixelTolerance").GetInt32() > 0);
+
+        (int Width, int Height, int NavigationWidth, bool Inline)[] expected =
+        [
+            (1024, 720, 48, false),
+            (1280, 800, 176, true),
+            (1600, 900, 176, true),
+        ];
+        (int Width, int Height, int NavigationWidth, bool Inline)[] actual = [.. root
+            .GetProperty("layoutViewports").EnumerateArray()
+            .Select(viewport => (
+                viewport.GetProperty("widthDip").GetInt32(),
+                viewport.GetProperty("heightDip").GetInt32(),
+                viewport.GetProperty("navigationPaneWidthDip").GetInt32(),
+                viewport.GetProperty("inlineInspector").GetBoolean()))];
+        Assert.Equal(expected, actual);
+
+        foreach ((int width, _, int navigationWidth, bool inline) in expected)
+        {
+            WorkspaceLayoutMode mode = WorkspaceLayoutPolicy.GetMode(width);
+            Assert.Equal(mode == WorkspaceLayoutMode.Wide, inline);
+            Assert.Equal(mode == WorkspaceLayoutMode.Wide ? 176 : 48, navigationWidth);
+        }
+    }
+
+    /// <summary>
+    /// A dynamic media row is only reachable in the phase that materialises it, and the gate may
+    /// only seed from a repository fixture it can verify byte for byte. This locks both: the row
+    /// phases, the preparation controls the gate drives, and the manifest's description of the
+    /// real fixture bytes. A drift here would make the gate require a row the phase cannot have
+    /// produced, or copy an asset it never verified.
+    /// </summary>
+    [Fact]
+    public void Dynamic_rows_declare_their_phase_and_the_fixture_matches_the_repository_asset()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement root = manifest.RootElement;
+
+        string[] entryIds = [.. root.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("automationId").GetString()!)];
+        string[] knownPhases = ["startup", "inbox-seeded", "post-ingest"];
+
+        JsonElement rows = root.GetProperty("dynamicRows");
+        Assert.Equal(2, rows.GetArrayLength());
+        string[] rowPhases = [.. rows.EnumerateArray()
+            .Select(row => row.GetProperty("phase").GetString()!)];
+        Assert.All(rowPhases, phase => Assert.Contains(phase, knownPhases));
+
+        // A brand-new owned root has no media rows at all, so nothing the startup phase requires
+        // may depend on a row; the library row only exists after a real ingest.
+        Assert.Equal("inbox-seeded", rowPhases[0]);
+        Assert.Equal("post-ingest", rowPhases[1]);
+
+        JsonElement preparation = root.GetProperty("sessionPreparation");
+        string materializedPhase = preparation.GetProperty("materializedRowPhase").GetString()!;
+        Assert.Contains(materializedPhase, knownPhases);
+        Assert.NotEqual("startup", materializedPhase);
+        Assert.Equal(rowPhases[0], materializedPhase);
+
+        foreach (string key in new[]
+        {
+            "settingsNavigationAutomationId",
+            "inboxNavigationAutomationId",
+            "saveFolderSettingsAutomationId",
+            "scanTriggerAutomationId",
+        })
+        {
+            // The gate drives preparation only through declared native controls.
+            Assert.Contains(preparation.GetProperty(key).GetString(), entryIds);
+        }
+
+        JsonElement folderInputs = preparation.GetProperty("folderInputs");
+        Assert.Equal(["inbox", "library", "work"], folderInputs.EnumerateArray()
+            .Select(input => input.GetProperty("key").GetString()!).ToArray());
+        Assert.All(folderInputs.EnumerateArray(), input =>
+        {
+            Assert.Contains(input.GetProperty("automationId").GetString(), entryIds);
+            Assert.False(string.IsNullOrWhiteSpace(
+                input.GetProperty("relativeDirectory").GetString()));
+        });
+
+        JsonElement assets = root.GetProperty("fixtureAssets");
+        string[] seededNames = [.. assets.EnumerateArray()
+            .Select(asset => asset.GetProperty("fixedFilename").GetString()!)];
+        string[] materializedNames = [.. rows.EnumerateArray()
+            .Where(row => row.GetProperty("phase").GetString() == materializedPhase)
+            .Select(row => row.GetProperty("fixedFilename").GetString()!)];
+        Assert.NotEmpty(materializedNames);
+        Assert.All(materializedNames, name => Assert.Contains(name, seededNames));
+        string[] seedFilenames = [.. preparation.GetProperty("seedFilenames").EnumerateArray()
+            .Select(name => name.GetString()!)];
+        Assert.Equal(["paired.mp4", "paired.m4a"], seedFilenames);
+        Assert.All(seedFilenames, name => Assert.Contains(name, seededNames));
+        Assert.All(materializedNames, name => Assert.Contains(name, seedFilenames));
+        // The image fixture is declared for the main-chain intake step, which copies it into the
+        // owned inbox only after the video is ingested; the startup gate must not seed it.
+        JsonElement photo = assets.EnumerateArray().Single(asset =>
+            asset.GetProperty("fixedFilename").GetString() == "photo.jpg");
+        Assert.Equal("apps/media-api/tests/fixtures/media/photo.jpg",
+            photo.GetProperty("repositoryPath").GetString());
+        Assert.Equal(693, photo.GetProperty("sizeBytes").GetInt64());
+        Assert.Equal("7D1BD6791F1D40FFAFE6C7704FB2E71B6FBF6CBD26B71F9A45E62460D61312A6",
+            photo.GetProperty("sha256").GetString());
+        Assert.Equal("inbox", photo.GetProperty("seedDirectory").GetString());
+        Assert.DoesNotContain("photo.jpg", seedFilenames);
+        // The live accessible name appends a status suffix that changes as the item progresses
+        // (measured 等待文件稳定, then 待入库), so the manifest fixes only the stable prefix and the
+        // gate addresses the row by its fixed file name.
+        string fixedName = rows[0].GetProperty("fixedAccessibleName").GetString()!;
+        Assert.Equal("待入库文件 paired.mp4", fixedName);
+        Assert.Contains("paired.mp4", fixedName);
+        Assert.Equal("ListItem", rows[0].GetProperty("nativeControlType").GetString());
+        Assert.Equal("accessible_name_prefix", rows[0].GetProperty("selector").GetString());
+        Assert.True(rows[0].GetProperty("stateSuffixVaries").GetBoolean());
+        Assert.True(rows[0].GetProperty("forbidGuidSelectors").GetBoolean());
+        Assert.Equal("SettingsStatusMessage",
+            preparation.GetProperty("savedStatusAutomationId").GetString());
+        Assert.Equal("设置已保存。",
+            preparation.GetProperty("savedStatusText").GetString());
+
+        string[] seedKeys = [.. folderInputs.EnumerateArray()
+            .Select(input => input.GetProperty("key").GetString()!)];
+        Assert.NotEmpty(assets.EnumerateArray());
+        foreach (JsonElement asset in assets.EnumerateArray())
+        {
+            Assert.Contains(asset.GetProperty("seedDirectory").GetString(), seedKeys);
+            byte[] bytes = File.ReadAllBytes(FindFile(asset.GetProperty("repositoryPath").GetString()!));
+            Assert.Equal(asset.GetProperty("sizeBytes").GetInt64(), bytes.LongLength);
+            Assert.Equal(asset.GetProperty("sha256").GetString(), Convert.ToHexString(SHA256.HashData(bytes)));
+        }
+    }
+
+    /// <summary>
+    /// A normal user must be able to type or paste the three work directories, and the typed text
+    /// has to reach the view model before Save runs. The stable id, the Chinese name, the
+    /// change-propagation mode and the existing folder picker all stay exactly as they are, because
+    /// the acceptance gate addresses these controls by id and name and the picker remains the
+    /// second entry method.
+    /// </summary>
+    [Theory]
+    [InlineData("InboxFolderPath", "待入库文件夹路径", "InboxDirectory", "ChooseInboxCommand",
+        "PickInboxFolder", "选择待入库文件夹")]
+    [InlineData("LibraryFolderPath", "正式文件库路径", "LibraryDirectory", "ChooseLibraryCommand",
+        "PickLibraryFolder", "选择正式文件库文件夹")]
+    [InlineData("WorkFolderPath", "工作文件夹路径", "WorkDirectory", "ChooseWorkCommand",
+        "PickWorkFolder", "选择工作文件夹")]
+    public void Directory_paths_accept_typing_and_keep_their_folder_pickers(
+        string inputId,
+        string inputName,
+        string property,
+        string command,
+        string pickerId,
+        string pickerName)
+    {
+        XDocument page = LoadProductXaml("Pages/SettingsPage.xaml");
+
+        XElement input = Assert.Single(page.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == inputId);
+        Assert.Equal("TextBox", input.Name.LocalName);
+        Assert.Equal(inputName, input.Attribute("AutomationProperties.Name")?.Value);
+        Assert.NotEqual("True", input.Attribute("IsReadOnly")?.Value);
+        Assert.Equal(
+            "{x:Bind ViewModel." + property + ", Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}",
+            input.Attribute("Text")?.Value);
+        Assert.Contains("输入", input.Attribute("PlaceholderText")?.Value ?? string.Empty,
+            StringComparison.Ordinal);
+
+        XElement picker = Assert.Single(page.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == pickerId);
+        Assert.Equal("Button", picker.Name.LocalName);
+        Assert.Equal(pickerName, picker.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Equal("{x:Bind ViewModel." + command + "}", picker.Attribute("Command")?.Value);
+    }
+
+    /// <summary>
+    /// The settings form explains both entry methods, and persistence keeps going through the view
+    /// model's Save command: no code-behind shortcut may write the settings itself.
+    /// </summary>
+    [Fact]
+    public void Directory_settings_explain_both_entry_methods_and_save_through_the_view_model()
+    {
+        XDocument page = LoadProductXaml("Pages/SettingsPage.xaml");
+        string[] hints = [.. page.Descendants()
+            .Where(element => element.Name.LocalName == "TextBlock")
+            .Select(element => element.Attribute("Text")?.Value ?? string.Empty)];
+        Assert.Contains(hints, hint =>
+            hint.Contains("输入", StringComparison.Ordinal)
+            && hint.Contains("选择", StringComparison.Ordinal));
+
+        XElement save = Assert.Single(page.Descendants(), element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == "SaveFolderSettings");
+        Assert.Equal("{x:Bind ViewModel.SaveCommand}", save.Attribute("Command")?.Value);
+
+        string codeBehind = File.ReadAllText(
+            FindFile(ProductRoot + "/Pages/SettingsPage.xaml.cs"));
+        Assert.DoesNotContain("DirectorySettingsService", codeBehind, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveAsync", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The gate asserts per phase, so the manifest must declare what each phase must contain.
+    /// Every required id has to exist in the full entry list, every required entry has to carry
+    /// the native type measured for it, the composite search box must verify Value on its unique
+    /// Edit descendant rather than claim it on the outer element, and the layout probe must
+    /// observe the pane boundary.
+    /// </summary>
+    [Fact]
+    public void Phase_sets_native_types_and_the_composite_rule_are_locked()
+    {
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(FindFile(ManifestPath)));
+        JsonElement root = manifest.RootElement;
+        var entries = root.GetProperty("entries").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("automationId").GetString()!,
+                entry => entry, StringComparer.Ordinal);
+
+        JsonElement phases = root.GetProperty("phaseRequiredIds");
+        string[] expectedPhases =
+        [
+            "startupSettings", "inboxReady", "rowReady", "rowSelected", "drawerOpen", "drawerClosed",
+        ];
+        Assert.Equal(expectedPhases,
+            phases.EnumerateObject().Select(property => property.Name).ToArray());
+        foreach (JsonProperty phase in phases.EnumerateObject())
+        {
+            JsonElement[] required = [.. phase.Value.EnumerateArray()];
+            Assert.NotEmpty(required);
+            Assert.Equal(required.Length, required.Select(id => id.GetString()!)
+                .Distinct(StringComparer.Ordinal).Count());
+            foreach (JsonElement id in required)
+            {
+                string value = id.GetString()!;
+                Assert.True(entries.ContainsKey(value), "Unknown phase id: " + value);
+                Assert.Equal(JsonValueKind.String,
+                    entries[value].GetProperty("nativeControlType").ValueKind);
+            }
+        }
+
+        // The empty-root phase must not require the inbox page: measured on the published product
+        // and recorded here so a regression cannot quietly move page elements into startup.
+        Assert.DoesNotContain("InboxGrid", phases.GetProperty("startupSettings")
+            .EnumerateArray().Select(id => id.GetString()!));
+        Assert.Contains("InboxGrid", phases.GetProperty("rowReady")
+            .EnumerateArray().Select(id => id.GetString()!));
+        foreach (string phaseName in new[] { "inboxReady", "rowReady", "rowSelected" })
+        {
+            Assert.DoesNotContain("InboxInspectorOpenButton", phases.GetProperty(phaseName)
+                .EnumerateArray().Select(id => id.GetString()!));
+        }
+        Assert.Contains("InboxInspectorOpenButton", phases.GetProperty("drawerOpen")
+            .EnumerateArray().Select(id => id.GetString()!));
+
+        foreach (string id in new[]
+        {
+            "InboxSearchBox", "InboxAuthorInput", "InboxSeriesInput", "InboxTagInput"
+        })
+        {
+            JsonElement outer = entries[id];
+            Assert.Equal("Group", outer.GetProperty("nativeControlType").GetString());
+            Assert.Empty(outer.GetProperty("requiredPatterns").EnumerateArray());
+            JsonElement descendant = outer.GetProperty("nativeDescendant");
+            Assert.Equal("TextBox", descendant.GetProperty("className").GetString());
+            Assert.Equal("Edit", descendant.GetProperty("nativeControlType").GetString());
+            Assert.Equal(outer.GetProperty("name").GetString(), descendant.GetProperty("name").GetString());
+            Assert.Equal(["Value"],
+                [.. descendant.GetProperty("requiredPatterns").EnumerateArray()
+                    .Select(pattern => pattern.GetString()!)]);
+        }
+
+        JsonElement probe = root.GetProperty("layoutProbe");
+        string paneId = probe.GetProperty("navigationPaneAutomationId").GetString()!;
+        // The pane boundary is a WinUI template id used only as a layout observation target. It is
+        // deliberately not a contract entry: no product XAML declares it, and the gate must never
+        // use it as a workflow action selector.
+        Assert.False(entries.ContainsKey(paneId),
+            "The pane observation target must stay observation-only, not a workflow selector.");
+        Assert.Equal("SplitViewPane", probe.GetProperty("navigationPaneClassName").GetString());
+        Assert.Equal("Navigation", probe.GetProperty("navigationPaneParentAutomationId").GetString());
+        // The item width is deliberately not the expectation: the pane, not the item, is measured.
+        Assert.NotEqual(probe.GetProperty("navigationItemAutomationId").GetString(), paneId);
+    }
+
+    /// <summary>
+    /// Resolves the effective control behind an automation id and the accessible name that
+    /// belongs to it. A taxonomy picker input id lives on the use site and its accessible
+    /// name belongs to that site, while the native control stays the picker's inner one.
+    /// </summary>
+    private static (XElement Element, string Name) ResolveControl(string file, string id)
+    {
+        XDocument page = LoadProductXaml(file);
+        XElement? direct = page.Root!.DescendantsAndSelf().FirstOrDefault(element =>
+            element.Attribute("AutomationProperties.AutomationId")?.Value == id);
+        if (direct is not null)
+        {
+            return (direct, AutomationName(direct));
+        }
+
+        XDocument picker = LoadProductXaml("Controls/TaxonomyPickerControl.xaml");
+        XElement? site = page.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "TaxonomyPickerControl"
+            && (element.Attribute("InputAutomationId")?.Value == id
+                || element.Attribute("SelectedTermsAutomationId")?.Value == id));
+        if (site is null)
+        {
+            Assert.Fail("No control defines AutomationId '" + id + "' in " + file + ".");
+        }
+
+        bool input = site.Attribute("InputAutomationId")?.Value == id;
+        XElement effective = picker.Descendants().Single(element => element.Name.LocalName
+            == (input ? "AutoSuggestBox" : "ItemsControl"));
+        return (effective, Required(site, input
+            ? "InputAutomationName"
+            : "SelectedTermsAutomationName"));
+    }
+
+    private static string Required(XElement element, string attribute) =>
+        element.Attribute(attribute)?.Value
+        ?? throw new Xunit.Sdk.XunitException(
+            "The taxonomy picker use site is missing " + attribute + ".");
+
+    private static string AutomationName(XElement element) =>
+        element.Attribute("AutomationProperties.Name")?.Value ?? string.Empty;
+
+    private static XDocument LoadProductXaml(string file)
+    {
+        string relative = file.Replace('/', Path.DirectorySeparatorChar);
+        string[] candidates = relative.Contains(Path.DirectorySeparatorChar)
+            ? [relative]
+            :
+            [
+                Path.Combine("Pages", relative),
+                Path.Combine("Controls", relative),
+                Path.Combine("Dialogs", relative),
+                relative,
+            ];
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            foreach (string candidate in candidates)
+            {
+                string path = Path.Combine(current.FullName, ProductRoot, candidate);
+                if (File.Exists(path))
+                {
+                    return XDocument.Load(path);
+                }
+            }
+
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException("Product XAML is missing: " + file);
+    }
+
+    private static string FindFile(string relativePath)
+    {
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            string candidate = Path.Combine(current.FullName,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(candidate)) return candidate;
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException("UIA contract is missing: " + relativePath);
+    }
+}

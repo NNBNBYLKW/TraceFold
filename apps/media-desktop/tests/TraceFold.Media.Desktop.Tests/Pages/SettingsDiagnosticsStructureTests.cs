@@ -10,6 +10,45 @@ public sealed class SettingsDiagnosticsStructureTests
         "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
 
     [Fact]
+    public void Settings_folder_form_is_responsive_and_keeps_its_contract()
+    {
+        string xaml = File.ReadAllText(DesktopSource("Pages", "SettingsPage.xaml"));
+        XDocument document = XDocument.Parse(xaml);
+
+        Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "StackPanel"
+            && (string?)element.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName == "Name") == "SettingsFolderForm");
+        Assert.Contains("TraceFoldPagePadding", xaml, StringComparison.Ordinal);
+        Assert.Contains("VisualStateGroup", xaml, StringComparison.Ordinal);
+        Assert.Contains("AdaptiveTrigger", xaml, StringComparison.Ordinal);
+        Assert.Contains("MinWindowWidth=\"1280\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("MinWidth=\"420\"", xaml, StringComparison.Ordinal);
+        XElement rootGrid = Assert.Single(document.Root!.Elements(), element =>
+            element.Name.LocalName == "Grid");
+        Assert.Contains(rootGrid.Elements(), element =>
+            element.Name.LocalName == "VisualStateManager.VisualStateGroups");
+        XElement compact = Assert.Single(document.Descendants(), element =>
+            element.Name.LocalName == "VisualState"
+            && (string?)element.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName == "Name") == "CompactFolderRows");
+        Assert.Contains(compact.Descendants(), element =>
+            element.Name.LocalName == "AdaptiveTrigger"
+            && (string?)element.Attribute("MinWindowWidth") == "0");
+        XElement form = ElementByAutomationId(document, "SettingsFolderForm");
+        Assert.Equal("Stretch", (string?)form.Attribute("HorizontalAlignment"));
+
+        AssertChineseAccessibleName(ElementByAutomationId(document, "SettingsStatusMessage"));
+        AssertChineseAccessibleName(form);
+
+        Assert.Single(document.Descendants(), element => element.Name.LocalName == "TabView");
+        Assert.Equal(2, document.Descendants()
+            .Count(element => element.Name.LocalName == "TabViewItem"));
+        Assert.Equal(2, document.Descendants()
+            .Count(element => element.Name.LocalName == "ScrollViewer"));
+    }
+
+    [Fact]
     public void Settings_uses_two_fixed_native_tabs_with_folder_settings_first()
     {
         XDocument document = XDocument.Load(

@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml.Media;
 using TraceFold.Media.Application.Intake;
+using TraceFold.Media.Application.Library;
 using TraceFold.Media.Domain.Inbox;
 using TraceFold.Media.Domain.Processing;
 using TraceFold.Media.Desktop.Pages;
@@ -9,6 +10,35 @@ namespace TraceFold.Media.Desktop.Tests.Pages;
 
 public sealed class MediaCardViewModelTests
 {
+    [Fact]
+    public void Inbox_row_accessible_name_contains_visible_name_and_status()
+    {
+        var row = new InboxCardViewModel(new InboxCardDto(
+            Guid.NewGuid(),
+            "photo.jpg",
+            "旅行记录",
+            MediaKind.Image,
+            InboxItemState.ReadyToTag,
+            "待补资料",
+            true));
+
+        Assert.Equal("待入库文件 旅行记录，状态 待补资料", row.AccessibleName);
+    }
+
+    [Fact]
+    public void Library_row_accessible_name_contains_display_actual_and_kind()
+    {
+        var row = new LibraryCardViewModel(new LibraryAssetDto(
+            Guid.NewGuid(),
+            "photo.jpg",
+            "海边",
+            MediaKind.Image,
+            DateTimeOffset.Parse("2026-08-22T10:00:00Z")));
+
+        Assert.Equal("正式文件 海边，实际文件 photo.jpg，图片", row.AccessibleName);
+        Assert.Equal("图片", row.MediaKindText);
+    }
+
     [Theory]
     [InlineData(typeof(InboxCardViewModel))]
     [InlineData(typeof(LibraryCardViewModel))]

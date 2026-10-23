@@ -13,6 +13,58 @@ public sealed partial class TaxonomyPickerControl : UserControl
         InitializeComponent();
     }
 
+    public static readonly DependencyProperty InputAutomationIdProperty =
+        DependencyProperty.Register(
+            nameof(InputAutomationId),
+            typeof(string),
+            typeof(TaxonomyPickerControl),
+            new PropertyMetadata(string.Empty));
+
+    public static readonly DependencyProperty InputAutomationNameProperty =
+        DependencyProperty.Register(
+            nameof(InputAutomationName),
+            typeof(string),
+            typeof(TaxonomyPickerControl),
+            new PropertyMetadata(string.Empty));
+
+    public static readonly DependencyProperty SelectedTermsAutomationIdProperty =
+        DependencyProperty.Register(
+            nameof(SelectedTermsAutomationId),
+            typeof(string),
+            typeof(TaxonomyPickerControl),
+            new PropertyMetadata(string.Empty));
+
+    public static readonly DependencyProperty SelectedTermsAutomationNameProperty =
+        DependencyProperty.Register(
+            nameof(SelectedTermsAutomationName),
+            typeof(string),
+            typeof(TaxonomyPickerControl),
+            new PropertyMetadata(string.Empty));
+
+    public string InputAutomationId
+    {
+        get => (string)GetValue(InputAutomationIdProperty);
+        set => SetValue(InputAutomationIdProperty, value);
+    }
+
+    public string InputAutomationName
+    {
+        get => (string)GetValue(InputAutomationNameProperty);
+        set => SetValue(InputAutomationNameProperty, value);
+    }
+
+    public string SelectedTermsAutomationId
+    {
+        get => (string)GetValue(SelectedTermsAutomationIdProperty);
+        set => SetValue(SelectedTermsAutomationIdProperty, value);
+    }
+
+    public string SelectedTermsAutomationName
+    {
+        get => (string)GetValue(SelectedTermsAutomationNameProperty);
+        set => SetValue(SelectedTermsAutomationNameProperty, value);
+    }
+
     public TaxonomyPickerViewModel? ViewModel
     {
         get => _viewModel;

@@ -119,7 +119,10 @@ public sealed class Stage2LoggingPrivacyTests
                 captured,
                 StringComparison.OrdinalIgnoreCase);
             Assert.Contains("ingest.stage_failed", captured, StringComparison.Ordinal);
-            Assert.Contains("controlled stage failure", captured, StringComparison.Ordinal);
+            Assert.Contains("ExceptionType=System.IO.IOException", captured,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("controlled stage failure", captured,
+                StringComparison.Ordinal);
             Assert.DoesNotContain(secretDisplay, captured, StringComparison.Ordinal);
             Assert.DoesNotContain(secretAuthor, captured, StringComparison.Ordinal);
             Assert.DoesNotContain(secretSeries, captured, StringComparison.Ordinal);
