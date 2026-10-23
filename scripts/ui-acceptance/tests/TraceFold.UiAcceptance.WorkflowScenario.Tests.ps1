@@ -3258,6 +3258,201 @@ function Get-TestCases {
             }
         },
         @{
+            Name = 'single instance diagnostic trace preserves controlled identities and unknown receipts without leaking payloads'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('New-SingleInstanceDiagnosticClock', 'ConvertTo-SingleInstanceDiagnosticClock',
+                    'Add-SingleInstanceDiagnosticEvent', 'Write-SingleInstanceDiagnosticTrace',
+                    'ConvertTo-SingleInstanceDurableJson')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 5 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+                $trace = @{ events = (New-Object System.Collections.Generic.List[object]) }
+                $clock = New-SingleInstanceDiagnosticClock
+                $secret = 'diagnostic-secret-token-41b2'
+                $root = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-si-trace-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    [void] [IO.Directory]::CreateDirectory($root)
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'entry' -Before $clock -After $clock -Facts @{
+                        processId = 110; startUtcTicks = 11000; imageName = 'powershell.exe'; imageSha256 = ('A' * 64)
+                        runToken = $secret; receipt = $secret; executablePath = $root
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'control' -Before $clock -After $clock -Facts @{
+                        windowHandle = 12; ownerPid = 110; nativeThreadId = 111
+                    }
+                    # The same entry PID does not prove a different HWND is the control window.
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'guard-owner' -Before $clock -After $clock -Facts @{
+                        windowHandle = 13; ownerPid = 110; nativeThreadId = 112; readState = 'returned'
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'secondary-start' -Before $clock -After $clock -Facts @{
+                        processId = 210; startUtcTicks = 21000; imageName = 'TraceFold.Media.exe'; imageSha256 = ('B' * 64)
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'secondary-wait' -Before $clock -After $clock -Facts @{
+                        processId = 210; startUtcTicks = 21000; waitReturned = $null; readState = 'threw'; timeoutMs = 45000
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'secondary-exit' -Before $clock -After $clock -Facts @{
+                        processId = 210; startUtcTicks = 21000; exitCode = $null; readState = 'threw'
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'fresh-primary-owner' -Before $null -After $null -Facts @{
+                        windowHandle = 0; ownerPid = 0; nativeThreadId = 0; state = 'unknown'
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'execution-context' -Before $clock -After $clock -Facts @{
+                        managedThreadId = 7; apartmentState = 'STA'; messageLoop = $false
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'secondary-exit' -Before $clock -After $clock -Facts @{
+                        processId = 210; startUtcTicks = 21000; exitCode = 0; readState = 'returned'
+                    }
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name $secret -Before $clock -After $clock -Facts @{}
+                    Assert-Equal 9 $trace.events.Count 'unknown event names must not be serialized'
+                    $name = Write-SingleInstanceDiagnosticTrace -OutputDirectory $root -Trace $trace -RunToken $secret -OwnedRoot $root
+                    Assert-Equal 'single-instance-diagnostic-trace.json' $name
+                    $json = [IO.File]::ReadAllText((Join-Path $root $name))
+                    $doc = $json | ConvertFrom-Json
+                    Assert-Equal 'trace-only' ([string] $doc.scope)
+                    Assert-Equal 110 ([int] $doc.events[0].processId)
+                    Assert-Equal 11000 ([long] $doc.events[0].startUtcTicks)
+                    Assert-Equal 'powershell.exe' ([string] $doc.events[0].imageName)
+                    Assert-Equal ('A' * 64) ([string] $doc.events[0].imageSha256)
+                    Assert-Equal 12 ([long] $doc.events[1].windowHandle)
+                    Assert-Equal 13 ([long] $doc.events[2].windowHandle)
+                    Assert-Equal 110 ([int] $doc.events[2].ownerPid)
+                    Assert-Equal 112 ([long] $doc.events[2].nativeThreadId)
+                    Assert-True ($null -eq $doc.events[4].waitReturned) 'a thrown wait is not a returned false'
+                    Assert-Equal 'threw' ([string] $doc.events[4].readState)
+                    Assert-True ($null -eq $doc.events[5].exitCode) 'an unread exit is never cast to zero'
+                    Assert-True ($null -eq $doc.events[6].nativeThreadId)
+                    Assert-True ($null -eq $doc.events[6].windowHandle)
+                    Assert-True ($null -eq $doc.events[6].ownerPid)
+                    Assert-True ($null -eq $doc.events[6].before)
+                    Assert-Equal $false $doc.events[7].messageLoop
+                    Assert-Equal 0 ([int] $doc.events[8].exitCode) 'a real returned zero is preserved separately'
+                    # PS7 may materialize ISO JSON dates as DateTime; PS5.1 leaves strings. Compare
+                    # the actual UTC instant in either representation, retaining fractional ticks.
+                    $expectedUtc = [DateTimeOffset]::Parse([string] $clock.utc, [Globalization.CultureInfo]::InvariantCulture)
+                    $savedUtc = $doc.events[0].before.utc
+                    if ($savedUtc -is [DateTime]) {
+                        Assert-Equal $expectedUtc.UtcDateTime.Ticks $savedUtc.ToUniversalTime().Ticks
+                    }
+                    else {
+                        Assert-Equal ([string] $clock.utc) ([string] $savedUtc)
+                    }
+                    Assert-Equal ([long] $clock.monotonicTicks) ([long] $doc.events[0].before.monotonicTicks)
+                    foreach ($unsafe in @($secret, $root, 'runToken', 'executablePath', 'receipt')) {
+                        Assert-True ($json.IndexOf($unsafe, [StringComparison]::OrdinalIgnoreCase) -lt 0) ('trace leaked ' + $unsafe)
+                    }
+                    $refused = $false
+                    try { $null = Write-SingleInstanceDiagnosticTrace -OutputDirectory $root -Trace $trace }
+                    catch { $refused = $true }
+                    Assert-True $refused 'trace must not overwrite the first artifact'
+                    Assert-Equal $json ([IO.File]::ReadAllText((Join-Path $root $name)))
+                    $badClock = ConvertTo-SingleInstanceDiagnosticClock -Clock ([pscustomobject] @{ utc = $secret; monotonicTicks = 1 })
+                    Assert-True ($null -eq $badClock) 'untrusted clock strings must not reach durable trace'
+                }
+                finally { Remove-UiTestTree -Path $root }
+            }
+        },
+        @{
+            Name = 'single instance partial trace persists known facts when the secondary PID is unknown or malformed'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('ConvertTo-SingleInstanceDiagnosticClock', 'Add-SingleInstanceDiagnosticEvent',
+                    'Write-SingleInstanceDiagnosticTrace', 'ConvertTo-SingleInstanceDurableJson', 'Get-SingleInstanceFinalVerdict')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 5 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+                $trace = @{ events = (New-Object System.Collections.Generic.List[object]) }
+                $clock = [pscustomobject] @{ utc = '2026-10-23T21:30:42.0000000+00:00'; monotonicTicks = 20 }
+                Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'entry' -Before $clock -After $clock -Facts @{
+                    processId = 110; startUtcTicks = 11000; imageName = 'powershell.exe'; imageSha256 = ('A' * 64)
+                }
+                Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'control' -Before $clock -After $clock -Facts @{
+                    windowHandle = 12; ownerPid = 110; nativeThreadId = 111
+                }
+                Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'guard-foreground' -Before $clock -After $clock -Facts @{
+                    windowHandle = 13; readState = 'returned'
+                }
+                $invalidPids = @($null, 'unreadable', '210', $true, 0, -1, ([long] [int]::MaxValue + 1), 1.5)
+                foreach ($unknownPid in $invalidPids) {
+                    Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'secondary-start' -Before $clock -After $clock -Facts @{
+                        processId = $unknownPid; startUtcTicks = $null; readState = 'threw'
+                    }
+                }
+                Add-SingleInstanceDiagnosticEvent -Trace $trace -Name 'secondary-start' -Before $clock -After $clock -Facts @{ readState = 'threw' }
+                $firstCause = 'single.instance.foreground_window_not_primary'
+                $before = Get-SingleInstanceFinalVerdict -BusinessOutcome 'Failed' -BusinessReason $firstCause `
+                    -ReleaseConfirmed $false -RequiredEvidenceComplete $false -ReleaseAttempts @()
+                $root = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-si-partial-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    [void] [IO.Directory]::CreateDirectory($root)
+                    # Exercise the real shared projector and disk writer: null processId used to
+                    # reject this entire document, losing even the three known preceding events.
+                    $name = Write-SingleInstanceDiagnosticTrace -OutputDirectory $root -Trace $trace
+                    $json = [IO.File]::ReadAllText((Join-Path $root $name))
+                    $doc = $json | ConvertFrom-Json
+                    Assert-Equal (4 + $invalidPids.Count) @($doc.events).Count
+                    Assert-Equal 110 ([int] $doc.events[0].processId)
+                    Assert-Equal 11000 ([long] $doc.events[0].startUtcTicks)
+                    Assert-Equal 12 ([long] $doc.events[1].windowHandle)
+                    Assert-Equal 111 ([long] $doc.events[1].nativeThreadId)
+                    Assert-Equal 13 ([long] $doc.events[2].windowHandle)
+                    foreach ($partial in @($doc.events | Where-Object name -eq 'secondary-start')) {
+                        Assert-True ($null -eq $partial.PSObject.Properties['processId']) 'unknown PID key must be absent, not null/zero/string'
+                        Assert-Equal 'unknown' ([string] $partial.processIdState)
+                        Assert-Equal 'single.instance.diagnostic_process_id_unavailable' ([string] $partial.processIdReason)
+                        Assert-Equal 'partial' ([string] $partial.state)
+                        Assert-Equal 'threw' ([string] $partial.readState)
+                    }
+                    $after = Get-SingleInstanceFinalVerdict -BusinessOutcome 'Failed' -BusinessReason $firstCause `
+                        -ReleaseConfirmed $false -RequiredEvidenceComplete $false -ReleaseAttempts @()
+                    Assert-Equal $before.Status $after.Status
+                    Assert-Equal $firstCause $after.Reason 'partial diagnostics cannot replace the saved first cause'
+                }
+                finally { Remove-UiTestTree -Path $root }
+            }
+        },
+        @{
+            Name = 'single instance diagnostic wiring keeps the original foreground guard and wait budget'
+            Body = {
+                # Static call-site evidence only; this does not claim a native desktop run.
+                $source = Get-Content -LiteralPath (Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1') -Raw
+                $sample = $source.IndexOf('$foregroundHandle = Get-ForegroundWindowHandle')
+                $owner = $source.IndexOf('$foregroundOwnerPid = Get-WindowOwnerProcessId -Handle $foregroundHandle')
+                $fresh = $source.IndexOf('$primaryWindowAfter = Get-ProcessWindowHandle -ProcessId $primaryPid')
+                $guard = $source.IndexOf('Assert-SingleInstanceActivated -PrimaryPid $primaryPid')
+                Assert-True ($sample -gt 0 -and $owner -gt $sample -and $fresh -gt $owner -and $guard -gt $fresh)
+                Assert-Equal 1 ([regex]::Matches($source, '\$foregroundHandle = Get-ForegroundWindowHandle').Count)
+                Assert-Equal 1 ([regex]::Matches($source, '\$secondaryProc.WaitForExit\(\$SecondaryTimeoutSeconds \* 1000\)').Count)
+                Assert-Contains $source 'if ($ForegroundHandle -ne $PrimaryWindowHandle)'
+                Assert-Contains $source "throw 'single.instance.foreground_window_not_primary'"
+                Assert-True ($source.Contains('return [int] $owner'))
+                Assert-True ($source.Contains('$nativeThreadId = [TraceFoldUiForegroundProbe]::GetWindowThreadProcessId($Handle, [ref] $owner)'))
+                $traceWrite = $source.LastIndexOf('$diagnosticTraceArtifact = Write-SingleInstanceDiagnosticTrace')
+                $release = $source.LastIndexOf('$safety = Invoke-SingleInstanceSafetyNet')
+                $exitEvidence = $source.LastIndexOf('$exitEvidence = Write-SingleInstanceExitEvidence')
+                $verdict = $source.LastIndexOf('$verdict = Get-SingleInstanceFinalVerdict')
+                Assert-True ($traceWrite -gt $exitEvidence -and $exitEvidence -gt $release -and $verdict -gt $traceWrite)
+                Assert-Contains $source "catch { `$diagnosticTraceState = 'unknown' }"
+                foreach ($forbidden in @('DoEvents(', 'Application]::Run(', 'AttachThreadInput(',
+                        'AllowSetForegroundWindow(', 'SendMessage(', 'WM_NULL')) {
+                    Assert-True (-not $source.Contains($forbidden)) ('diagnostics must not add ' + $forbidden)
+                }
+            }
+        },
+        @{
             Name = 'the exit evidence writes every required document and lists a failed write as its own fact'
             Body = {
                 # The writer is driven as it really is, lifted by AST, over real temporary directories.

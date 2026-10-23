@@ -198,13 +198,189 @@ function Get-ForegroundWindowHandle {
 # The owner of a specific window handle. The activation proof asks this about the one handle it
 # sampled, so the process behind that handle is the process the foreground really belongs to.
 function Get-WindowOwnerProcessId {
-    param([Parameter(Mandatory)][IntPtr] $Handle)
+    param(
+        [Parameter(Mandatory)][IntPtr] $Handle,
+        [System.Collections.IDictionary] $DiagnosticSample = $null
+    )
     if (-not ('TraceFoldUiForegroundProbe' -as [type])) { throw 'single.instance.foreground_probe_unavailable' }
     if ($Handle -eq [IntPtr]::Zero) { throw 'single.instance.window_handle_missing' }
     [uint32] $owner = 0
-    [void] [TraceFoldUiForegroundProbe]::GetWindowThreadProcessId($Handle, [ref] $owner)
+    $nativeThreadId = [TraceFoldUiForegroundProbe]::GetWindowThreadProcessId($Handle, [ref] $owner)
+    # This is the return value of the existing owner query, not a second native read.
+    if ($null -ne $DiagnosticSample) {
+        try { $DiagnosticSample['nativeThreadId'] = $(if ($nativeThreadId -gt 0) { [long] $nativeThreadId } else { $null }) }
+        catch { } # Diagnostic storage cannot replace the original owner decision.
+    }
     if ($owner -le 0) { throw 'single.instance.window_owner_unknown' }
     return [int] $owner
+}
+
+# Bounded trace-only facts. These helpers do not pump messages, start threads, wait, activate a
+# window or query the foreground. Each clock bounds a specific read; no clock claims simultaneous
+# native observations. Stopwatch ticks are comparable only within this process, never across apps.
+function New-SingleInstanceDiagnosticClock {
+    try {
+        return [pscustomobject] @{
+            utc = [DateTimeOffset]::UtcNow.ToString('o')
+            monotonicTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+        }
+    }
+    catch { return $null }
+}
+
+function ConvertTo-SingleInstanceDiagnosticClock {
+    param([AllowNull()] $Clock)
+    try {
+        if ($null -eq $Clock) { return $null }
+        $utc = [string] $Clock.utc
+        $parsed = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParseExact($utc, 'o', [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::None, [ref] $parsed)) { return $null }
+        $ticks = [long] $Clock.monotonicTicks
+        if ($ticks -lt 0) { return $null }
+        return [pscustomobject] @{ utc = $parsed.ToString('o'); monotonicTicks = $ticks }
+    }
+    catch { return $null }
+}
+
+function Add-SingleInstanceDiagnosticEvent {
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Trace,
+        [Parameter(Mandatory)][string] $Name,
+        [AllowNull()] $Before,
+        [AllowNull()] $After,
+        [System.Collections.IDictionary] $Facts = @{}
+    )
+    # Only explicit scalar schema fields can reach disk. No exception text, token, receipt, argv,
+    # executable path or owned root is accepted, even if a caller supplies one accidentally.
+    try {
+        $names = @('entry', 'execution-context', 'control', 'pre-foreground', 'secondary-start',
+            'secondary-wait', 'secondary-exit', 'guard-foreground', 'guard-owner', 'fresh-primary',
+            'guard-decision', 'fresh-primary-owner', 'current-owned-identity')
+        if ($names -cnotcontains $Name -or $Trace.events.Count -ge 20) { return }
+        $event = [ordered] @{
+            name = $Name; state = 'captured'
+            before = (ConvertTo-SingleInstanceDiagnosticClock -Clock $Before)
+            after = (ConvertTo-SingleInstanceDiagnosticClock -Clock $After)
+        }
+        foreach ($field in @('windowHandle', 'ownerPid', 'nativeThreadId', 'processId', 'startUtcTicks',
+                'managedThreadId', 'timeoutMs', 'exitCode', 'expectedPrimaryWindowHandle',
+                'expectedPrimaryPid', 'expectedPrimaryStartUtcTicks', 'freshPrimaryWindowHandle')) {
+            if (-not $Facts.Contains($field)) { continue }
+            $value = $Facts[$field]
+            if ($field -ceq 'processId') {
+                # The shared projector intentionally refuses a null/string PID key. Omit that key
+                # when identity was not read; retain the rest of this event and all other events.
+                $pidIsInteger = ($value -is [byte] -or $value -is [sbyte] -or
+                    $value -is [int16] -or $value -is [uint16] -or $value -is [int32] -or
+                    $value -is [uint32] -or $value -is [int64] -or $value -is [uint64])
+                if ($pidIsInteger -and $value -gt 0 -and $value -le [int]::MaxValue) {
+                    $event[$field] = [long] $value
+                    $event['processIdState'] = 'captured'
+                    $event['processIdReason'] = ''
+                }
+                else {
+                    $event['processIdState'] = 'unknown'
+                    $event['processIdReason'] = 'single.instance.diagnostic_process_id_unavailable'
+                }
+                continue
+            }
+            if ($null -eq $value) { $event[$field] = $null; continue }
+            try {
+                $number = [long] $value
+                if ($field -cnotin @('exitCode', 'timeoutMs') -and $number -le 0) { $event[$field] = $null }
+                else { $event[$field] = $number }
+            } catch { $event[$field] = $null }
+        }
+        foreach ($field in @('waitReturned', 'identityMatched', 'messageLoop')) {
+            if ($Facts.Contains($field)) {
+                $event[$field] = $(if ($Facts[$field] -is [bool]) { $Facts[$field] } else { $null })
+            }
+        }
+        foreach ($field in @('state', 'readState', 'apartmentState', 'imageName')) {
+            if (-not $Facts.Contains($field)) { continue }
+            $value = [string] $Facts[$field]
+            $allowed = @('captured', 'unknown', 'returned', 'threw', 'not-run', 'matched', 'mismatch',
+                'STA', 'MTA', 'Unknown', 'powershell.exe', 'pwsh.exe', 'TraceFold.Media.exe')
+            $event[$field] = $(if ($allowed -ccontains $value) { $value } else { 'unknown' })
+        }
+        if ($Facts.Contains('imageSha256')) {
+            $hash = [string] $Facts['imageSha256']
+            $event['imageSha256'] = $(if ($hash -cmatch '^[0-9A-Fa-f]{64}$') { $hash } else { $null })
+        }
+        if ($Name -cin @('entry', 'secondary-start', 'secondary-wait', 'secondary-exit', 'current-owned-identity', 'fresh-primary') -and
+                -not $event.Contains('processId')) {
+            $event['processIdState'] = 'unknown'
+            $event['processIdReason'] = 'single.instance.diagnostic_process_id_unavailable'
+        }
+        if ($event.Contains('processIdState') -and $event['processIdState'] -ceq 'unknown') {
+            $event['state'] = 'partial'
+        }
+        $Trace.events.Add([pscustomobject] $event)
+    }
+    catch { } # Trace failure is not a business failure and never changes the saved first cause.
+}
+
+function Get-SingleInstanceEntryDiagnostic {
+    $facts = @{ processId = $PID; startUtcTicks = $null; imageName = 'unknown'; imageSha256 = $null; state = 'unknown' }
+    $process = $null
+    try {
+        $process = [Diagnostics.Process]::GetCurrentProcess()
+        $facts.startUtcTicks = $process.StartTime.ToUniversalTime().Ticks
+        $path = $process.MainModule.FileName
+        $facts.imageName = [IO.Path]::GetFileName($path)
+        $facts.imageSha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        $facts.state = 'captured'
+    }
+    catch { }
+    finally { if ($null -ne $process) { try { $process.Dispose() } catch { } } }
+    return $facts
+}
+
+function Get-SingleInstanceExecutionDiagnostic {
+    $facts = @{ managedThreadId = $null; apartmentState = 'Unknown'; messageLoop = $null; state = 'unknown' }
+    try {
+        $thread = [Threading.Thread]::CurrentThread
+        $facts.managedThreadId = $thread.ManagedThreadId
+        $facts.apartmentState = [string] $thread.GetApartmentState()
+        if ('System.Windows.Forms.Application' -as [type]) {
+            $facts.messageLoop = [System.Windows.Forms.Application]::MessageLoop
+        }
+        $facts.state = 'captured'
+    }
+    catch { }
+    return $facts
+}
+
+function Write-SingleInstanceDiagnosticTrace {
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)][System.Collections.IDictionary] $Trace,
+        [string] $RunToken = '', [string] $OwnedRoot = '', [string] $ExecutablePath = ''
+    )
+    $name = 'single-instance-diagnostic-trace.json'
+    $target = Join-Path $OutputDirectory $name
+    if ([IO.File]::Exists($target) -or [IO.Directory]::Exists($target)) { throw 'Diagnostic trace already exists.' }
+    $document = [ordered] @{
+        schemaVersion = 1; scenarioId = 'single-instance'; scope = 'trace-only'
+        clockMeaning = 'UTC and process-local Stopwatch boundaries surround reads; construction time is not a simultaneous native snapshot.'
+        monotonicFrequency = [Diagnostics.Stopwatch]::Frequency
+        correlationMeaning = 'Only single controlled request temporal association using secondary PID/birth/launch image and target primary PID/birth. This does not prove IPC source. Multiple events or missing identity are Unknown. No new request identifier or IPC; cross-process monotonic clocks are not compared.'
+        pumpMeaning = 'MessageLoop is the sampled WinForms property only; it does not prove that messages were dispatched.'
+        eventSources = @{
+            entry = 'Held GetCurrentProcess object: PID, StartTime and MainModule file hash; image path is not persisted.'
+            control = 'Created control object Handle, then existing GetWindowThreadProcessId owner and return value.'
+            preForeground = 'Existing pre-secondary GetForegroundWindow sample followed by owner/native thread query of that handle.'
+            secondary = 'Actual Process.Start object PID/StartTime; image hash is the launch file hash, not a second loaded-image observation. WaitForExit/ExitCode use that held object.'
+            guard = 'Original single foreground read, owner query of that handle, fresh primary read, original guard; those values are copied after the decision.'
+            failureFollowup = 'Fresh handle owner and owned identity are read later in the catch, with separate boundaries.'
+        }
+        completenessMeaning = 'No event or null field is Unknown/not observed, never zero exit or proof an action did not occur. The product-log collector retains at most 200 events; missing callback logs do not prove nonarrival.'
+        events = [object[]] $Trace.events
+    }
+    $json = ConvertTo-SingleInstanceDurableJson -Document $document -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+    [IO.File]::WriteAllText($target, $json, [Text.UTF8Encoding]::new($false))
+    return $name
 }
 
 # The foreground probe type is created by the driver's own check when that check runs, so the check
@@ -1323,6 +1499,9 @@ $secondaryExitOut = $null
 $restartPidOut = $null
 $executableSha256 = ''
 $foregroundObservationArtifact = ''
+$diagnosticTrace = @{ events = (New-Object System.Collections.Generic.List[object]) }
+$diagnosticTraceState = 'not-run'
+$diagnosticTraceArtifact = ''
 
 try {
     if (-not [IO.File]::Exists($ExecutablePath)) { throw 'single.instance.executable_missing' }
@@ -1334,6 +1513,10 @@ try {
     # A host without an interactive desktop cannot exercise activation at all.
     if (-not (& $DesktopCheck)) { throw 'single.instance.desktop_unavailable' }
     $scenarioStage = 'desktop-verified'
+    $entryDiagnosticBefore = New-SingleInstanceDiagnosticClock
+    $entryDiagnostic = Get-SingleInstanceEntryDiagnostic
+    Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'entry' -Before $entryDiagnosticBefore `
+        -After (New-SingleInstanceDiagnosticClock) -Facts $entryDiagnostic
 
     # --- 1. primary instance ---------------------------------------------------------------------
     $primary = Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $RunToken `
@@ -1369,16 +1552,34 @@ try {
     # The pre-state is positively bound, not merely "not the primary": the foreground handle must be
     # exactly the control window that this scenario owns, and that handle's owner must be the control
     # window's own verified owner. Any other window, including one of the primary's own, is rejected.
+    $controlDiagnosticBefore = New-SingleInstanceDiagnosticClock
     $controlWindow = & $EstablishNonForeground
     $controlHandle = [IntPtr] $controlWindow.Handle
     if ($controlHandle -eq [IntPtr]::Zero) { throw 'single.instance.control_window_missing' }
-    $controlOwnerPid = Get-WindowOwnerProcessId -Handle $controlHandle
+    $controlNative = @{}
+    $controlOwnerPid = Get-WindowOwnerProcessId -Handle $controlHandle -DiagnosticSample $controlNative
+    Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'control' -Before $controlDiagnosticBefore `
+        -After (New-SingleInstanceDiagnosticClock) -Facts @{
+            windowHandle = $controlHandle.ToInt64(); ownerPid = $controlOwnerPid
+            nativeThreadId = $controlNative['nativeThreadId']
+        }
+    $executionDiagnosticBefore = New-SingleInstanceDiagnosticClock
+    $executionDiagnostic = Get-SingleInstanceExecutionDiagnostic
+    Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'execution-context' -Before $executionDiagnosticBefore `
+        -After (New-SingleInstanceDiagnosticClock) -Facts $executionDiagnostic
     # The controlled object's ownership is checked against an independent reference, not against a
     # second read of the same handle: a window this scenario owns has to belong to this very harness
     # process, and the recorded owner is therefore cross checked against the running process id.
     if ($controlOwnerPid -ne $PID) { throw 'single.instance.control_window_not_harness_owned' }
+    $preDiagnosticBefore = New-SingleInstanceDiagnosticClock
     $preForegroundHandle = Get-ForegroundWindowHandle
-    $preForegroundPid = Get-WindowOwnerProcessId -Handle $preForegroundHandle
+    $preNative = @{}
+    $preForegroundPid = Get-WindowOwnerProcessId -Handle $preForegroundHandle -DiagnosticSample $preNative
+    Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'pre-foreground' -Before $preDiagnosticBefore `
+        -After (New-SingleInstanceDiagnosticClock) -Facts @{
+            windowHandle = $preForegroundHandle.ToInt64(); ownerPid = $preForegroundPid
+            nativeThreadId = $preNative['nativeThreadId']
+        }
     Assert-SingleInstancePreState -PrimaryPid $primaryPid -ControlHandle $controlHandle.ToInt64() `
         -ControlOwnerPid $controlOwnerPid -PreForegroundHandle $preForegroundHandle.ToInt64() `
         -PreForegroundOwnerPid $preForegroundPid
@@ -1404,6 +1605,9 @@ try {
     # on its own is owned by the existing verified cleanup chain. Nothing is killed directly here and
     # an unverified pid is never terminated.
     $script:singleInstanceSecondary = $null
+    $script:singleInstanceSecondaryStartTrace = @{
+        before = $null; after = $null; readState = 'not-run'; processId = $null; startUtcTicks = $null
+    }
     $secondaryStartBlock = {
         param($launchExe, $launchEnv)
         $info = New-Object System.Diagnostics.ProcessStartInfo
@@ -1420,30 +1624,61 @@ try {
             [Environment]::SetEnvironmentVariable($key, [string] $launchEnv[$key], 'Process')
         }
         try {
+            $script:singleInstanceSecondaryStartTrace.before = New-SingleInstanceDiagnosticClock
+            $script:singleInstanceSecondaryStartTrace.readState = 'threw'
             $proc = [Diagnostics.Process]::Start($info)
+            $script:singleInstanceSecondaryStartTrace.readState = 'returned'
         }
         finally {
+            $script:singleInstanceSecondaryStartTrace.after = New-SingleInstanceDiagnosticClock
             foreach ($key in $restore.Keys) {
                 [Environment]::SetEnvironmentVariable($key, $restore[$key], 'Process')
             }
         }
         $script:singleInstanceSecondary = $proc
-        return [pscustomobject] @{
+        $startedRecord = [pscustomobject] @{
             ProcessId      = $proc.Id
             StartUtcTicks  = $proc.StartTime.ToUniversalTime().Ticks
             ExecutablePath = $launchExe
         }
+        $script:singleInstanceSecondaryStartTrace.processId = $startedRecord.ProcessId
+        $script:singleInstanceSecondaryStartTrace.startUtcTicks = $startedRecord.StartUtcTicks
+        return $startedRecord
     }
     $secondaryArgv = @($exe)
-    $secondary = Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $RunToken `
-        -SupportPath $SupportPath -StartProcess $secondaryStartBlock
+    try {
+        $secondary = Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $RunToken `
+            -SupportPath $SupportPath -StartProcess $secondaryStartBlock
+    }
+    finally {
+        Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'secondary-start' `
+            -Before $script:singleInstanceSecondaryStartTrace.before -After $script:singleInstanceSecondaryStartTrace.after -Facts @{
+                processId = $script:singleInstanceSecondaryStartTrace.processId
+                startUtcTicks = $script:singleInstanceSecondaryStartTrace.startUtcTicks
+                imageName = 'TraceFold.Media.exe'; imageSha256 = $executableSha256
+                readState = $script:singleInstanceSecondaryStartTrace.readState
+            }
+    }
     $secondaryPid = [int] $secondary.ProcessId
     $secondaryStartUtc = [DateTime]::new([long] $secondary.StartUtcTicks, [DateTimeKind]::Utc).ToString('o')
     $secondaryProc = $script:singleInstanceSecondary
     $exited = $false
+    $waitReadState = 'not-run'
+    $waitObservedResult = $null
+    $waitDiagnosticBefore = New-SingleInstanceDiagnosticClock
     if ($null -ne $secondaryProc) {
-        try { $exited = $secondaryProc.WaitForExit($SecondaryTimeoutSeconds * 1000) } catch { $exited = $false }
+        try {
+            $waitReadState = 'threw'
+            $exited = $secondaryProc.WaitForExit($SecondaryTimeoutSeconds * 1000)
+            $waitObservedResult = $exited
+            $waitReadState = 'returned'
+        } catch { $exited = $false }
     }
+    Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'secondary-wait' -Before $waitDiagnosticBefore `
+        -After (New-SingleInstanceDiagnosticClock) -Facts @{
+            processId = $secondaryPid; startUtcTicks = [long] $secondary.StartUtcTicks
+            timeoutMs = ($SecondaryTimeoutSeconds * 1000); waitReturned = $waitObservedResult; readState = $waitReadState
+        }
     if (-not $exited) {
         # The process is in the ledger, so the scenario does not stop it itself: the verified cleanup
         # chain re-checks pid, creation time and path before anything is stopped.
@@ -1452,7 +1687,14 @@ try {
     # The exit value is taken as a fact first and only turned into a number once it really is one: a
     # value that is missing or unreadable is unknown, never a zero produced by a cast.
     $secondaryExitValue = $null
-    try { $secondaryExitValue = $secondaryProc.ExitCode } catch { $secondaryExitValue = $null }
+    $exitReadState = 'threw'
+    $exitDiagnosticBefore = New-SingleInstanceDiagnosticClock
+    try { $secondaryExitValue = $secondaryProc.ExitCode; $exitReadState = 'returned' } catch { $secondaryExitValue = $null }
+    Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'secondary-exit' -Before $exitDiagnosticBefore `
+        -After (New-SingleInstanceDiagnosticClock) -Facts @{
+            processId = $secondaryPid; startUtcTicks = [long] $secondary.StartUtcTicks
+            exitCode = $secondaryExitValue; readState = $exitReadState
+        }
     Assert-SingleInstanceSecondaryExit -ExitCode $secondaryExitValue
     $secondaryExit = [int] $secondaryExitValue
     $secondaryExitOut = $secondaryExit
@@ -1480,35 +1722,80 @@ try {
     $foregroundOwnerPid = $null
     $primaryWindowAfter = [IntPtr]::Zero
     $foregroundFailureStage = 'foreground-handle'
+    $guardNative = @{}
+    $guardDiagnostic = @{
+        foregroundBefore = $null; foregroundAfter = $null; foregroundReadState = 'not-run'
+        ownerBefore = $null; ownerAfter = $null; ownerReadState = 'not-run'
+        primaryBefore = $null; primaryAfter = $null; primaryReadState = 'not-run'
+        decisionBefore = $null; decisionAfter = $null; decisionReadState = 'not-run'
+    }
     try {
+        $guardDiagnostic.foregroundBefore = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.foregroundReadState = 'threw'
         $foregroundHandle = Get-ForegroundWindowHandle
+        $guardDiagnostic.foregroundAfter = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.foregroundReadState = 'returned'
         $foregroundFailureStage = 'foreground-owner'
-        $foregroundOwnerPid = Get-WindowOwnerProcessId -Handle $foregroundHandle
+        $guardDiagnostic.ownerBefore = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.ownerReadState = 'threw'
+        $foregroundOwnerPid = Get-WindowOwnerProcessId -Handle $foregroundHandle -DiagnosticSample $guardNative
+        $guardDiagnostic.ownerAfter = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.ownerReadState = 'returned'
         $foregroundFailureStage = 'fresh-primary-window'
+        $guardDiagnostic.primaryBefore = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.primaryReadState = 'threw'
         $primaryWindowAfter = Get-ProcessWindowHandle -ProcessId $primaryPid
+        $guardDiagnostic.primaryAfter = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.primaryReadState = 'returned'
         $foregroundFailureStage = 'activation-guard'
+        $guardDiagnostic.decisionBefore = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.decisionReadState = 'threw'
         Assert-SingleInstanceActivated -PrimaryPid $primaryPid -PrimaryWindowHandle $primaryWindow.ToInt64() `
             -PrimaryWindowAfterHandle $primaryWindowAfter.ToInt64() `
             -ForegroundHandle $foregroundHandle.ToInt64() -ForegroundOwnerPid $foregroundOwnerPid
         if ($primaryWindowAfter.ToInt64() -ne $primaryWindow.ToInt64()) {
             throw 'single.instance.primary_window_changed'
         }
+        $guardDiagnostic.decisionAfter = New-SingleInstanceDiagnosticClock
+        $guardDiagnostic.decisionReadState = 'returned'
     }
     catch {
         $activationFailure = $_
+        # Close only the boundary of the operation that actually threw. This clock is not a retry.
+        $failedBoundary = New-SingleInstanceDiagnosticClock
+        foreach ($operation in @('foreground', 'owner', 'primary', 'decision')) {
+            if ($guardDiagnostic[$operation + 'ReadState'] -ceq 'threw') {
+                $guardDiagnostic[$operation + 'After'] = $failedBoundary
+            }
+        }
         $freshPrimaryOwnerPid = $null
         $freshPrimaryOwnerReason = ''
+        $freshNative = @{}
+        $freshOwnerBefore = New-SingleInstanceDiagnosticClock
         if ($primaryWindowAfter -ne [IntPtr]::Zero) {
-            try { $freshPrimaryOwnerPid = Get-WindowOwnerProcessId -Handle $primaryWindowAfter }
+            try { $freshPrimaryOwnerPid = Get-WindowOwnerProcessId -Handle $primaryWindowAfter -DiagnosticSample $freshNative }
             catch { $freshPrimaryOwnerReason = 'single.instance.fresh_primary_owner_unavailable' }
         }
         else {
             $freshPrimaryOwnerReason = 'single.instance.fresh_primary_window_missing'
         }
+        Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'fresh-primary-owner' -Before $freshOwnerBefore `
+            -After (New-SingleInstanceDiagnosticClock) -Facts @{
+                windowHandle = $primaryWindowAfter.ToInt64(); ownerPid = $freshPrimaryOwnerPid
+                nativeThreadId = $freshNative['nativeThreadId']
+                state = $(if ($null -ne $freshPrimaryOwnerPid) { 'captured' } else { 'unknown' })
+            }
+        $identityDiagnosticBefore = New-SingleInstanceDiagnosticClock
         $currentIdentity = Get-SingleInstanceCurrentIdentityObservation -ProcessId $primaryPid `
             -ExpectedStartUtcTicks ([long] $primary.StartUtcTicks) `
             -ExpectedExecutablePath ([string] $primary.ExecutablePath) `
             -ExpectedExecutableSha256 $executableSha256
+        Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'current-owned-identity' -Before $identityDiagnosticBefore `
+            -After (New-SingleInstanceDiagnosticClock) -Facts @{
+                processId = $primaryPid; startUtcTicks = $currentIdentity.startUtcTicks
+                imageSha256 = $currentIdentity.imageSha256; identityMatched = $currentIdentity.identityMatched
+                state = $currentIdentity.state
+            }
         $foregroundObservation = New-SingleInstanceForegroundObservation `
             -ExpectedPrimaryPid $primaryPid -ExpectedPrimaryWindowHandle $primaryWindow.ToInt64() `
             -ExpectedPrimaryStartUtcTicks ([long] $primary.StartUtcTicks) `
@@ -1531,6 +1818,29 @@ try {
             $exitFailures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'foreground-observation-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
         }
         throw $activationFailure
+    }
+    finally {
+        # Stored after the decision, with the exact values consumed by it. No new foreground query.
+        Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'guard-foreground' `
+            -Before $guardDiagnostic.foregroundBefore -After $guardDiagnostic.foregroundAfter -Facts @{
+                windowHandle = $foregroundHandle.ToInt64(); readState = $guardDiagnostic.foregroundReadState
+            }
+        Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'guard-owner' `
+            -Before $guardDiagnostic.ownerBefore -After $guardDiagnostic.ownerAfter -Facts @{
+                windowHandle = $foregroundHandle.ToInt64(); ownerPid = $foregroundOwnerPid
+                nativeThreadId = $guardNative['nativeThreadId']; readState = $guardDiagnostic.ownerReadState
+            }
+        Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'fresh-primary' `
+            -Before $guardDiagnostic.primaryBefore -After $guardDiagnostic.primaryAfter -Facts @{
+                windowHandle = $primaryWindowAfter.ToInt64(); processId = $primaryPid; readState = $guardDiagnostic.primaryReadState
+            }
+        Add-SingleInstanceDiagnosticEvent -Trace $diagnosticTrace -Name 'guard-decision' `
+            -Before $guardDiagnostic.decisionBefore -After $guardDiagnostic.decisionAfter -Facts @{
+                windowHandle = $foregroundHandle.ToInt64(); ownerPid = $foregroundOwnerPid
+                expectedPrimaryWindowHandle = $primaryWindow.ToInt64(); expectedPrimaryPid = $primaryPid
+                expectedPrimaryStartUtcTicks = [long] $primary.StartUtcTicks
+                freshPrimaryWindowHandle = $primaryWindowAfter.ToInt64(); readState = $guardDiagnostic.decisionReadState
+            }
     }
     $foregroundMatches = ($foregroundOwnerPid -eq $primaryPid)
     $scenarioStage = 'activated'
@@ -1698,6 +2008,15 @@ finally {
     catch {
         $exitFailures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'exit-evidence' -RunToken $RunToken -OwnedRoot $OwnedRoot))
     }
+    # Additive trace only. A failed diagnostic write is Unknown in the returned result and cannot
+    # change the business verdict, its first failure, the required evidence or any existing ref.
+    try {
+        $diagnosticTraceArtifact = Write-SingleInstanceDiagnosticTrace -OutputDirectory $OutputDirectory `
+            -Trace $diagnosticTrace -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+        [void] $artifacts.Add($diagnosticTraceArtifact)
+        $diagnosticTraceState = 'captured'
+    }
+    catch { $diagnosticTraceState = 'unknown' }
 }
 
 # --- the single final result ---------------------------------------------------------------------
@@ -1722,6 +2041,8 @@ return [pscustomobject] @{
     ReleaseFailure    = [string] $releaseFailure
     EvidenceComplete  = $requiredEvidenceComplete
     ForegroundObservationArtifact = [string] $foregroundObservationArtifact
+    DiagnosticTraceArtifact = [string] $diagnosticTraceArtifact
+    DiagnosticTraceState = $diagnosticTraceState
     # Cast, not wrapped: this is a generic object list and @() over one fails on both engines.
     ExitFailures      = [object[]] $exitFailures
 }
