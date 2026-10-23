@@ -22,7 +22,8 @@ function New-PackagingAttempt {
     # The name stays short on purpose: the extracted driver and the staged support payload sit
     # several directories below this root, and the Win32 version API cannot read a file beyond
     # MAX_PATH even when the file itself was copied correctly.
-    $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-pkg-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    # Stay under the caller's owned TEMP with the prefix required by Remove-UiTestTree.
+    $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-p-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     [void][IO.Directory]::CreateDirectory($base)
     return $base
 }
@@ -81,13 +82,62 @@ function Write-PackagingDotNetShim {
 $ErrorActionPreference = 'Stop'
 # No param block on purpose: the producer passes dotnet's own switches (-o, -p:..., --source),
 # and named binding would reject several of them. Everything arrives in $args.
-$Arguments = @($args)
+$rawArguments = @($args)
+# Windows PowerShell -File splits native -p:Name=value into -p and Name=value before this
+# script sees it. Adapt that observed transport shape; keep the original tokens as evidence.
+$Arguments = @(
+    for ($argumentIndex = 0; $argumentIndex -lt $rawArguments.Count; $argumentIndex++) {
+        $argument = [string] $rawArguments[$argumentIndex]
+        if ($argument -ceq '-p' -and ($argumentIndex + 1) -lt $rawArguments.Count -and
+            [string] $rawArguments[$argumentIndex + 1] -cmatch '^[A-Za-z_][A-Za-z0-9_.]*=') {
+            '-p:' + [string] $rawArguments[$argumentIndex + 1]
+            $argumentIndex++
+        }
+        else { $argument }
+    }
+)
 $journal = $env:TRACEFOLD_FIXTURE_DOTNET_JOURNAL
 if (-not [string]::IsNullOrWhiteSpace($journal)) {
-    Add-Content -LiteralPath $journal -Value ($Arguments -join ' ')
+    Add-Content -LiteralPath $journal -Value (ConvertTo-Json -InputObject ([ordered] @{ rawArguments = $rawArguments; arguments = $Arguments }) -Compress)
+}
+function Get-ShimArgument {
+    param([string] $Name)
+    for ($index = 0; $index -lt ($Arguments.Count - 1); $index++) {
+        if ($Arguments[$index] -eq $Name) { return [string] $Arguments[$index + 1] }
+    }
+    return ''
 }
 $mode = if ($Arguments.Count -gt 0) { [string] $Arguments[0] } else { '' }
-if ($mode -ne 'publish') { exit 0 }
+$project = if ($Arguments.Count -gt 1) { [string] $Arguments[1] } else { '' }
+$cacheArguments = @($Arguments | Where-Object { $_ -like '-p:RestorePackagesPath=*' })
+if ($cacheArguments.Count -ne 1) { throw 'shim: every SDK call must name exactly one local package cache' }
+$cache = ([string] $cacheArguments[0]).Substring('-p:RestorePackagesPath='.Length)
+if ($mode -eq 'restore') {
+    if ((Get-ShimArgument '--source') -cne $cache) { throw 'shim: restore source and package cache must match' }
+    if ($project -like '*UiAcceptance.Support*') {
+        if ((Get-ShimArgument '-r') -cne 'win-x64' -or $Arguments -notcontains '-p:SelfContained=true' -or
+            $Arguments -notcontains '-p:Configuration=Release') { throw 'shim: support restore must resolve the Release self-contained win-x64 target' }
+        if ($env:TRACEFOLD_FIXTURE_FAIL_SUPPORT_RESTORE -eq '1') { exit 6 }
+        [IO.File]::WriteAllText(($journal + '.support-rid'), ($project + '|' + $cache))
+    }
+    exit 0
+}
+if ($mode -eq 'test') {
+    $results = Get-ShimArgument '--results-directory'
+    if ((Get-ShimArgument '--logger') -cne 'trx' -or [string]::IsNullOrWhiteSpace($results)) { throw 'shim: test must request TRX in an explicit results directory' }
+    if (-not [IO.Directory]::Exists($results)) { throw 'shim: publisher must create its owned evidence leaf' }
+    if (@(Get-ChildItem -LiteralPath $results -Filter '*.trx' -File).Count -ne 0) { throw 'shim: evidence leaf was reused' }
+    if ($env:TRACEFOLD_FIXTURE_OMIT_TRX -ne '1') {
+        $outcome = if ($env:TRACEFOLD_FIXTURE_FAIL_TEST -eq '1') { 'Failed' } else { 'Passed' }
+        # This is a controlled SDK shape, never a report of real .NET test execution.
+        [IO.File]::WriteAllText((Join-Path $results 'fixture.trx'),
+            ('<TestRun name="CONTROLLED PACKAGING SDK FIXTURE"><ResultSummary outcome="' + $outcome + '" /></TestRun>'))
+    }
+    if ($env:TRACEFOLD_FIXTURE_FAIL_TEST -eq '1') { exit 7 }
+    exit 0
+}
+if ($mode -ne 'publish') { throw ('shim: unsupported SDK operation: ' + $mode) }
+if ($Arguments -notcontains '--no-restore') { throw 'shim: publish must not implicitly restore' }
 $out = ''
 for ($index = 0; $index -lt $Arguments.Count; $index++) {
     if ($Arguments[$index] -eq '-o' -and ($index + 1) -lt $Arguments.Count) { $out = [string] $Arguments[$index + 1] }
@@ -96,6 +146,13 @@ if ([string]::IsNullOrWhiteSpace($out)) { [Console]::Error.WriteLine('shim: no -
 $project = if ($Arguments.Count -gt 1) { [string] $Arguments[1] } else { '' }
 [void][IO.Directory]::CreateDirectory($out)
 if ($project -like '*UiAcceptance.Support*') {
+    if (-not [IO.File]::Exists(($journal + '.support-rid')) -or
+        [IO.File]::ReadAllText(($journal + '.support-rid')) -cne ($project + '|' + $cache)) {
+        throw 'shim: support publish has no matching RID restore in this invocation'
+    }
+    if ((Get-ShimArgument '-r') -cne 'win-x64' -or (Get-ShimArgument '--self-contained') -cne 'true') {
+        throw 'shim: support publish changed its restored target'
+    }
     if ($env:TRACEFOLD_FIXTURE_FAIL_SUPPORT -eq '1') { exit 5 }
     [IO.File]::WriteAllBytes((Join-Path $out 'TraceFold.Media.UiAcceptance.Support.exe'), [Text.Encoding]::ASCII.GetBytes('MZ fixture support'))
     [IO.File]::WriteAllText((Join-Path $out 'TraceFold.Media.UiAcceptance.Support.dll'), 'fixture support assembly')
@@ -130,13 +187,8 @@ exit 0
     $wrapper = @'
 @echo off
 setlocal
-if /I "%~1"=="restore" exit /b 0
-if /I "%~1"=="test" exit /b 0
-if /I "%~1"=="publish" (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1" %*
-  exit /b %ERRORLEVEL%
-)
-exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1" %*
+exit /b %ERRORLEVEL%
 '@
     Write-PackagingText -Path (Join-Path $BinDirectory 'dotnet.cmd') -Text $wrapper
 }
@@ -222,11 +274,10 @@ function New-PackagingFixture {
         Copy-PackagingSource -Source (Join-Path $script:root 'scripts\Run-Stage5CC-Acceptance.cmd') -Destination (Join-Path $repo 'scripts\Run-Stage5CC-Acceptance.cmd')
     }
     if (-not $WithoutVisualScenario) {
+        # The registry's Visual entry points at this file. The real matrix is not run by the
+        # packaging tests; a controlled shape satisfies the readiness gate and nothing else.
         Write-PackagingText -Path (Join-Path $repo 'scripts\ui-acceptance\scenarios\70-visual-keyboard-matrix.ps1') -Text "# CONTROLLED TEST SHAPE - visual matrix scenario marker for the readiness gate.`n"
     }
-    # The registry's Visual entry points at this file. It does not exist at HEAD, so the producer
-    # must refuse the real tree for it; the fixture carries the same controlled shape as 70.
-    Write-PackagingText -Path (Join-Path $repo 'scripts\ui-acceptance\scenarios\06-visual.ps1') -Text "# CONTROLLED TEST SHAPE - registry Visual entry marker for the source closure.`n"
     Write-PackagingText -Path (Join-Path $repo 'docs\media-desktop-stage5cc-visual-uia-test-guide.md') -Text "# CONTROLLED TEST SHAPE - test guide marker.`n"
     Write-PackagingText -Path (Join-Path $repo 'docs\media-desktop-stage5cc-visual-uia-acceptance.md') -Text "# CONTROLLED TEST SHAPE - acceptance record marker.`n"
 
@@ -323,6 +374,20 @@ function Invoke-PackagingPublisher {
         Remove-Item Env:\TRACEFOLD_FIXTURE_FFMPEG -ErrorAction SilentlyContinue
         Set-Location -LiteralPath $previousLocation
     }
+}
+
+function Read-PackagingDotNetCalls {
+    param([Parameter(Mandatory)][string] $Path)
+    return @(Get-Content -LiteralPath $Path | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
+function Get-PackagingArgument {
+    param([Parameter(Mandatory)] $Call, [Parameter(Mandatory)][string] $Name)
+    $arguments = @($Call.arguments)
+    for ($index = 0; $index -lt ($arguments.Count - 1); $index++) {
+        if ($arguments[$index] -eq $Name) { return [string] $arguments[$index + 1] }
+    }
+    return ''
 }
 
 function Get-PackagingDirectoryFingerprint {
@@ -439,6 +504,30 @@ function Get-TestCases {
                     Assert-Equal 0 $result.ExitCode ('the producer should publish; output: ' + $result.Output)
                     Assert-Contains $result.Output 'Product package gate: complete smoke passed' ('the complete product gate must run before promotion: ' + $result.Output)
                     Assert-Contains $result.Output 'real probe NotRun' ('the controlled run must record NotRun: ' + $result.Output)
+
+                    $calls = @(Read-PackagingDotNetCalls -Path $result.Journal)
+                    Assert-Equal 'restore,test,publish,restore,publish' (($calls | ForEach-Object { $_.arguments[0] }) -join ',') 'the Support RID restore must run after solution tests and before Support publish'
+                    foreach ($call in $calls) {
+                        $cache = @($call.arguments | Where-Object { $_ -like '-p:RestorePackagesPath=*' })
+                        Assert-Equal 1 $cache.Count 'every SDK invocation must bind its package cache'
+                        Assert-Equal ('-p:RestorePackagesPath=' + $fixture.NugetRoot) ([string] $cache[0]) 'SDK calls must use the fixture-owned equivalent of the workspace cache'
+                    }
+                    $supportProject = Join-Path $fixture.Repo 'apps\media-desktop\tools\TraceFold.Media.UiAcceptance.Support\TraceFold.Media.UiAcceptance.Support.csproj'
+                    Assert-Equal $supportProject ([string] $calls[3].arguments[1]) 'RID restore must target Support'
+                    Assert-Equal $supportProject ([string] $calls[4].arguments[1]) 'publish must consume that same project'
+                    $stagedProductExe = Join-Path (Get-PackagingArgument -Call $calls[2] -Name '-o') 'TraceFold.Media.exe'
+                    $stagedSupportExe = Join-Path (Get-PackagingArgument -Call $calls[4] -Name '-o') 'TraceFold.Media.UiAcceptance.Support.exe'
+                    Assert-True ($stagedProductExe.Length -lt 260) ('staged product native path is too long: ' + $stagedProductExe)
+                    Assert-True ($stagedSupportExe.Length -lt 260) ('staged support native path is too long: ' + $stagedSupportExe)
+                    Assert-Equal 'win-x64' (Get-PackagingArgument -Call $calls[3] -Name '-r')
+                    Assert-True ($calls[3].arguments -contains '-p:SelfContained=true') 'RID restore must acquire self-contained runtime packs'
+                    Assert-Equal $fixture.NugetRoot (Get-PackagingArgument -Call $calls[3] -Name '--source') 'RID restore must stay offline'
+                    $testResults = Get-PackagingArgument -Call $calls[1] -Name '--results-directory'
+                    $evidenceParent = Join-Path $fixture.Repo '.superpowers\publish-media-desktop'
+                    Assert-Equal $evidenceParent ([IO.Path]::GetDirectoryName($testResults)) 'test evidence must stay in the fixture workspace'
+                    Assert-True ([IO.Path]::GetFileName($testResults) -match '^[0-9a-f]{32}$') 'each invocation must own a fresh evidence leaf'
+                    Assert-Equal 'trx' (Get-PackagingArgument -Call $calls[1] -Name '--logger')
+                    Assert-True ([IO.File]::Exists((Join-Path $testResults 'fixture.trx'))) 'test evidence must survive successful staging cleanup'
 
                     $productDir = Join-Path $fixture.Dist 'TraceFold-MediaDesktop-Stage5C-C-win-x64'
                     $productZip = Join-Path $fixture.Dist 'TraceFold-MediaDesktop-Stage5C-C-win-x64.zip'
@@ -570,6 +659,51 @@ function Get-TestCases {
                     Assert-Equal 2 $directories.Count 'exactly the product and toolkit directories must remain'
                     Assert-Equal 2 ([int] @(Get-ChildItem -LiteralPath $fixture.Dist -File -Filter '*.zip').Count) 'exactly two archives must remain'
                     Assert-True (Test-Path -LiteralPath (Join-Path $toolkitDir 'toolkit.json')) 'the toolkit must still be usable'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'SDK failures preserve earlier artifacts and each invocation keeps separate controlled TRX evidence'
+            Body = {
+                $base = New-PackagingAttempt
+                try {
+                    $fixture = New-PackagingFixture -Attempt $base
+                    $first = Invoke-PackagingPublisher -Fixture $fixture
+                    Assert-Equal 0 $first.ExitCode ('initial publish failed: ' + $first.Output)
+                    $before = Get-PackagingDirectoryFingerprint -Path $fixture.Dist
+                    $firstCalls = @(Read-PackagingDotNetCalls -Path $first.Journal)
+                    $firstResults = Get-PackagingArgument -Call $firstCalls[1] -Name '--results-directory'
+                    $firstTrx = Join-Path $firstResults 'fixture.trx'
+                    $firstHash = (Get-FileHash -LiteralPath $firstTrx -Algorithm SHA256).Hash
+                    $seenResults = @($firstResults)
+                    foreach ($failure in @(
+                            @{ Environment = @{ TRACEFOLD_FIXTURE_FAIL_TEST = '1' }; Calls = 2; Text = 'dotnet failed with exit code 7'; Outcome = 'Failed' },
+                            @{ Environment = @{ TRACEFOLD_FIXTURE_OMIT_TRX = '1' }; Calls = 2; Text = 'produced no TRX report'; Outcome = '' },
+                            @{ Environment = @{ TRACEFOLD_FIXTURE_FAIL_SUPPORT_RESTORE = '1' }; Calls = 4; Text = 'dotnet failed with exit code 6'; Outcome = 'Passed' },
+                            @{ Environment = @{ TRACEFOLD_FIXTURE_FAIL_SUPPORT = '1' }; Calls = 5; Text = 'dotnet failed with exit code 5'; Outcome = 'Passed' })) {
+                        $failed = Invoke-PackagingPublisher -Fixture $fixture -Environment $failure.Environment
+                        Assert-True ($failed.ExitCode -ne 0) 'an SDK or evidence failure must fail the producer'
+                        Assert-Contains $failed.Output $failure.Text ('the first failure must remain visible: ' + $failed.Output)
+                        $calls = @(Read-PackagingDotNetCalls -Path $failed.Journal)
+                        Assert-Equal $failure.Calls $calls.Count 'no SDK step may run after the failing step'
+                        $results = Get-PackagingArgument -Call $calls[1] -Name '--results-directory'
+                        Assert-True ($seenResults -notcontains $results) 'a retry must never reuse an earlier evidence leaf'
+                        $seenResults += $results
+                        Assert-Equal (Join-Path $fixture.Repo '.superpowers\publish-media-desktop') ([IO.Path]::GetDirectoryName($results))
+                        $trx = Join-Path $results 'fixture.trx'
+                        if ($failure.Outcome -eq '') {
+                            Assert-True (-not [IO.File]::Exists($trx)) 'a missing report must not be fabricated'
+                        }
+                        else {
+                            Assert-True ([IO.File]::Exists($trx)) 'staging cleanup must preserve the test report after failure'
+                            $report = [xml] [IO.File]::ReadAllText($trx)
+                            Assert-Equal $failure.Outcome ([string] $report.TestRun.ResultSummary.outcome)
+                            Assert-Equal 'CONTROLLED PACKAGING SDK FIXTURE' ([string] $report.TestRun.name) 'fixture reports cannot claim real .NET execution'
+                        }
+                        Assert-Equal $firstHash ((Get-FileHash -LiteralPath $firstTrx -Algorithm SHA256).Hash) 'earlier evidence must remain unchanged'
+                        Assert-Equal $before (Get-PackagingDirectoryFingerprint -Path $fixture.Dist) 'SDK failure must preserve the previous four artifacts without leftover staging'
+                    }
                 }
                 finally { Remove-UiTestTree -Path $base }
             }

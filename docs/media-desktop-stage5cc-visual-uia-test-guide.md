@@ -1,7 +1,7 @@
 # TraceFold Stage 5C-C visual UI acceptance - operator guide
 
 This guide describes what the offline toolkit in this package can do today, how to run one
-scenario from the package root, where the results land, and what is explicitly not available yet.
+scenario from the package root, where the results land, and what is not covered here.
 It describes only capabilities that exist in the packaged scripts; it does not invent theme,
 journal or recovery commands.
 
@@ -38,20 +38,22 @@ The product package is a separate sibling directory, normally
 
 ## 3. Modes
 
-### 3.1 Complete acceptance mode (not ready in this package)
+### 3.1 Complete acceptance mode
 
-The original complete mode means every scenario (`All`) plus the light/dark theme matrix
-(`-ThemeMatrix Both`). The public entry in this package has no `ThemeMatrix` support and no
-`06-visual.ps1` scenario, so the launcher refuses the complete mode before starting anything:
+The complete mode means every registered scenario (`All`) plus the light/dark theme matrix
+(`-ThemeMatrix Both`). The launcher forwards both words to the public entry; the entry's `Visual`
+scenario runs two real rounds - apply a theme, observe the matrix, restore the original value and
+read it back - through the reviewed support command surface.
 
 ```
 Run-Stage5CC-Acceptance.cmd
 ```
 
-It prints that the complete mode needs `-Scenario All -ThemeMatrix Both`, states that ThemeMatrix
-is not implemented, exits with code 3, prints the exit code and pauses. It does not silently drop
-`Both` and run `All`, and it does not add an empty theme parameter. A complete acceptance is
-therefore **not** available from this package.
+Nothing is dropped silently: `Both` is a real parameter, not an empty placeholder, and a run that
+cannot apply, observe or restore a theme reports `Blocked`/`Failed` instead of a partial pass.
+How real the run is depends on what it is pointed at: the packaged product, the pinned driver and
+an interactive desktop. The visual matrix was **not executed** while this development package was
+built; see section 6.
 
 ### 3.2 One scenario
 
@@ -100,7 +102,6 @@ generated at all, or the summary exists but its status could not be read.
 - Exit code `2`: the entry body refused the arguments (for example an unknown scenario name that
   reaches its own resolver). An unknown name can also be rejected by the host's parameter binding
   before the body runs; that path has a different code and may write no summary.
-- Exit code `3`: complete mode was requested and is not available.
 - Exit code `4`: a pre-launch problem (missing entry, product directory, results leaf or
   PowerShell 5.1).
 
@@ -138,14 +139,17 @@ that file at that location; it is not a statement about anything outside the sel
 
 ## 6. Theme, journal and recovery - current facts
 
-- Theme following and the light/dark screenshot matrix are **not implemented** in this package.
-  The evidence schema can carry theme apply/restore/readback and journal fields when a Visual
-  scenario supplies them, but the Visual scenario entry (`06-visual.ps1`) does not exist here, so
-  no theme evidence is produced.
-- No theme journal is written by this package and there is no theme-restore command to run. Do not
-  assume the app theme was changed or restored by a run.
-- There is no recovery entry point in this package: no command resumes or repairs an interrupted
-  run. `summary.json` and the per-scenario report are evidence only.
+- The Visual scenario (`70-visual-keyboard-matrix.ps1`) drives the light/dark matrix through the
+  reviewed support theme command: each round applies a mode, observes the matrix, and restores the
+  original value in a `finally` with a readback. `CurrentOnly` writes no theme, records the
+  missing mode as `NotRun`, and a leftover journal is classified before anything starts.
+- The journal is the per-user `theme-recovery.json`; a private journal is only accepted together
+  with a fixture root and its explicit licence. The startup gate runs before any product check and
+  reports `Blocked` when it cannot answer.
+- The theme a run observed is the app theme it applied, not a claim about what the user sees now;
+  a restore that cannot be confirmed blocks the next round and keeps the journal.
+- There is no separate recovery entry point: the startup gate is the only place that resolves an
+  interrupted journal, and `summary.json` plus the per-scenario report are evidence only.
 - The entry writes only inside its own results leaf and its owned run root; it does not change
   product files.
 
@@ -153,7 +157,8 @@ that file at that location; it is not a statement about anything outside the sel
 
 - The real product, the real support CLI, the real pinned driver and a real desktop session are
   not started by the development evidence for this package. Those layers remain `NotRun`.
-- The full `All` run and the theme matrix are not available.
+- The full `All` run and the theme matrix are implemented and reachable in code, but were not
+  executed while this development package was built; no matrix result is claimed here.
 - No clean virtual machine was used, and no clean-VM result is claimed.
 - The acceptance record in `docs/media-desktop-stage5cc-visual-uia-acceptance.md` starts with every
   row `NotRun`; only a user can mark the manual rows, and only after performing them.

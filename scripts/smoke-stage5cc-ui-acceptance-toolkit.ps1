@@ -186,7 +186,7 @@ try {
     $required.Add('scripts/run-stage5cc-ui-acceptance.ps1')
     $required.Add('Run-Stage5CC-Acceptance.cmd')
     $required.Add('scripts/Run-Stage5CC-Acceptance.ps1')
-    foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')) {
+    foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'VisualGate')) {
         $required.Add('scripts/ui-acceptance/TraceFold.UiAcceptance.' + $moduleName + '.psm1')
     }
     foreach ($file in @(Get-ChildItem -LiteralPath $uiRoot -File -Filter '*.psm1' -ErrorAction SilentlyContinue)) {

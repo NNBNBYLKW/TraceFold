@@ -14,8 +14,10 @@ public sealed class PackageProbeRefactorTests
             "scripts",
             "publish-media-desktop.ps1"));
 
+        // Solution restore, test, product publish, and the separate Stage 5C-C support
+        // RID restore and publish must all use the verified local cache.
         Assert.Equal(
-            3,
+            5,
             Count(script, "\"-p:RestorePackagesPath=$localPackageSource\""));
     }
 

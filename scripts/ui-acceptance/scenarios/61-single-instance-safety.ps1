@@ -744,6 +744,7 @@ function Write-SingleInstanceExitEvidence {
             factoryRelease       = $null
             releaseActionError   = $null
             releaseReadBackError = $null
+            closeObservations    = $BusinessErrorRecord.Exception.Data['TraceFold.SingleInstanceClose']
             # Cast, not wrapped: the shared failure list is a generic object list and @() over one
             # fails on both engines.
             exitFailures         = [object[]] $Failures
@@ -830,8 +831,8 @@ function Invoke-SingleInstanceObservation {
 
 # The legal close and the same-root restart as one unit, so every branch of it can be driven without
 # a live desktop while the scenario still runs this very unit. It closes the primary through its own
-# window, waits for the exit, refuses any residue, starts the restart through the same launch path
-# with the same executable and the same owned root, waits for its window and requires it to respond.
+# window, observes its exit on the same held process object, checks only registered identities,
+# starts the restart on the same root, observes its window, and waits for its graceful exit too.
 # Neither the order nor the arguments are decided anywhere else.
 function Invoke-SingleInstanceCloseAndRestart {
     [CmdletBinding()]
@@ -845,43 +846,133 @@ function Invoke-SingleInstanceCloseAndRestart {
         [Parameter(Mandatory)][int] $InteractiveTimeoutSeconds,
         # Every step is a seam so the refusals can be driven; the defaults are the real calls.
         [scriptblock] $FindProcess = { param($id) Get-Process -Id $id -ErrorAction SilentlyContinue },
-        [scriptblock] $ProcessInventory = { @(Get-Process -Name 'TraceFold.Media' -ErrorAction SilentlyContinue) },
+        # An injected inventory returns identity records; unrelated records are ignored. The real
+        # inventory queries only the registered PIDs, never every process with the product name.
+        [scriptblock] $ProcessInventory,
         [scriptblock] $StartScenario = { param($exe, $root, $token, $support) Start-TraceFoldScenario -ExecutablePath $exe -OwnedRoot $root -RunToken $token -SupportPath $support },
         [scriptblock] $WaitWindow = { param($id, $timeout) Wait-ForProcessWindow -ProcessId $id -TimeoutSeconds $timeout },
         [scriptblock] $Observe = { param($id) Invoke-SingleInstanceObservation -ProcessId $id },
-        [scriptblock] $Sleep = { param($milliseconds) Start-Sleep -Milliseconds $milliseconds }
+        [scriptblock] $Sleep = { param($milliseconds) Start-Sleep -Milliseconds $milliseconds },
+        [Parameter(Mandatory)] $PrimaryIdentity,
+        [object[]] $OwnedProcessLedger = @()
     )
-    $closeAccepted = $false
-    $primaryProcess = & $FindProcess $PrimaryPid
-    if ($null -ne $primaryProcess) {
-        try { $closeAccepted = $primaryProcess.CloseMainWindow() } catch { $closeAccepted = $false }
+    function Test-RegisteredIdentity {
+        param($Actual, $Expected)
+        return ([int] $Actual.ProcessId -eq [int] $Expected.ProcessId -and
+            [long] $Actual.StartUtcTicks -eq [long] $Expected.StartUtcTicks -and
+            [IO.Path]::GetFullPath([string] $Actual.ExecutablePath) -ieq
+                [IO.Path]::GetFullPath([string] $Expected.ExecutablePath))
     }
-    if (-not $closeAccepted) { throw 'single.instance.primary_close_rejected' }
-    $closed = $false
-    $deadline = [DateTime]::UtcNow.AddSeconds($WaitTimeoutSeconds)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $still = & $FindProcess $PrimaryPid
-        if ($null -eq $still) { $closed = $true; break }
-        & $Sleep 250
-    }
-    if (-not $closed) { throw 'single.instance.primary_close_timeout' }
-    $residue = @(& $ProcessInventory)
-    if ($residue.Count -gt 0) { throw 'single.instance.residue_after_close' }
 
-    $restart = & $StartScenario $ExecutablePath $OwnedRoot $RunToken $SupportPath
-    $restartPid = [int] $restart.ProcessId
-    $restartWindow = & $WaitWindow $restartPid $InteractiveTimeoutSeconds
-    if ([IntPtr] $restartWindow -eq [IntPtr]::Zero) { throw 'single.instance.restart_window_missing' }
-    $restartObservation = & $Observe $restartPid
-    if ([string] $restartObservation.Status -cne 'Passed') { throw 'single.instance.restart_unresponsive' }
-    return [pscustomobject] @{
-        closeAccepted            = $closeAccepted
-        residueCount             = $residue.Count
-        restartPid               = $restartPid
-        restartWindowHandle      = ([IntPtr] $restartWindow).ToInt64()
-        restartObservationStatus = [string] $restartObservation.Status
-        restartExecutable        = $ExecutablePath
-        restartOwnedRoot         = $OwnedRoot
+    function Read-HeldIdentity {
+        param($Process)
+        # Acquire the handle before reading identity. Closing, waiting and reading the exit code
+        # then all use this object; a later PID lookup cannot substitute a different process.
+        $null = $Process.Handle
+        return [pscustomobject] @{
+            ProcessId = [int] $Process.Id
+            StartUtcTicks = $Process.StartTime.ToUniversalTime().Ticks
+            ExecutablePath = [string] $Process.MainModule.FileName
+        }
+    }
+
+    function Close-OwnedInstance {
+        param($Identity, [string] $Role)
+        $prefix = 'single.instance.' + $Role
+        if ([int] $Identity.ProcessId -le 0 -or [long] $Identity.StartUtcTicks -le 0 -or
+            -not [IO.Path]::IsPathRooted([string] $Identity.ExecutablePath) -or
+            [IO.Path]::GetFullPath([string] $Identity.ExecutablePath) -ine [IO.Path]::GetFullPath($ExecutablePath)) {
+            throw ($prefix + '_identity_invalid')
+        }
+        $facts = [pscustomobject] @{
+            role = $Role; processId = [int] $Identity.ProcessId; startUtcTicks = [long] $Identity.StartUtcTicks
+            identityMatched = $false; closeAccepted = $false; exitObserved = $false; exitCode = $null
+        }
+        [void] $closeFacts.Add($facts)
+        $process = $null
+        try {
+            $process = & $FindProcess ([int] $Identity.ProcessId)
+            if ($null -eq $process) { throw ($prefix + '_close_rejected') }
+            if (-not (Test-RegisteredIdentity -Actual (Read-HeldIdentity $process) -Expected $Identity)) {
+                throw ($prefix + '_identity_mismatch')
+            }
+            $facts.identityMatched = $true
+            if ($process.HasExited) { throw ($prefix + '_exited_before_close') }
+            $facts.closeAccepted = [bool] $process.CloseMainWindow()
+            if (-not $facts.closeAccepted) { throw ($prefix + '_close_rejected') }
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            while (-not $process.WaitForExit(0)) {
+                if ($clock.Elapsed.TotalSeconds -ge $WaitTimeoutSeconds) { throw ($prefix + '_close_timeout') }
+                & $Sleep 250
+            }
+            if (-not $process.HasExited) { throw ($prefix + '_exit_unobserved') }
+            $facts.exitObserved = $true
+            $exitValue = $null
+            try { $exitValue = $process.ExitCode } catch { $exitValue = $null }
+            if ($exitValue -isnot [int]) { throw ($prefix + '_exit_unknown') }
+            $facts.exitCode = $exitValue
+            if ($exitValue -ne 0) { throw ($prefix + '_exit_' + $exitValue) }
+            return $facts
+        }
+        finally { if ($null -ne $process) { $process.Dispose() } }
+    }
+
+    function Read-OwnedResidue {
+        param([object[]] $Ledger)
+        $observed = @()
+        if ($null -ne $ProcessInventory) {
+            $observed = @(& $ProcessInventory $Ledger)
+        }
+        else {
+            foreach ($identity in $Ledger) {
+                $live = & $FindProcess ([int] $identity.ProcessId)
+                if ($null -eq $live) { continue }
+                try {
+                    if (-not $live.HasExited) { $observed += Read-HeldIdentity $live }
+                }
+                finally { $live.Dispose() }
+            }
+        }
+        foreach ($actual in $observed) {
+            foreach ($identity in $Ledger) {
+                if (Test-RegisteredIdentity -Actual $actual -Expected $identity) { $actual; break }
+            }
+        }
+    }
+
+    $closeFacts = New-Object 'System.Collections.Generic.List[object]'
+    try {
+        if ([int] $PrimaryIdentity.ProcessId -ne $PrimaryPid) { throw 'single.instance.primary_identity_mismatch' }
+        $owned = @($PrimaryIdentity) + @($OwnedProcessLedger)
+        $primaryClose = Close-OwnedInstance -Identity $PrimaryIdentity -Role 'primary'
+        $residue = @(Read-OwnedResidue -Ledger $owned)
+        if ($residue.Count -gt 0) { throw 'single.instance.residue_after_close' }
+
+        $restart = & $StartScenario $ExecutablePath $OwnedRoot $RunToken $SupportPath
+        $restartPid = [int] $restart.ProcessId
+        $restartWindow = & $WaitWindow $restartPid $InteractiveTimeoutSeconds
+        if ([IntPtr] $restartWindow -eq [IntPtr]::Zero) { throw 'single.instance.restart_window_missing' }
+        $restartObservation = & $Observe $restartPid
+        if ([string] $restartObservation.Status -cne 'Passed') { throw 'single.instance.restart_unresponsive' }
+        $restartClose = Close-OwnedInstance -Identity $restart -Role 'restart'
+        $restartResidue = @(Read-OwnedResidue -Ledger ($owned + @($restart)))
+        if ($restartResidue.Count -gt 0) { throw 'single.instance.residue_after_restart_close' }
+        return [pscustomobject] @{
+            closeAccepted            = $primaryClose.closeAccepted
+            primaryClose             = $primaryClose
+            residueCount             = $residue.Count
+            restartPid               = $restartPid
+            restartWindowHandle      = ([IntPtr] $restartWindow).ToInt64()
+            restartObservationStatus = [string] $restartObservation.Status
+            restartExecutable        = $ExecutablePath
+            restartOwnedRoot         = $OwnedRoot
+            restartClose             = $restartClose
+            restartResidueCount       = $restartResidue.Count
+        }
+    }
+    catch {
+        $_.Exception.Data['TraceFold.SingleInstanceClose'] = [object[]] $closeFacts
+        throw
     }
 }
 
@@ -1107,20 +1198,15 @@ try {
     $restartFacts = Invoke-SingleInstanceCloseAndRestart -PrimaryPid $primaryPid -ExecutablePath $exe -OwnedRoot $root `
         -RunToken $RunToken -SupportPath $SupportPath -WaitTimeoutSeconds $WaitTimeoutSeconds `
         -InteractiveTimeoutSeconds $InteractiveTimeoutSeconds `
+        -PrimaryIdentity $primary -OwnedProcessLedger @($secondary) `
         -StartScenario { param($restartExe, $restartRoot, $restartToken, $restartSupport) Start-TraceFoldScenario -ExecutablePath $restartExe -OwnedRoot $restartRoot -RunToken $restartToken -SupportPath $restartSupport -StartProcess $LaunchProcess }
     $closeAccepted = [bool] $restartFacts.closeAccepted
     $restartPid = [int] $restartFacts.restartPid
     $restartWindow = [IntPtr] $restartFacts.restartWindowHandle
     $restartObservationStatus = [string] $restartFacts.restartObservationStatus
-    # Only now, with the restart actually verified, may a stage name say so.
-    $scenarioStage = 'restart-verified'
-
-    # The restart is a new process on the same root: a brand new window is expected here, and the
-    # earlier window identity is never reused to stand in for it.
-    $restartProcess = Get-Process -Id $restartPid -ErrorAction SilentlyContinue
-    if ($null -ne $restartProcess) {
-        try { [void] $restartProcess.CloseMainWindow() } catch { }
-    }
+    # The unit returns only after both the restart observation and its graceful exit succeeded.
+    # Runner cleanup remains a failure safety net; it cannot supply this successful close fact.
+    $scenarioStage = 'restart-closed'
 
     # --- evidence --------------------------------------------------------------------------------
     $evidence = [ordered] @{
@@ -1165,10 +1251,13 @@ try {
         libraryFilesAfter        = @($libraryAfter).Count
         libraryFilesCreated      = @($libraryCreated)
         closeAccepted            = $closeAccepted
+        primaryClose             = $restartFacts.primaryClose
         residueAfterClose        = [int] $restartFacts.residueCount
         restartPid               = $restartPid
         restartWindowHandle      = ([IntPtr] $restartWindow).ToInt64()
         restartObservationStatus = $restartObservationStatus
+        restartClose             = $restartFacts.restartClose
+        residueAfterRestartClose = [int] $restartFacts.restartResidueCount
         activationProof          = 'a controlled window owned by this harness took the foreground before the second start; afterwards the foreground handle was read once, that handle owner is the primary pid and the handle is the primary window'
         observabilityNote        = 'the inspect calls show the instance is observable and are not offered as the activation proof'
         databaseScopeNote        = 'only the one expected database and the absence of a second one are asserted; no byte-freeze of the main database, WAL or SHM'

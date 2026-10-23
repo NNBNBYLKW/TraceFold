@@ -31,7 +31,10 @@ $script:uiAcceptanceScenarios = [ordered] @{
     # an 'All' request runs it in that position. The key is fixed: the registry name, the entry file
     # and the runner's own name for the scenario all have to agree.
     SingleInstance = '61-single-instance-safety.ps1'
-    Visual        = '06-visual.ps1'
+    # The visual matrix is this scenario: the Task 13 gate proves both themes, the three DIP
+    # viewports and every named state from the live UIA tree, and hands its matrix to the report
+    # outlet. The key, the entry file and the name the report records are the same word.
+    Visual        = '70-visual-keyboard-matrix.ps1'
 }
 
 function Get-UiAcceptanceScenarioName {

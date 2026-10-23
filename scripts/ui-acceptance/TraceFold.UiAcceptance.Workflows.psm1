@@ -164,7 +164,7 @@ function Get-UiAcceptanceNamedNodes {
             }
             $ok
         })
-    return ,$matches
+    return $matches
 }
 
 <#
@@ -207,7 +207,7 @@ function Get-UiAcceptanceListRowNames {
         $childNodes = @(Get-UiAcceptanceNodeChildren -Node $node)
         for ($index = $childNodes.Count - 1; $index -ge 0; $index--) { $pending.Push($childNodes[$index]) }
     }
-    return ,@($names.ToArray())
+    return $names.ToArray()
 }
 
 <#
@@ -265,7 +265,7 @@ function Get-UiAcceptanceListRowTexts {
         $childNodes = @(Get-UiAcceptanceNodeChildren -Node $node)
         for ($index = $childNodes.Count - 1; $index -ge 0; $index--) { $pending.Push($childNodes[$index]) }
     }
-    return ,@($rows.ToArray())
+    return $rows.ToArray()
 }
 
 <#
@@ -600,12 +600,244 @@ function ConvertTo-UiAcceptanceProcessArgument {
     Standard output and standard error are drained together, because a child that fills the error
     pipe while nothing reads it would block before it could exit.
 #>
+<#
+.SYNOPSIS
+    Sends one standard-input payload to a started child and records what actually happened.
+
+.DESCRIPTION
+    This is the production sender: the support wrapper below calls it, and the stdin failure
+    counter-example drives the same function against its own, already exited reader. One
+    implementation means the write, flush and close stages are the same bytes, the same budget and
+    the same record everywhere.
+
+    The two stages are sequential - a StreamWriter refuses a second operation while one is in
+    flight - and every wait draws on the caller's single stopwatch, so the pair is bounded by one
+    budget instead of two independent timeouts. A faulted write is recorded, never retried: the
+    caller still collects the exit and stream facts.
+
+    Returns the state word (closed-empty, written, failed, timed-out or close-failed) and fills the
+    caller's record in place with the stage, the completion flag and the fault type/HResult.
+#>
+<#
+.SYNOPSIS
+    Builds the timeout failure of the stdin stage with the same record the sender filled.
+#>
+function New-UiAcceptanceStdinTimeout {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][int] $TimeoutMs, [Parameter(Mandatory)] $Detail)
+
+    $failure = [System.TimeoutException]::new(
+        'The support CLI did not accept standard input within ' + [string] $TimeoutMs + ' ms.')
+    $failure.Data['TracefoldStdinDetail'] = $Detail
+    $failure.Data['TracefoldStdinStage'] = [string] $Detail.stage
+    return $failure
+}
+
+<#
+.SYNOPSIS
+    Boundedly terminates a failed support child and records what was actually observed.
+
+.DESCRIPTION
+    Kill is a request, not an exit. This helper records the request result, its scope, a finite
+    WaitForExit observation and finite completion of both already-started read tasks. A failed
+    stream wait leaves its completion flags false. The caller's first exception remains the cause.
+#>
+function Complete-UiAcceptanceSupportTermination {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Diagnostics.Process] $Process,
+        [AllowNull()] $StdoutTask,
+        [AllowNull()] $StderrTask
+    )
+
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $exitWaitMs = 2000
+    $streamWaitMs = 2000
+    $termination = [ordered] @{
+        requested = $false
+        returned = $null
+        error = ''
+        scope = 'none'
+        descendantsObserved = $null
+        exitWaitMs = $exitWaitMs
+        exitObserved = $null
+        streamsWaitMs = $streamWaitMs
+        streamsCompleted = $false
+        stdoutCompleted = $false
+        stderrCompleted = $false
+        stdoutDrainObserved = $false
+        stderrDrainObserved = $false
+        streamError = ''
+        elapsedMs = $null
+    }
+
+    $alreadyExited = $null
+    try { $alreadyExited = [bool] $Process.HasExited } catch { $termination.error = 'HasExited: ' + [string] $_.Exception.Message }
+    if ($alreadyExited -eq $true) {
+        $termination.scope = 'already-exited'
+        $termination.exitObserved = $true
+    }
+    else {
+        $termination.requested = $true
+        try {
+            $Process.Kill($true)
+            $termination.returned = $true
+            $termination.scope = 'process-tree'
+        }
+        catch {
+            $treeError = $_.Exception.GetType().Name + ': ' + [string] $_.Exception.Message
+            try {
+                $Process.Kill()
+                $termination.returned = $true
+                $termination.scope = 'process'
+                $termination.error = $treeError
+            }
+            catch {
+                $termination.returned = $false
+                $termination.scope = 'process'
+                $termination.error = $treeError + ' | single: ' + $_.Exception.GetType().Name + ': ' + [string] $_.Exception.Message
+            }
+        }
+        try { $termination.exitObserved = [bool] $Process.WaitForExit($exitWaitMs) }
+        catch { $termination.exitObserved = $null; $termination.error += ' | WaitForExit: ' + [string] $_.Exception.Message }
+    }
+
+    $tasks = @()
+    foreach ($task in @($StdoutTask, $StderrTask)) {
+        if ($null -ne $task) { $tasks += $task }
+    }
+    if ($tasks.Count -gt 0) {
+        try {
+            $termination.streamsCompleted = [bool] [System.Threading.Tasks.Task]::WaitAll(
+                [System.Threading.Tasks.Task[]] $tasks, [int] $streamWaitMs)
+        }
+        catch {
+            $termination.streamsCompleted = $false
+            $termination.streamError = $_.Exception.GetType().Name + ': ' + [string] $_.Exception.Message
+        }
+        try { $termination.stdoutCompleted = ($null -ne $StdoutTask -and [bool] $StdoutTask.IsCompleted) }
+        catch { $termination.stdoutCompleted = $false }
+        try { $termination.stderrCompleted = ($null -ne $StderrTask -and [bool] $StderrTask.IsCompleted) }
+        catch { $termination.stderrCompleted = $false }
+        if ($termination.stdoutCompleted -and $null -ne $StdoutTask) {
+            try { [void] $StdoutTask.GetAwaiter().GetResult(); $termination.stdoutDrainObserved = $true }
+            catch { $termination.streamError += ' | stdout: ' + [string] $_.Exception.Message }
+        }
+        if ($termination.stderrCompleted -and $null -ne $StderrTask) {
+            try { [void] $StderrTask.GetAwaiter().GetResult(); $termination.stderrDrainObserved = $true }
+            catch { $termination.streamError += ' | stderr: ' + [string] $_.Exception.Message }
+        }
+    }
+
+    $clock.Stop()
+    $termination.elapsedMs = [int] $clock.ElapsedMilliseconds
+    return $termination
+}
+
+function Send-UiAcceptanceStandardInput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Diagnostics.Process] $Process,
+        [AllowEmptyString()][string] $StandardInput = '',
+        [Parameter(Mandatory)][int] $TimeoutMs,
+        [Parameter(Mandatory)][System.Diagnostics.Stopwatch] $Budget,
+        [Parameter(Mandatory)] $Detail
+    )
+
+    $state = 'closed-empty'
+    try {
+        if (-not [string]::IsNullOrEmpty($StandardInput)) {
+            $Detail.stage = 'write'
+            $write = $Process.StandardInput.WriteAsync($StandardInput)
+            $remaining = $TimeoutMs - [int] $Budget.ElapsedMilliseconds
+            if ($remaining -lt 1) {
+                $state = 'timed-out'
+                throw (New-UiAcceptanceStdinTimeout -TimeoutMs $TimeoutMs -Detail $Detail)
+            }
+            $writeOk = $false
+            try { $writeOk = $write.Wait([int] $remaining) }
+            catch [System.AggregateException] {
+                # A faulted write is a broken input pipe. Recorded, not retried; the exit and
+                # stream facts are still collected by the caller.
+                $state = 'failed'
+                $inner = $_.Exception.GetBaseException()
+                $Detail.writeFault = $inner.GetType().Name + ': ' + [string] $inner.Message
+                $Detail.writeHResult = [int] $inner.HResult
+            }
+            $Detail.writeCompleted = [bool] $writeOk
+            if (-not $writeOk -and $state -cne 'failed') {
+                $state = 'timed-out'
+                throw (New-UiAcceptanceStdinTimeout -TimeoutMs $TimeoutMs -Detail $Detail)
+            }
+            if ($writeOk) {
+                $Detail.stage = 'flush'
+                $flush = $Process.StandardInput.FlushAsync()
+                $remaining = $TimeoutMs - [int] $Budget.ElapsedMilliseconds
+                if ($remaining -lt 1) {
+                    $state = 'timed-out'
+                    throw (New-UiAcceptanceStdinTimeout -TimeoutMs $TimeoutMs -Detail $Detail)
+                }
+                $flushOk = $false
+                try { $flushOk = $flush.Wait([int] $remaining) }
+                catch [System.AggregateException] {
+                    $state = 'failed'
+                    $inner = $_.Exception.GetBaseException()
+                    $Detail.flushFault = $inner.GetType().Name + ': ' + [string] $inner.Message
+                    $Detail.flushHResult = [int] $inner.HResult
+                }
+                $Detail.flushCompleted = [bool] $flushOk
+                if (-not $flushOk -and $state -cne 'failed') {
+                    $state = 'timed-out'
+                    throw (New-UiAcceptanceStdinTimeout -TimeoutMs $TimeoutMs -Detail $Detail)
+                }
+                if ($flushOk) { $state = 'written' }
+            }
+        }
+    }
+    catch [System.IO.IOException] {
+        # The child closed its input side before the payload was written. The payload did not
+        # reach it; that is a fact to record, not a reason to lose the exit and stream facts.
+        # A synchronous fault names the stage it happened in, so the record is not a bare word.
+        $state = 'failed'
+        $inner = $_.Exception
+        $text = $inner.GetType().Name + ': ' + [string] $inner.Message
+        if ($Detail.stage -ceq 'flush') {
+            $Detail.flushFault = $text
+            $Detail.flushHResult = [int] $inner.HResult
+        }
+        else {
+            $Detail.writeFault = $text
+            $Detail.writeHResult = [int] $inner.HResult
+        }
+    }
+    finally {
+        if ($state -ceq 'written' -or $state -ceq 'closed-empty') {
+            # Close is attempted only after FlushAsync itself completed inside the budget. That
+            # proves this side finished its write; it does not prove the reader consumed the
+            # bytes. A pipe error on the way out is a fact about the child, not a reason to lose
+            # the exit.
+            try { $Process.StandardInput.Close(); $Detail.closeState = 'closed' }
+            catch { $state = 'close-failed'; $Detail.closeState = 'failed' }
+        }
+        else {
+            # The write failed or its budget ran out. The buffered payload is never flushed after
+            # the budget: dispose the raw stream so no deferred write can block here.
+            $Detail.closeState = 'released-raw'
+            try { $Process.StandardInput.BaseStream.Dispose() } catch { }
+        }
+    }
+    return $state
+}
+
 function Invoke-UiAcceptanceSupportCommand {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $SupportPath,
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Arguments,
-        [int] $TimeoutMs = 60000
+        [int] $TimeoutMs = 60000,
+        # A hand-back receipt travels here and never in argv, so the child sees it on its input
+        # pipe and no command line, report or public stream ever carries the capability.
+        [AllowEmptyString()][string] $StandardInput = ''
     )
 
     if (-not [IO.File]::Exists($SupportPath)) { throw 'The support CLI is missing.' }
@@ -634,6 +866,7 @@ function Invoke-UiAcceptanceSupportCommand {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    $start.RedirectStandardInput = $true
     # The payload is UTF-8; pinning it here keeps it independent of the machine's code page.
     $utf8 = [Text.UTF8Encoding]::new($false)
     $start.StandardOutputEncoding = $utf8
@@ -641,21 +874,71 @@ function Invoke-UiAcceptanceSupportCommand {
 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $start
+    # One budget covers "the child accepted its input" and "the child exited". The drain budget
+    # below stays a separate, bounded margin because it measures a different event: the pipes
+    # closing after the exit.
+    $budget = [System.Diagnostics.Stopwatch]::StartNew()
+    # One record of what the stdin stage actually did: which sub-stage was running, whether each
+    # task completed, and the fault type/HResult when one did not. The state word alone cannot
+    # tell "the child closed its side" from "this side never finished".
+    $stdinDetail = [ordered] @{
+        stage = 'none'
+        writeCompleted = $null
+        writeFault = ''
+        writeHResult = $null
+        flushCompleted = $null
+        flushFault = ''
+        flushHResult = $null
+        closeState = 'not-attempted'
+    }
+    $stdout = $null
+    $stderr = $null
     try {
         [void] $process.Start()
+        # Both output pipes are drained from before the first byte is sent: a child that writes
+        # its answer first and only then reads cannot deadlock against a parent that is still
+        # writing. The same tasks are awaited after the exit, so nothing is read twice.
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        $exited = $process.WaitForExit($TimeoutMs)
+        # stdin is always redirected and always closed: a hand-back receipt travels here and
+        # never in argv, and a child that unexpectedly reads must see EOF instead of blocking.
+        # The write and the flush are asynchronous and share the exit budget, so a child that
+        # never reads cannot hold this caller open.
+        $stdinState = Send-UiAcceptanceStandardInput -Process $process -StandardInput $StandardInput `
+            -TimeoutMs $TimeoutMs -Budget $budget -Detail $stdinDetail
+        $remaining = $TimeoutMs - [int] $budget.ElapsedMilliseconds
+        if ($remaining -lt 1) {
+            throw [System.TimeoutException]::new('The support CLI did not finish within ' + [string] $TimeoutMs + ' ms.')
+        }
+        $exited = $process.WaitForExit([int] $remaining)
         if (-not $exited) {
-            try { $process.Kill($true) } catch { try { $process.Kill() } catch { } }
-            [void] $process.WaitForExit(2000)
-            throw ('The support CLI did not finish within ' + [string] $TimeoutMs + ' ms.')
+            throw [System.TimeoutException]::new('The support CLI did not finish within ' + [string] $TimeoutMs + ' ms.')
+        }
+        # Exit is not the end of the evidence: both pipes must also finish inside a bounded
+        # budget. A stream that never closes is an environment failure, not a partial success.
+        $drainMs = [Math]::Max(1000, [Math]::Min(5000, $TimeoutMs))
+        $tasks = [System.Threading.Tasks.Task[]] @($stdout, $stderr)
+        $drained = $false
+        try { $drained = [System.Threading.Tasks.Task]::WaitAll($tasks, [int] $drainMs) } catch { $drained = $false }
+        if (-not $drained) {
+            throw [System.InvalidOperationException]::new('The support CLI left its output streams open after exit.')
         }
         return [pscustomobject] @{
             ExitCode = $process.ExitCode
             Stdout   = $stdout.GetAwaiter().GetResult()
             Stderr   = $stderr.GetAwaiter().GetResult()
+            StdinState = $stdinState
+            StdinDetail = $stdinDetail
         }
+    }
+    catch {
+        $caught = $_
+        $termination = Complete-UiAcceptanceSupportTermination -Process $process `
+            -StdoutTask $stdout -StderrTask $stderr
+        $stdinDetail['termination'] = $termination
+        $caught.Exception.Data['TracefoldTermination'] = $termination
+        $caught.Exception.Data['TracefoldStdinDetail'] = $stdinDetail
+        throw
     }
     finally { $process.Dispose() }
 }

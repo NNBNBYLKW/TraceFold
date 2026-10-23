@@ -9,7 +9,7 @@
 #     still alive before it sends the one newline the pause needs, and only then reads the code.
 #
 # What it is not: the real product/Support/driver, the complete All+ThemeMatrix run, a clean VM, or
-# a claim that the visual acceptance passed. The complete mode must refuse with its own code.
+# a claim that the visual acceptance passed. The complete mode is proved as a forwarded request.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -198,20 +198,32 @@ function New-LauncherFixture {
 function Get-TestCases {
     return @(
         @{
-            Name = 'the package-root launcher refuses the complete mode with code 3 and pauses'
+            Name = 'the complete mode forwards All and ThemeMatrix Both to the entry'
             Body = {
                 $base = New-OfflineBase
                 try {
                     $fixture = New-LauncherFixture -Base $base
+                    # What this boundary owes is the request it builds, not the matrix the entry
+                    # would run: a recording entry proves the exact forwarded words without
+                    # claiming the complete visual run happened in this suite. The entry's own
+                    # Both/CurrentOnly behaviour is proved by the entry-level cases.
+                    $stub = @'
+param()
+$words = @($args | ForEach-Object { [string] $_ })
+[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'entry-arguments.txt'), ($words -join '|'), [Text.UTF8Encoding]::new($false))
+exit 0
+'@
+                    [IO.File]::WriteAllText((Join-Path $fixture.Package.Root 'scripts\run-stage5cc-ui-acceptance.ps1'), $stub, [Text.UTF8Encoding]::new($false))
                     $result = Invoke-LauncherCommand -CommandPath $fixture.Command -WorkingDirectory $fixture.Cwd
                     Write-LauncherEvidence -Name 'complete-mode' -Result $result
                     Assert-True $result.PromptSeen 'the launcher terminal line must appear'
                     Assert-True $result.AliveAtPrompt 'the launcher must still be waiting after its terminal line'
-                    Assert-Equal 3 $result.ExitCode ('complete mode exit code; output: ' + $result.Output)
-                    Assert-Contains $result.Output 'ThemeMatrix' ('the missing capability must be named: ' + $result.Output)
-                    Assert-Contains $result.Output 'Not ready' ('the refusal must be explicit: ' + $result.Output)
-                    Assert-Contains $result.Output 'Exit code: 3' ('the summary line must carry the code: ' + $result.Output)
-                    Assert-True (-not [IO.Directory]::Exists((Join-Path $fixture.Package.Root 'results'))) 'the complete mode must not create a results leaf'
+                    Assert-Equal 0 $result.ExitCode ('complete mode exit code; output: ' + $result.Output)
+                    Assert-Contains $result.Output 'Scenario: All' ('the complete mode must be announced: ' + $result.Output)
+                    $recorded = [IO.File]::ReadAllText((Join-Path $fixture.Package.Root 'scripts\entry-arguments.txt'))
+                    Assert-Contains $recorded '-Scenario|All' ('the complete request must reach the entry: ' + $recorded)
+                    Assert-Contains $recorded '-ThemeMatrix|Both' ('both themes must reach the entry: ' + $recorded)
+                    Assert-True (-not [IO.Directory]::Exists((Join-Path $fixture.Package.Root 'results'))) 'the launcher itself must not create a results leaf'
                 }
                 finally { Remove-UiTestTree -Path $base }
             }

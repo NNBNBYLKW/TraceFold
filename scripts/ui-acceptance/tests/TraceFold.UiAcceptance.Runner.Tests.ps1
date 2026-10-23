@@ -333,7 +333,16 @@ function New-Stage5CCFakeRepository {
     $fakeUiRoot = Join-Path $scripts 'ui-acceptance'
     $fakeScenarios = Join-Path $fakeUiRoot 'scenarios'
     [void][IO.Directory]::CreateDirectory($fakeScenarios)
-    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')) {
+    # A git boundary that stops the upward search: a bare empty .git directory is rejected by git
+    # itself, so the enclosing repository would still answer for this tree. A minimal but valid
+    # repository with an unborn branch makes 'rev-parse HEAD' fail here, which is exactly the
+    # "this tree has no commit" state under test.
+    $fakeGit = Join-Path $Path '.git'
+    [void][IO.Directory]::CreateDirectory((Join-Path $fakeGit 'objects'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $fakeGit 'refs'))
+    [IO.File]::WriteAllText((Join-Path $fakeGit 'HEAD'), 'ref: refs/heads/master' + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $fakeGit 'config'), "[core]`nrepositoryformatversion = 0`nbare = false`n", [Text.UTF8Encoding]::new($false))
+    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'VisualGate')) {
         Copy-Item -LiteralPath (Join-Path $script:uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')) -Destination (Join-Path $fakeUiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1'))
     }
     Copy-Item -LiteralPath (Join-Path $script:root 'scripts/run-stage5cc-ui-acceptance.ps1') -Destination (Join-Path $scripts 'run-stage5cc-ui-acceptance.ps1')
@@ -731,7 +740,7 @@ function Get-TestCases {
         @{
             Name = 'runner cleans up and reports success'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 $root = Join-Path $base 'owned'
                 [void][IO.Directory]::CreateDirectory($root)
                 $script:cleanupCalled = 0
@@ -753,7 +762,7 @@ function Get-TestCases {
             # checked by the helper alone (M12) never proves what the writer does with it.
             Name = 'a real metadata evidence block crosses the runner writer without collapsing null, zero, false, empty or Int64'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 $root = Join-Path $base 'owned'
                 [void][IO.Directory]::CreateDirectory($root)
                 # A fixture capability value, not a real one: it is the exact RunToken the writer
@@ -902,7 +911,7 @@ function Get-TestCases {
         @{
             Name = 'runner captures failure before cleanup and reports failure'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 $root = Join-Path $base 'owned'
                 [void][IO.Directory]::CreateDirectory($root)
                 $png = Join-Path $root 'shot.png'
@@ -931,7 +940,7 @@ function Get-TestCases {
             Name = 'runner cleanup executes after simulated interruption and timeout'
             Body = {
                 foreach ($label in @('interrupt','timeout')) {
-                    $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                    $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                     $root = Join-Path $base 'owned'
                     [void][IO.Directory]::CreateDirectory($root)
                     $script:cleanupCalled = 0
@@ -947,7 +956,7 @@ function Get-TestCases {
         @{
             Name = 'runner closes then stops verified process then requests owned root deletion'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 $root = Join-Path $base 'owned'
                 [void][IO.Directory]::CreateDirectory($root)
                 $log = Join-Path $base 'order.txt'
@@ -976,7 +985,7 @@ function Get-TestCases {
         @{
             Name = 'cleanup failure prevents an overall pass'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 $root = Join-Path $base 'owned'
                 [void][IO.Directory]::CreateDirectory($root)
                 try {
@@ -992,7 +1001,7 @@ function Get-TestCases {
         @{
             Name = 'entry dispatcher passes only declared host seams'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory($base)
                 $entry = Join-Path $base 'entry.ps1'
                 [IO.File]::WriteAllText($entry, "param([Parameter(Mandatory)][string] `$ScenarioId,[string] `$Sink)`n`$ScenarioId", [Text.UTF8Encoding]::new($false))
@@ -1035,7 +1044,7 @@ function Get-TestCases {
         @{
             Name = 'run root is created by the support tool and verified in place'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory($base)
                 try {
                     $env:TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN = '1'
@@ -1093,7 +1102,7 @@ function Get-TestCases {
         @{
             Name = 'startup layout scenario proves the contract across all three viewports'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
                 [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
                 $argvLog = Join-Path $base 'argv.jsonl'
@@ -1218,7 +1227,7 @@ function Get-TestCases {
         @{
             Name = 'startup layout reports the pinned driver inspect schema mismatch'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
                 [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
                 $sequence = Join-Path $base 'tree-sequence.json'
@@ -1248,7 +1257,7 @@ function Get-TestCases {
         @{
             Name = 'startup layout scenario reports blocked when the interactive desktop is unavailable'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
                 [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
                 try {
@@ -1271,7 +1280,7 @@ function Get-TestCases {
         @{
             Name = 'startup layout scenario fails when a contract entry has no unique match'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
                 [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
                 try {
@@ -1296,7 +1305,7 @@ function Get-TestCases {
         @{
             Name = 'startup layout scenario enforces the fixed-name row policy before any preparation'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
                 [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
                 $argvLog = Join-Path $base 'argv.jsonl'
@@ -1325,7 +1334,7 @@ function Get-TestCases {
         @{
             Name = 'startup layout scenario blocks instead of failing when the fixture asset does not match'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
                 [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
                 $argvLog = Join-Path $base 'argv.jsonl'
@@ -1355,7 +1364,7 @@ function Get-TestCases {
         @{
             Name = 'entry blocked output contains no absolute owned paths'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory($base)
                 [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
                 try {
@@ -1376,7 +1385,7 @@ function Get-TestCases {
         @{
             Name = 'request completeness asks only for the entries a named request owes'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 $scenarios = Join-Path $base 'scenarios'
                 [void][IO.Directory]::CreateDirectory($scenarios)
                 try {
@@ -1420,7 +1429,7 @@ function Get-TestCases {
         @{
             Name = 'an All request records every unimplemented entry and dispatches nothing'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo') -Missing @('Visual')
                     $out = Join-Path $base 'out-all'
@@ -1462,7 +1471,7 @@ function Get-TestCases {
         @{
             Name = 'a named request is not blocked by an unrelated unimplemented entry'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     # Visual stays unimplemented on purpose: verifying the taxonomy slice must not
                     # depend on another slice landing first.
@@ -1493,7 +1502,7 @@ function Get-TestCases {
         @{
             Name = 'a request whose only entry is missing is blocked before dispatch with zero dispatch'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo') -Missing @('Visual')
                     $out = Join-Path $base 'out-visual'
@@ -1531,7 +1540,7 @@ function Get-TestCases {
         @{
             Name = 'an All request whose entries all exist clears the precheck and walks on'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo')
                     $out = Join-Path $base 'out-all-complete'
@@ -1555,7 +1564,7 @@ function Get-TestCases {
         @{
             Name = 'the precheck is recomputed every run and never inherits an earlier clean check'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo')
                     $first = Join-Path $base 'out-first'
@@ -1591,7 +1600,7 @@ function Get-TestCases {
         @{
             Name = 'the checkedUtc reader preserves explicit-offset lexemes and refuses every other shape'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     # Controlled summary materials are written to disk exactly as summaries are and
                     # read back through Read-Stage5CCSummary; the facts below come from the real
@@ -1689,7 +1698,7 @@ function Get-TestCases {
         @{
             Name = 'the checkedUtc comparison holds under a culture switch and the culture is restored'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     $writeMaterial = {
                         param([string] $Directory, [string] $Text)
@@ -1754,7 +1763,7 @@ function Get-TestCases {
         @{
             Name = 'the persisted completeness check survives an independent re-read field by field'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 try {
                     $repo = New-Stage5CCFakeRepository -Path (Join-Path $base 'repo') -Missing @('Conflict', 'Visual')
                     $out = Join-Path $base 'out-persist'
@@ -1803,7 +1812,7 @@ function Get-TestCases {
         @{
             Name = 'preparation success hands the prepared paths to one real scenario invocation'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory($base)
                 $previousScenarioJournal = $env:TRACEFOLD_STUB_SCENARIO_JOURNAL
                 $previousSupportJournal = $env:TRACEFOLD_STUB_SUPPORT_JOURNAL
@@ -1885,7 +1894,7 @@ function Get-TestCases {
         @{
             Name = 'a preparation failure after the owned root exists counts nothing and cleans up'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory($base)
                 $previousScenarioJournal = $env:TRACEFOLD_STUB_SCENARIO_JOURNAL
                 $previousSupportJournal = $env:TRACEFOLD_STUB_SUPPORT_JOURNAL
@@ -1940,7 +1949,7 @@ function Get-TestCases {
         @{
             Name = 'a failing scenario counts one dispatch and keeps the cleanup and failure gates'
             Body = {
-                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N'))
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
                 [void][IO.Directory]::CreateDirectory($base)
                 $previousScenarioJournal = $env:TRACEFOLD_STUB_SCENARIO_JOURNAL
                 $previousSupportJournal = $env:TRACEFOLD_STUB_SUPPORT_JOURNAL

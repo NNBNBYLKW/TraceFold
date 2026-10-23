@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata', 'OfflineEntry', 'Packaging', 'Launcher')]
+    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata', 'OfflineEntry', 'Packaging', 'Launcher', 'Visual')]
     [string] $Suite = 'All'
 )
 
@@ -73,6 +73,12 @@ $script:suites = [ordered] @{
     # entry. Every case proves the console was still open before the controlled input arrived.
     Launcher = @(
         'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Launcher.Tests.ps1'
+    )
+    # Task 13's visual matrix: the shipped gate module is imported and driven with a counted
+    # support stub, and the scenario, entry, registry and template are read for the wiring the
+    # behaviour cannot reach. Nothing starts a product, driver or real registry operation.
+    Visual = @(
+        'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.VisualScenario.Tests.ps1'
     )
 }
 
@@ -145,7 +151,7 @@ function Get-UiTestPngBytes {
 }
 
 # Make the toolkit modules available to the test files.
-foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows')) {
+foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'VisualGate')) {
     $path = Join-Path $script:uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')
     if (Test-Path -LiteralPath $path) {
         Import-Module -Name $path -Force -DisableNameChecking

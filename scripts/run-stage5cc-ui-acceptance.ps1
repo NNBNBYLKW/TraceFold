@@ -44,7 +44,26 @@ param(
     # Package check only: verifies toolkit.json and every member exactly as a run would, then
     # exits before the product, output, driver or support is touched. The packaging pipeline uses
     # this to prove a freshly staged toolkit is consumable without starting anything.
-    [switch] $ValidateOnly
+    [switch] $ValidateOnly,
+    # Task 13's visual matrix is only a full pass when both Windows app themes are exercised.
+    # CurrentOnly performs no registry write and records the missing mode as NotRun.
+    [ValidateSet('Both','CurrentOnly')]
+    [string] $ThemeMatrix = 'Both',
+    # A caller bound to a private journal (an acceptance fixture) names it here. The gate, its
+    # presence classification and every theme command then run against that path; production
+    # callers leave it empty and keep the one per-user journal.
+    [AllowEmptyString()]
+    [string] $ThemeJournalPath = '',
+    # The adapter side of the same boundary. A private journal alone does not stop a recovery from
+    # writing the production registry, so the fixture root and its explicit licence travel with
+    # the request: the entry's own gate and the scenario's gate then answer from one controlled
+    # boundary. Without the switch the root is not spent and the production adapters stand.
+    [AllowEmptyString()]
+    [string] $ThemeFixtureRoot = '',
+    [switch] $AllowThemeFixture,
+    # The caller states that the product and window under observation are controlled stand-ins.
+    # Absent, the visual data keeps its provenance unknown instead of claiming a real observation.
+    [switch] $SyntheticObservation
 )
 
 Set-StrictMode -Version Latest
@@ -313,7 +332,7 @@ function Read-Stage5CCToolkitPackage {
     # support and driver payloads that are copied into the run root. A file that is present but
     # unlisted would otherwise be imported or copied without ever being hashed.
     $uiRootFull = Join-Path $rootFull 'scripts/ui-acceptance'
-    $moduleNames = @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')
+    $moduleNames = @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'VisualGate')
     $memberIndex = @{}
     foreach ($row in $rows) { $memberIndex[[string] $row.Key] = $row }
     Assert-Stage5CCToolkitFileCovered -Root $rootFull -Path (Join-Path $rootFull 'scripts/run-stage5cc-ui-acceptance.ps1') -Members $seen -Label 'entry'
@@ -419,6 +438,9 @@ Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Processes.psm1')
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Runner.psm1') -Force -DisableNameChecking
 # Metadata and provenance producers: one implementation per field family, consumed below.
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Metadata.psm1') -Force -DisableNameChecking
+# Task 13's journal gate and theme response validators: one implementation shared with the
+# visual scenario, imported here so the gate can run before this entry touches a product.
+Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.VisualGate.psm1') -Force -DisableNameChecking
 
 # Registry entries that load the aggregate engine themselves. Each one resolves the sibling copy
 # under scenarios/ first and falls back to the parent directory, so the package check below reads
@@ -620,7 +642,10 @@ function New-Stage5CCSummary {
         [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.ArrayList] $Index,
         [Parameter(Mandatory)][string] $Status,
         [string] $Reason = '',
-        $Checks
+        $Checks,
+        # The startup theme journal gate is one fact about the run, not a per-scenario status:
+        # it is recorded once, beside the entries, and only when it actually ran.
+        $ThemeJournalGate
     )
 
     $summary = [ordered]@{
@@ -631,6 +656,7 @@ function New-Stage5CCSummary {
         entries    = @($Index.ToArray())
     }
     if ($null -ne $Checks) { $summary['checks'] = $Checks }
+    if ($null -ne $ThemeJournalGate) { $summary['themeJournalGate'] = $ThemeJournalGate }
 
     return ,$summary
 }
@@ -774,6 +800,79 @@ catch {
 $index = New-Object System.Collections.ArrayList
 $dispatched = New-Object System.Collections.ArrayList
 $blockedReason = ''
+
+# The startup gate's exported facts, filled below when the gate really runs.
+$themeJournalGateFacts = $null
+
+# --- theme override selection and startup journal gate ---------------------------------
+#
+# One opt-in boundary, not two switches: a private journal without the fixture root would let a
+# recovery write the production registry, and a fixture root without its explicit licence is the
+# same refusal the command itself gives. A partial selection is refused here, before the journal
+# is classified, before any preflight and before any child starts.
+#
+# The gate then answers about the same journal the visual scenario will use, with the support
+# executable this mode really ships: a moved toolkit's verified member in package mode, the
+# published bootstrap copy in a source tree. It never creates an owned root, never starts the
+# product and never touches the registry itself - it drives the reviewed command surface and
+# reports 'blocked' when that capability is missing instead of inventing a recovery.
+$themeOverride = Test-UiAcceptanceThemeOverride -JournalPath $ThemeJournalPath -FixtureRoot $ThemeFixtureRoot `
+    -AllowFixture:$AllowThemeFixture -RequireExplicitJournal
+if (-not $themeOverride.ok) {
+    foreach ($name in $requested) {
+        Write-Stage5CCIndexEntry -Index $index -Entry @{
+            id = $name; status = 'Blocked'; reportStatus = 'Blocked'; executionStatus = 'Blocked'
+            reason = [string] $themeOverride.code; reportPath = ''; outputDirectory = ''
+            durationMs = 0; complete = $false
+        }
+    }
+    $overrideStatus = Get-Stage5CCOverallStatus -Index $index
+    $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $overrideStatus -Reason ([string] $themeOverride.code))
+    [Console]::Out.WriteLine(('Stage 5CC: ' + $overrideStatus + ' (' + [string] $themeOverride.code + ')'))
+    exit $ExitBlocked
+}
+
+$themeJournalGate = $null
+try {
+    $themeJournalPath = Get-UiAcceptanceThemeJournalPath -JournalPath $ThemeJournalPath
+    $gateSupport = if ($packageMode) {
+        [string] $script:toolkitPackage.SupportExecutable
+    }
+    else {
+        Join-Path $script:repositoryRoot 'apps/media-desktop/tools/TraceFold.Media.UiAcceptance.Support/bin/stage5cc-bootstrap/TraceFold.Media.UiAcceptance.Support.exe'
+    }
+    # CurrentOnly is read-only: the gate still inspects and classifies a leftover journal, but it
+    # may not restore one. Both keeps the original recovery contract.
+    $allowThemeRestore = $ThemeMatrix -ceq 'Both'
+    $themeJournalGate = Invoke-UiAcceptanceThemeJournalGate -JournalPath $themeJournalPath -SupportPath $gateSupport `
+        -FixtureRoot $ThemeFixtureRoot -AllowFixture:$AllowThemeFixture -AllowRestore:$allowThemeRestore -EnforceAdapterSelection
+}
+catch {
+    # The gate itself could not answer (for example the per-user folder is unavailable). That
+    # is a refusal to start, never a reason to continue without the check.
+    $themeJournalGate = [pscustomobject] @{
+        state = 'blocked'; reason = 'theme_journal_gate_unavailable'
+        journalPresent = $null; presenceState = 'unknown'; entryKind = 'unknown'; presenceError = ''
+        journalState = ''; ownerState = ''
+        supportUsed = $false; calls = @(); checkedUtc = [DateTimeOffset]::UtcNow.ToString('o')
+        inspect = $null; restore = $null; readback = $null
+    }
+}
+$themeJournalGateFacts = Export-UiAcceptanceThemeJournalGate -Gate $themeJournalGate
+
+if ($themeJournalGate.state -ceq 'blocked') {
+    foreach ($name in $requested) {
+        Write-Stage5CCIndexEntry -Index $index -Entry @{
+            id = $name; status = 'Blocked'; reportStatus = 'Blocked'; executionStatus = 'Blocked'
+            reason = [string] $themeJournalGate.reason; reportPath = ''; outputDirectory = ''
+            durationMs = 0; complete = $false
+        }
+    }
+    $gateStatus = Get-Stage5CCOverallStatus -Index $index
+    $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $gateStatus -Reason ([string] $themeJournalGate.reason) -ThemeJournalGate $themeJournalGateFacts)
+    [Console]::Out.WriteLine(('Stage 5CC: ' + $gateStatus + ' (' + [string] $themeJournalGate.reason + ')'))
+    exit $ExitBlocked
+}
 
 # --- request precheck ------------------------------------------------------------------
 #
@@ -940,7 +1039,7 @@ if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
     # every summary says which entries were checked and how many reached dispatch.
     $checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $false -DispatchedCount 0
     $preflightStatus = Get-Stage5CCOverallStatus -Index $index
-    $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $preflightStatus -Reason $blockedReason -Checks $checks)
+    $null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $preflightStatus -Reason $blockedReason -Checks $checks -ThemeJournalGate $themeJournalGateFacts)
     [Console]::Out.WriteLine(('Stage 5CC: ' + $preflightStatus + ' (' + $blockedReason + ')'))
     exit $ExitBlocked
 }
@@ -1248,6 +1347,22 @@ foreach ($name in $pending) {
             SupportPath       = (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe')
             WinAppCliArchivePath = $WinAppCliArchivePath
             WinAppPath        = (Join-Path $runDriver 'winapp.exe')
+            # Only an entry that declares this seam receives it; the visual matrix is the one
+            # that does, and every other scenario keeps its own parameter surface.
+            ThemeMatrix       = $ThemeMatrix
+            # The scenario's own journal gate must answer about the same journal the entry's gate
+            # just answered about, so a bound journal travels with the request instead of being
+            # resolved a second time inside the scenario.
+            ThemeJournalPath  = $ThemeJournalPath
+            # The adapter boundary travels with it for the same reason: a private journal without
+            # its fixture root would still let a recovery write the production registry.
+            FixtureRoot       = $ThemeFixtureRoot
+            AllowFixture      = [bool] $AllowThemeFixture
+        }
+        if ($SyntheticObservation) {
+            # Only a caller that says so makes the provenance claim; a normal run leaves the
+            # field absent, and the report keeps it unknown.
+            $entryArguments['Synthetic'] = $true
         }
 
         $cleanupBody = {
@@ -1407,7 +1522,7 @@ foreach ($name in $pending) {
 
 $overall = Get-Stage5CCOverallStatus -Index $index
 $checks = New-Stage5CCCompletenessNode -Completeness $completeness -BlockedBeforeDispatch $false -DispatchedCount $dispatched.Count
-$null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $overall -Checks $checks)
+$null = Write-Stage5CCSummary -OutputDirectory $output -Summary (New-Stage5CCSummary -Index $index -Status $overall -Checks $checks -ThemeJournalGate $themeJournalGateFacts)
 [Console]::Out.WriteLine('Stage 5CC: ' + $overall)
 
 if ($overall -ceq 'Passed') { exit 0 }

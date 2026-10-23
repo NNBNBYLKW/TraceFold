@@ -207,7 +207,7 @@ function Invoke-WinAppMutation {
         throw 'Unsupported UI mutation.'
     }
     if ($Arguments[1] -eq 'send-keys') { throw 'send-keys requires a separate foreground ownership gate.' }
-    if (-not $script:mutationSteps.Add($StepId)) { throw 'A UI mutation step may be executed only once.' }
+    if (-not $script:mutationSteps.Add($StepId)) { throw ('A UI mutation step may be executed only once: ' + $StepId) }
     $argv = @($Arguments) + @('-a', [string] $ProcessId, '--json')
     $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $TimeoutMs
     return New-UiDriverResult -Raw $raw -Attempts 1 -RunToken $RunToken -OwnedRoot $OwnedRoot
@@ -230,7 +230,7 @@ function Invoke-WinAppKeyboard {
     if (-not (& $DesktopCheck) -or -not (& $ForegroundCheck $ProcessId)) {
         return [pscustomobject]@{ Status='Blocked'; ExitCode=5; Data=$null; Error='foreground desktop ownership unavailable'; Attempts=0; TimedOut=$false }
     }
-    if (-not $script:mutationSteps.Add($StepId)) { throw 'A UI mutation step may be executed only once.' }
+    if (-not $script:mutationSteps.Add($StepId)) { throw ('A UI mutation step may be executed only once: ' + $StepId) }
     $argv = @($Arguments) + @('--via','send-input','-a',[string]$ProcessId,'--json')
     $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $TimeoutMs
     return New-UiDriverResult -Raw $raw -Attempts 1 -RunToken $RunToken -OwnedRoot $OwnedRoot

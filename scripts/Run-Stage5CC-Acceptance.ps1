@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     # One scenario from the entry's real registry. Empty (or All) means the complete acceptance
-    # run, which this entry cannot provide yet: it has no ThemeMatrix support.
+    # run: every registry entry with -ThemeMatrix Both, exactly as the entry defines it.
     [string] $Scenario,
     # Explicit product directory. Empty means the sibling product next to the toolkit.
     [string] $ProductDirectory,
@@ -27,7 +27,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ExitPreLaunch = 4
-$ExitNotReady = 3
 
 function Write-LauncherLine {
     param([Parameter(Mandatory)][string] $Message)
@@ -43,10 +42,10 @@ if (-not [IO.File]::Exists($entry)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($Scenario) -or $Scenario -ceq 'All') {
-    Write-LauncherLine 'Complete acceptance mode: -Scenario All -ThemeMatrix Both.'
-    Write-LauncherLine 'Not ready: this entry has no ThemeMatrix (light/dark theme matrix) support, so the complete run cannot start.'
-    Write-LauncherLine 'Nothing was started. Use -Scenario <one scenario> for a single-scenario run; that is not a complete acceptance.'
-    exit $ExitNotReady
+    # The complete run is the checkpoint itself: every registered scenario, and the visual matrix
+    # in both Windows app themes. A ThemeMatrix argument is passed for real - the entry now owns
+    # the two apply/scenario/restore rounds - so this is a parameter, never an empty placeholder.
+    $Scenario = 'All'
 }
 
 if ([string]::IsNullOrWhiteSpace($ProductDirectory)) {
@@ -83,7 +82,8 @@ $entryArguments = @(
     '-ToolkitDirectory', $packageRoot,
     '-ProductDirectory', $productFull,
     '-OutputDirectory', $outputFull,
-    '-Scenario', $Scenario)
+    '-Scenario', $Scenario,
+    '-ThemeMatrix', 'Both')
 
 Write-LauncherLine ('Package: ' + $packageRoot)
 Write-LauncherLine ('Product: ' + $productFull)

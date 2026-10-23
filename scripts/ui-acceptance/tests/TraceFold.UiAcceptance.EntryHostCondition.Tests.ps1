@@ -133,7 +133,10 @@ function Test-GuardRegionsFamiliesAndParams {
     $paramEnd = $text.IndexOf("`n)", $paramAt)
     Assert-HostConditionTrue ($paramEnd -gt $paramAt) 'the entry param block closes'
     $paramBlock = $text.Substring($paramAt, $paramEnd - $paramAt)
-    Assert-HostConditionEqual 2 (([regex]::Matches($paramBlock, '\[Parameter\(Mandatory\)\]')).Count) 'exactly the two original mandatory parameters remain'
+    # Exactly one input is mandatory: a product directory. The driver archive became optional when
+    # the package mode arrived - a moved toolkit ships its driver unpacked - so the two inputs are
+    # mutually exclusive rather than both required, and the entry checks that at run time.
+    Assert-HostConditionEqual 1 (([regex]::Matches($paramBlock, '\[Parameter\(Mandatory\)\]')).Count) 'exactly the one product input remains mandatory'
     Assert-HostConditionTrue ($paramBlock -match '\$ProductDirectory') 'ProductDirectory is still an input'
     Assert-HostConditionTrue ($paramBlock -match '\$WinAppCliArchivePath') 'WinAppCliArchivePath is still an input'
     Assert-HostConditionTrue ($paramBlock -match '\$OutputDirectory') 'OutputDirectory is still an input'
@@ -364,6 +367,10 @@ function Test-InstanceFactsCaptureBindsMembers {
         $runSupport = $supportInstance
         $runDriver = $driverInstance
         $runToken = 'synthetic-token'
+        # The region distinguishes a moved toolkit from a source tree. This case is the source
+        # shape, so the package branch must be off; without the variable the region would stop
+        # under strict mode before it recorded a single member.
+        $packageMode = $false
         $scenarioEvidence = [ordered] @{ name = 'LibraryFilterNaming'; condition = $null; instances = $null }
         . ([scriptblock]::Create($regionText))
         $facts = $scenarioEvidence.instances

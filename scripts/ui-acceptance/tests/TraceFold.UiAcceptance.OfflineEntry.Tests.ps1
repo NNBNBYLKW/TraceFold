@@ -21,7 +21,8 @@ function New-OfflineBase {
     # The prefix stays short on purpose: the archive shape publishes the support CLI under
     # apps/media-desktop/tools/<project>/bin/stage5cc-bootstrap, and a deep temp root would push
     # that executable past the Windows path limit, where it cannot be started at all.
-    $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-o-' + [guid]::NewGuid().ToString('N'))
+    $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-o-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
+    if ([IO.Directory]::Exists($base)) { throw 'The offline test root already exists.' }
     [void][IO.Directory]::CreateDirectory($base)
     return $base
 }
@@ -377,23 +378,30 @@ function New-OfflinePackage {
         [string[]] $WithoutScenario = @(),
         # Real scenario files run unchanged against a controlled engine double; the rest stay
         # markers or the recording stub.
-        [string[]] $RealScenario = @()
+        [string[]] $RealScenario = @(),
+        # The Visual integration reuses this same package builder against a test-owned source
+        # tree and the real contract/assets. Defaults retain the original synthetic package.
+        [string] $SourceRoot = $script:root,
+        [AllowEmptyString()][string] $ContractSource = '',
+        [AllowEmptyString()][string] $FixtureSourceRoot = ''
     )
 
+    $sourceRootExact = if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $script:root } else { $SourceRoot }
+    $sourceUiRoot = Join-Path $sourceRootExact 'scripts/ui-acceptance'
     $scriptsRoot = Join-Path $Root 'scripts'
     $uiRoot = Join-Path $scriptsRoot 'ui-acceptance'
     $scenarioRoot = Join-Path $uiRoot 'scenarios'
     [void][IO.Directory]::CreateDirectory($scenarioRoot)
-    Copy-Item -LiteralPath (Join-Path $script:root 'scripts/run-stage5cc-ui-acceptance.ps1') -Destination (Join-Path $scriptsRoot 'run-stage5cc-ui-acceptance.ps1')
-    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')) {
-        Copy-Item -LiteralPath (Join-Path $script:uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')) -Destination (Join-Path $uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1'))
+    Copy-Item -LiteralPath (Join-Path $sourceRootExact 'scripts/run-stage5cc-ui-acceptance.ps1') -Destination (Join-Path $scriptsRoot 'run-stage5cc-ui-acceptance.ps1')
+    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'VisualGate')) {
+        Copy-Item -LiteralPath (Join-Path $sourceUiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')) -Destination (Join-Path $uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1'))
     }
-    Copy-Item -LiteralPath (Join-Path $script:uiRoot 'report-template') -Destination (Join-Path $uiRoot 'report-template') -Recurse
+    Copy-Item -LiteralPath (Join-Path $sourceUiRoot 'report-template') -Destination (Join-Path $uiRoot 'report-template') -Recurse
     foreach ($name in @(Get-UiAcceptanceScenarioName)) {
         if ($WithoutScenario -ccontains $name) { continue }
         $entryPath = Join-Path $scenarioRoot (Get-UiAcceptanceScenarioFile -Name $name)
         if ($RealScenario -ccontains $name) {
-            Copy-Item -LiteralPath (Join-Path $script:uiRoot ('scenarios/' + (Get-UiAcceptanceScenarioFile -Name $name))) -Destination $entryPath
+            Copy-Item -LiteralPath (Join-Path $sourceUiRoot ('scenarios/' + (Get-UiAcceptanceScenarioFile -Name $name))) -Destination $entryPath
         }
         elseif ($name -ceq $Scenario) {
             $null = New-OfflineScenarioStub -Path $entryPath -Outcome $Outcome
@@ -410,27 +418,41 @@ function New-OfflinePackage {
     [void][IO.Directory]::CreateDirectory($driverRoot)
     [IO.File]::WriteAllBytes((Join-Path $driverRoot 'winapp.exe'), [byte[]] @(1, 2, 3))
 
-    $fixtureRelative = 'apps/media-api/tests/fixtures/media/paired.mp4'
-    $fixturePath = Join-Path $Root $fixtureRelative
-    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $fixturePath))
-    $fixtureBytes = [Text.UTF8Encoding]::new($false).GetBytes('offline-fixture-bytes')
-    [IO.File]::WriteAllBytes($fixturePath, $fixtureBytes)
-
     $contractDirectory = Join-Path $Root 'apps/media-desktop/tools/ui-acceptance-contract'
     [void][IO.Directory]::CreateDirectory($contractDirectory)
     $contractPath = Join-Path $contractDirectory 'stage5cc-uia-contract.json'
-    $contract = [ordered] @{
-        schemaVersion = 1
-        entries       = @()
-        fixtureAssets = @([ordered] @{
-            fixedFilename  = 'paired.mp4'
-            repositoryPath = $fixtureRelative
-            sha256         = (Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash
-            sizeBytes      = [long] $fixtureBytes.Length
-            seedDirectory  = 'inbox'
-        })
+    $fixturePath = ''
+    if ([string]::IsNullOrWhiteSpace($ContractSource)) {
+        $fixtureRelative = 'apps/media-api/tests/fixtures/media/paired.mp4'
+        $fixturePath = Join-Path $Root $fixtureRelative
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $fixturePath))
+        $fixtureBytes = [Text.UTF8Encoding]::new($false).GetBytes('offline-fixture-bytes')
+        [IO.File]::WriteAllBytes($fixturePath, $fixtureBytes)
+        $contract = [ordered] @{
+            schemaVersion = 1
+            entries       = @()
+            fixtureAssets = @([ordered] @{
+                fixedFilename  = 'paired.mp4'
+                repositoryPath = $fixtureRelative
+                sha256         = (Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash
+                sizeBytes      = [long] $fixtureBytes.Length
+                seedDirectory  = 'inbox'
+            })
+        }
+        [IO.File]::WriteAllText($contractPath, ($contract | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
     }
-    [IO.File]::WriteAllText($contractPath, ($contract | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    else {
+        Copy-Item -LiteralPath $ContractSource -Destination $contractPath -Force
+        $sourceAssets = if ([string]::IsNullOrWhiteSpace($FixtureSourceRoot)) { $sourceRootExact } else { $FixtureSourceRoot }
+        $contractDocument = [IO.File]::ReadAllText($contractPath, [Text.UTF8Encoding]::new($false, $true)) | ConvertFrom-Json
+        foreach ($asset in @($contractDocument.fixtureAssets)) {
+            $relative = [string] $asset.repositoryPath
+            $destination = Join-Path $Root $relative
+            [void][IO.Directory]::CreateDirectory((Split-Path -Parent $destination))
+            Copy-Item -LiteralPath (Join-Path $sourceAssets $relative) -Destination $destination -Force
+            if ([string]::IsNullOrWhiteSpace($fixturePath)) { $fixturePath = $destination }
+        }
+    }
 
     $members = New-Object 'System.Collections.Generic.List[object]'
     foreach ($file in @(Get-ChildItem -LiteralPath $Root -Recurse -File | Sort-Object FullName)) {
@@ -1052,7 +1074,7 @@ function Get-TestCases {
                     $scripts = Join-Path $repository 'scripts'
                     $fakeUi = Join-Path $scripts 'ui-acceptance'
                     [void][IO.Directory]::CreateDirectory((Join-Path $fakeUi 'scenarios'))
-                    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')) {
+                    foreach ($module in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'VisualGate')) {
                         Copy-Item -LiteralPath (Join-Path $script:uiRoot ('TraceFold.UiAcceptance.' + $module + '.psm1')) -Destination (Join-Path $fakeUi ('TraceFold.UiAcceptance.' + $module + '.psm1'))
                     }
                     Copy-Item -LiteralPath (Join-Path $script:root 'scripts/run-stage5cc-ui-acceptance.ps1') -Destination (Join-Path $scripts 'run-stage5cc-ui-acceptance.ps1')

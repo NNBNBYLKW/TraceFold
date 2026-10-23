@@ -2282,7 +2282,8 @@ function Get-TestCases {
                 # single scenario passing can never be read as the whole suite passing.
                 Assert-Equal '02-conflict.ps1' (Get-UiAcceptanceScenarioFile -Name 'Conflict')
                 Assert-Equal '03-library.ps1' (Get-UiAcceptanceScenarioFile -Name 'Library')
-                Assert-Equal '06-visual.ps1' (Get-UiAcceptanceScenarioFile -Name 'Visual')
+                # The visual matrix is the real Task 13 scenario now, not a placeholder.
+                Assert-Equal '70-visual-keyboard-matrix.ps1' (Get-UiAcceptanceScenarioFile -Name 'Visual')
                 foreach ($name in $names) {
                     Assert-True ((Get-UiAcceptanceScenarioFile -Name $name) -cmatch '^[0-9]{2}-[a-z][a-z0-9-]*\.ps1$')
                 }
@@ -3233,6 +3234,9 @@ function Get-TestCases {
                     $failures2 = New-Object System.Collections.Generic.List[object]
                     $business = $null
                     try { throw 'single.instance.probe_business_failure' } catch { $business = $_ }
+                    $business.Exception.Data['TraceFold.SingleInstanceClose'] = @(
+                        [pscustomobject] @{ role = 'primary'; exitObserved = $true; exitCode = 0 },
+                        [pscustomobject] @{ role = 'restart'; exitObserved = $true; exitCode = $null })
                     $stub = [pscustomobject] @{ Note = 'x' }
                     $stub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
                     $stub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
@@ -3257,6 +3261,9 @@ function Get-TestCases {
                     $errorDoc = $errorText | ConvertFrom-Json
                     Assert-Equal 'secondary-exited' ([string] $errorDoc.stage)
                     Assert-True ($errorDoc.message -like '*probe_business_failure*') 'the original error must stay at the top level'
+                    Assert-Equal 2 @($errorDoc.closeObservations).Count 'both close observations must survive the failure writer'
+                    Assert-True $errorDoc.closeObservations[1].exitObserved
+                    Assert-True ($null -eq $errorDoc.closeObservations[1].exitCode) 'the writer must preserve an unknown exit code'
                     Assert-Equal 'release-safety-net' ([string] $errorDoc.releaseActionError.stage)
                     Assert-True ($errorDoc.releaseActionError.errorType -like '*MethodInvocationException') 'the action error kind must be retained'
                     Assert-Equal 'release-safety-net' ([string] $errorDoc.releaseReadBackError.stage)
@@ -3756,27 +3763,57 @@ function Get-TestCases {
                 Assert-Equal 1 $text.Count
                 . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
 
-                $liveProcess = [pscustomobject] @{ Note = 'live' }
-                $liveProcess | Add-Member -MemberType ScriptMethod -Name CloseMainWindow -Value { return $true }
-                $rejectProcess = [pscustomobject] @{ Note = 'reject' }
-                $rejectProcess | Add-Member -MemberType ScriptMethod -Name CloseMainWindow -Value { return $false }
+                $primaryIdentity = [pscustomobject] @{ ProcessId = 7331; StartUtcTicks = 73310; ExecutablePath = 'C:\probe\TraceFold.Media.exe' }
+                $secondaryIdentity = [pscustomobject] @{ ProcessId = 7332; StartUtcTicks = 73320; ExecutablePath = 'C:\probe\TraceFold.Media.exe' }
+                $restartIdentity = [pscustomobject] @{ ProcessId = 4242; StartUtcTicks = 42420; ExecutablePath = 'C:\probe\TraceFold.Media.exe' }
+                function New-CRProcess {
+                    param($Identity)
+                    $process = [pscustomobject] @{
+                        Id = $Identity.ProcessId; Handle = [IntPtr] $Identity.ProcessId
+                        StartTime = [DateTime]::new([long] $Identity.StartUtcTicks, [DateTimeKind]::Utc)
+                        MainModule = [pscustomobject] @{ FileName = $Identity.ExecutablePath }
+                        HasExited = $false; ExitCode = 0; CloseAccepted = $true; ExitsOnClose = $true
+                        CloseCount = 0; Disposed = $false
+                    }
+                    $process | Add-Member -MemberType ScriptMethod -Name CloseMainWindow -Value {
+                        $script:crEvents.Add('close:' + $this.Id)
+                        $this.CloseCount++
+                        if ($this.CloseAccepted -and $this.ExitsOnClose) { $this.HasExited = $true }
+                        return $this.CloseAccepted
+                    }
+                    $process | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value {
+                        param($milliseconds)
+                        $script:crEvents.Add('wait:' + $this.Id)
+                        return $this.HasExited
+                    }
+                    $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $this.Disposed = $true }
+                    return $process
+                }
 
                 $script:crEvents = New-Object System.Collections.Generic.List[string]
                 $script:crRestartArgs = ''
-                $script:crFindCalls = 0
+                $script:crPrimary = New-CRProcess $primaryIdentity
+                $script:crRestart = New-CRProcess $restartIdentity
                 $okFind = {
                     param($id)
-                    $script:crFindCalls = $script:crFindCalls + 1
                     $script:crEvents.Add('find:' + $id)
-                    if ($script:crFindCalls -eq 1) { return $liveProcess }
-                    return $null
+                    if ($id -eq 7331) { return $script:crPrimary }
+                    if ($id -eq 4242) { return $script:crRestart }
+                    throw 'unexpected process lookup'
                 }
-                $okInventory = { $script:crEvents.Add('inventory'); return @() }
+                $okInventory = {
+                    param($ledger)
+                    $script:crEvents.Add('inventory')
+                    # Both an unrelated same-name instance and a recycled primary PID must be ignored.
+                    return @(
+                        [pscustomobject] @{ ProcessId = 9999; StartUtcTicks = 99990; ExecutablePath = 'C:\probe\TraceFold.Media.exe' },
+                        [pscustomobject] @{ ProcessId = 7331; StartUtcTicks = 73311; ExecutablePath = 'C:\probe\TraceFold.Media.exe' })
+                }
                 $okStart = {
                     param($exe, $root, $token, $support)
                     $script:crEvents.Add('start')
                     $script:crRestartArgs = @($exe, $root, $token, $support) -join '|'
-                    return [pscustomobject] @{ ProcessId = 4242 }
+                    return $restartIdentity
                 }
                 $okWindow = { param($id, $timeout) $script:crEvents.Add('window:' + $id + ':' + $timeout); return [IntPtr] 99 }
                 $okObserve = { param($id) $script:crEvents.Add('observe:' + $id); return [pscustomobject] @{ Status = 'Passed' } }
@@ -3784,6 +3821,7 @@ function Get-TestCases {
                 $facts = Invoke-SingleInstanceCloseAndRestart -PrimaryPid 7331 -ExecutablePath 'C:\probe\TraceFold.Media.exe' `
                     -OwnedRoot 'C:\probe\owned' -RunToken 'probe-token' -SupportPath 'C:\probe\support' `
                     -WaitTimeoutSeconds 5 -InteractiveTimeoutSeconds 7 `
+                    -PrimaryIdentity $primaryIdentity -OwnedProcessLedger @($secondaryIdentity) `
                     -FindProcess $okFind -ProcessInventory $okInventory -StartScenario $okStart -WaitWindow $okWindow -Observe $okObserve -Sleep { param($milliseconds) }
                 Assert-Equal 'True' ([string] $facts.closeAccepted)
                 Assert-Equal 0 ([int] $facts.residueCount)
@@ -3792,8 +3830,36 @@ function Get-TestCases {
                 Assert-Equal 'Passed' ([string] $facts.restartObservationStatus)
                 Assert-Equal 'C:\probe\TraceFold.Media.exe' ([string] $facts.restartExecutable)
                 Assert-Equal 'C:\probe\owned' ([string] $facts.restartOwnedRoot)
-                Assert-Equal 'find:7331|find:7331|inventory|start|window:4242:7|observe:4242' ($script:crEvents -join '|') 'the sequence must close, wait, check residue and then restart'
+                Assert-True $facts.primaryClose.identityMatched 'the held primary must match its registered identity'
+                Assert-True $facts.primaryClose.exitObserved 'the primary exit must be observed on its held object'
+                Assert-Equal 0 $facts.primaryClose.exitCode
+                Assert-True $facts.restartClose.identityMatched 'the restart must match its new registered identity'
+                Assert-True $facts.restartClose.exitObserved 'the restart must exit before the unit succeeds'
+                Assert-Equal 0 $facts.restartClose.exitCode
+                Assert-Equal 0 $facts.restartResidueCount
+                Assert-True ($script:crPrimary.Disposed -and $script:crRestart.Disposed) 'both held objects must be disposed'
+                Assert-Equal 'find:7331|close:7331|wait:7331|inventory|start|window:4242:7|observe:4242|find:4242|close:4242|wait:4242|inventory' ($script:crEvents -join '|') 'both exits must be observed without reacquiring either PID to infer exit'
                 Assert-Equal 'C:\probe\TraceFold.Media.exe|C:\probe\owned|probe-token|C:\probe\support' $script:crRestartArgs 'the restart must carry the same executable, root, token and support'
+
+                # Exercise the real scoped inventory as well. After the primary exits its PID now
+                # belongs to a different creation; it may be observed, but never closed or counted.
+                $script:crPrimary = New-CRProcess $primaryIdentity
+                $script:crRestart = New-CRProcess $restartIdentity
+                $reused = New-CRProcess ([pscustomobject] @{ ProcessId = 7331; StartUtcTicks = 73311; ExecutablePath = 'C:\probe\TraceFold.Media.exe' })
+                $scopedFacts = Invoke-SingleInstanceCloseAndRestart -PrimaryPid 7331 -ExecutablePath 'C:\probe\TraceFold.Media.exe' `
+                    -OwnedRoot 'C:\probe\owned' -RunToken 'probe-token' -SupportPath 'C:\probe\support' `
+                    -WaitTimeoutSeconds 5 -InteractiveTimeoutSeconds 7 -PrimaryIdentity $primaryIdentity `
+                    -OwnedProcessLedger @($secondaryIdentity) -StartScenario $okStart -WaitWindow $okWindow -Observe $okObserve `
+                    -FindProcess {
+                        param($id)
+                        if ($id -eq 7331) { if ($script:crPrimary.HasExited) { return $reused }; return $script:crPrimary }
+                        if ($id -eq 7332) { return $null }
+                        if ($id -eq 4242) { return $script:crRestart }
+                        throw 'inventory queried an unregistered pid'
+                    } -Sleep { param($milliseconds) }
+                Assert-Equal 0 $scopedFacts.residueCount
+                Assert-Equal 0 $scopedFacts.restartResidueCount
+                Assert-Equal 0 $reused.CloseCount 'the replacement process must remain untouched'
 
                 function Get-CRRefusalCode {
                     param(
@@ -3802,30 +3868,63 @@ function Get-TestCases {
                         [scriptblock] $Start = $null,
                         [scriptblock] $Window = $null,
                         [scriptblock] $Observe = $null,
-                        [int] $Wait = 5
+                        [int] $Wait = 5,
+                        [scriptblock] $Configure = {}
                     )
                     if ($null -eq $Find) { $Find = $okFind }
                     if ($null -eq $Inventory) { $Inventory = $okInventory }
                     if ($null -eq $Start) { $Start = $okStart }
                     if ($null -eq $Window) { $Window = $okWindow }
                     if ($null -eq $Observe) { $Observe = $okObserve }
-                    $script:crFindCalls = 0
+                    $script:crEvents.Clear()
+                    $script:crPrimary = New-CRProcess $primaryIdentity
+                    $script:crRestart = New-CRProcess $restartIdentity
+                    $script:crFailure = $null
+                    & $Configure
                     try {
                         $null = Invoke-SingleInstanceCloseAndRestart -PrimaryPid 7331 -ExecutablePath 'C:\probe\TraceFold.Media.exe' `
                             -OwnedRoot 'C:\probe\owned' -RunToken 'probe-token' -SupportPath 'C:\probe\support' `
                             -WaitTimeoutSeconds $Wait -InteractiveTimeoutSeconds 7 `
+                            -PrimaryIdentity $primaryIdentity -OwnedProcessLedger @($secondaryIdentity) `
                             -FindProcess $Find -ProcessInventory $Inventory -StartScenario $Start -WaitWindow $Window -Observe $Observe -Sleep { param($milliseconds) }
                     }
-                    catch { return [string] $_.Exception.Message }
+                    catch { $script:crFailure = $_; return [string] $_.Exception.Message }
                     return 'none'
                 }
 
-                Assert-Equal 'single.instance.primary_close_rejected' (Get-CRRefusalCode -Find { param($id) $rejectProcess }) 'a rejected close must refuse by name'
+                Assert-Equal 'single.instance.primary_close_rejected' (Get-CRRefusalCode -Configure { $script:crPrimary.CloseAccepted = $false }) 'a rejected close must refuse by name'
                 Assert-Equal 'single.instance.primary_close_rejected' (Get-CRRefusalCode -Find { param($id) $null }) 'a missing process cannot be closed'
-                Assert-Equal 'single.instance.primary_close_timeout' (Get-CRRefusalCode -Wait 1 -Find { param($id) $liveProcess }) 'a close that never completes must time out'
-                Assert-Equal 'single.instance.residue_after_close' (Get-CRRefusalCode -Inventory { @([pscustomobject] @{ Id = 1 }) }) 'residue after the close must refuse'
+                Assert-Equal 'single.instance.primary_close_timeout' (Get-CRRefusalCode -Wait 0 -Configure { $script:crPrimary.ExitsOnClose = $false }) 'a close that never completes must time out'
+                Assert-Equal 'single.instance.residue_after_close' (Get-CRRefusalCode -Inventory { param($ledger) $secondaryIdentity }) 'an exact registered secondary residue must refuse'
                 Assert-Equal 'single.instance.restart_window_missing' (Get-CRRefusalCode -Window { param($id, $timeout) return [IntPtr]::Zero }) 'a restart without a window must refuse'
                 Assert-Equal 'single.instance.restart_unresponsive' (Get-CRRefusalCode -Observe { param($id) return [pscustomobject] @{ Status = 'Failed' } }) 'a restart that does not respond must refuse'
+
+                foreach ($configure in @(
+                    { $script:crPrimary.StartTime = $script:crPrimary.StartTime.AddTicks(1) },
+                    { $script:crPrimary.MainModule.FileName = 'C:\other\TraceFold.Media.exe' },
+                    { $script:crPrimary.Id = 9999 })) {
+                    Assert-Equal 'single.instance.primary_identity_mismatch' (Get-CRRefusalCode -Configure $configure)
+                    Assert-Equal 0 $script:crPrimary.CloseCount 'an unowned identity must never receive a close'
+                    Assert-True (-not ($script:crEvents -contains 'start')) 'a refused identity must prevent the restart'
+                }
+                Assert-Equal 'single.instance.primary_exit_unknown' (Get-CRRefusalCode -Configure { $script:crPrimary.ExitCode = $null }) 'a missing exit value must not be cast to zero'
+                $closeFailure = @($script:crFailure.Exception.Data['TraceFold.SingleInstanceClose'])[0]
+                Assert-True $closeFailure.exitObserved 'exit observation and its unreadable code are separate facts'
+                Assert-True ($null -eq $closeFailure.exitCode) 'the unknown exit stays null in failure evidence'
+                Assert-Equal 'single.instance.primary_exit_7' (Get-CRRefusalCode -Configure { $script:crPrimary.ExitCode = 7 })
+                Assert-Equal 7 @($script:crFailure.Exception.Data['TraceFold.SingleInstanceClose'])[0].exitCode
+                Assert-Equal 'single.instance.restart_identity_mismatch' (Get-CRRefusalCode -Configure { $script:crRestart.StartTime = $script:crRestart.StartTime.AddTicks(1) })
+                Assert-Equal 0 $script:crRestart.CloseCount 'the restart has its own identity check before close'
+                Assert-Equal 'single.instance.restart_identity_mismatch' (Get-CRRefusalCode -Configure { $script:crRestart.MainModule.FileName = 'C:\other\TraceFold.Media.exe' })
+                Assert-Equal 0 $script:crRestart.CloseCount
+                Assert-Equal 'single.instance.restart_close_rejected' (Get-CRRefusalCode -Configure { $script:crRestart.CloseAccepted = $false })
+                Assert-Equal 'single.instance.restart_close_timeout' (Get-CRRefusalCode -Wait 0 -Configure { $script:crRestart.ExitsOnClose = $false })
+                Assert-Equal 'single.instance.restart_exit_unknown' (Get-CRRefusalCode -Configure { $script:crRestart.ExitCode = $null })
+                Assert-Equal 'single.instance.restart_exit_9' (Get-CRRefusalCode -Configure { $script:crRestart.ExitCode = 9 })
+                Assert-Equal 'single.instance.residue_after_restart_close' (Get-CRRefusalCode -Inventory {
+                    param($ledger)
+                    if (@($ledger | Where-Object { $_.ProcessId -eq 4242 }).Count -gt 0) { $restartIdentity }
+                }) 'a remaining owned restart must prevent a pass'
             }
         },
         @{
@@ -3892,28 +3991,33 @@ function Get-TestCases {
                 # are reachable in that unit. It is not offered as the behaviour proof.
                 $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
                 $source = Get-Content -LiteralPath $path -Raw
-                foreach ($code in @('single.instance.primary_close_rejected', 'single.instance.primary_close_timeout',
+                foreach ($code in @('_close_rejected', '_close_timeout', '_identity_mismatch', '_exit_unknown',
                         'single.instance.residue_after_close', 'single.instance.restart_window_missing',
                         'single.instance.restart_unresponsive')) {
                     Assert-True ($source -cmatch $code) ($code + ' must be a reachable refusal')
                 }
                 # The unit closes the primary through its own window, and the restart goes through the
                 # scenario's own launch seam with the same executable and the same owned root.
-                Assert-True ($source -cmatch '\$primaryProcess\.CloseMainWindow\(\)') 'the primary must be closed through its own window'
+                Assert-True ($source -cmatch '\$process\.CloseMainWindow\(\)') 'both instances must be closed through the held, identity-checked object'
                 Assert-True ($source -cmatch '\$restartFacts = Invoke-SingleInstanceCloseAndRestart -PrimaryPid \$primaryPid -ExecutablePath \$exe -OwnedRoot \$root') 'the main flow must drive the unit with the same executable and the same owned root'
+                Assert-True ($source.Contains('-PrimaryIdentity $primary -OwnedProcessLedger @($secondary)')) 'the unit must receive the registered launch records'
                 Assert-True ($source -cmatch 'Start-TraceFoldScenario -ExecutablePath \$restartExe -OwnedRoot \$restartRoot -RunToken \$restartToken -SupportPath \$restartSupport -StartProcess \$LaunchProcess') 'the restart must start through the launch seam with the same root'
+                Assert-True (-not $source.Contains("Get-Process -Name 'TraceFold.Media'")) 'residue must not be decided from every same-name process'
+                Assert-True (-not $source.Contains('$restartProcess.CloseMainWindow()')) 'the unchecked tail close must be removed'
                 # The order inside the unit: the close decision precedes the wait, the residue check
                 # follows the confirmed exit, and the restart only starts after the root is clean; the
                 # restart stage in the main flow is only claimed after the unit answered.
-                $rejected = $source.IndexOf('single.instance.primary_close_rejected')
-                $timeout = $source.IndexOf('single.instance.primary_close_timeout')
+                $rejected = $source.IndexOf("if (-not `$facts.closeAccepted)")
+                $timeout = $source.IndexOf("'_close_timeout'")
                 $residue = $source.IndexOf('single.instance.residue_after_close')
                 $restartCall = $source.IndexOf('$restart = & $StartScenario')
-                $restartVerified = $source.IndexOf("`$scenarioStage = 'restart-verified'")
+                $restartVerified = $source.IndexOf("`$scenarioStage = 'restart-closed'")
                 Assert-True ($rejected -gt 0 -and $timeout -gt $rejected) 'the close rejection must be decided before the wait'
                 Assert-True ($residue -gt $timeout) 'the residue check must follow the confirmed exit'
                 Assert-True ($restartCall -gt $residue) 'the restart must start after the residue check'
-                Assert-True ($restartVerified -gt $source.IndexOf('single.instance.restart_unresponsive')) 'the restart stage may only be claimed after the restart responded'
+                $restartClose = $source.IndexOf("`$restartClose = Close-OwnedInstance -Identity `$restart -Role 'restart'")
+                Assert-True ($restartClose -gt $source.IndexOf('single.instance.restart_unresponsive')) 'the restart must respond before its graceful close'
+                Assert-True ($restartVerified -gt $restartClose) 'success may only be claimed after the restart close unit returned'
             }
         }
     )

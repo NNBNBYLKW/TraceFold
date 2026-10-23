@@ -62,9 +62,10 @@ $stageSlug = $StageCheckpoint.ToLowerInvariant()
 $versionStageSlug = $StageCheckpoint.Replace('-', '').ToLowerInvariant()
 $stagingName = ".tracefold-stage$stageSlug-publish-$([Guid]::NewGuid().ToString('N'))"
 $stagingRoot = [IO.Path]::GetFullPath((Join-Path $distRoot $stagingName))
-$stagingPackage = [IO.Path]::GetFullPath((Join-Path $stagingRoot $packageName))
+# Keep internal directory names short; final names and archive contents remain unchanged.
+$stagingPackage = [IO.Path]::GetFullPath((Join-Path $stagingRoot 'product'))
 $stagingZip = [IO.Path]::GetFullPath((Join-Path $stagingRoot $archiveName))
-$stagingToolkit = [IO.Path]::GetFullPath((Join-Path $stagingRoot $toolkitName))
+$stagingToolkit = [IO.Path]::GetFullPath((Join-Path $stagingRoot 'toolkit'))
 $stagingToolkitZip = [IO.Path]::GetFullPath((Join-Path $stagingRoot $toolkitArchiveName))
 $backupName = ".tracefold-stage$stageSlug-backup-$([Guid]::NewGuid().ToString('N'))"
 $backupRoot = [IO.Path]::GetFullPath((Join-Path $distRoot $backupName))
@@ -362,7 +363,7 @@ function Assert-ToolkitCoverage {
     [void] $required.Add('scripts/run-stage5cc-ui-acceptance.ps1')
     [void] $required.Add('Run-Stage5CC-Acceptance.cmd')
     [void] $required.Add('scripts/Run-Stage5CC-Acceptance.ps1')
-    foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'Aggregate')) {
+    foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'VisualGate', 'Aggregate')) {
         [void] $required.Add('scripts/ui-acceptance/TraceFold.UiAcceptance.' + $moduleName + '.psm1')
     }
     [void] $required.Add('scripts/ui-acceptance/report-template/index.html')
@@ -535,7 +536,7 @@ if ($isStageCC) {
             [pscustomobject]@{ Path = 'scripts/ui-acceptance/report-template/index.html'; Label = 'report-template' })) {
         [void] $requiredInputs.Add($entry)
     }
-    foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'Aggregate')) {
+    foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'VisualGate', 'Aggregate')) {
         [void] $requiredInputs.Add([pscustomobject] @{
                 Path  = 'scripts/ui-acceptance/TraceFold.UiAcceptance.' + $moduleName + '.psm1'
                 Label = 'module:' + $moduleName
@@ -642,12 +643,23 @@ try {
         "-p:RestorePackagesPath=$localPackageSource",
         '--disable-build-servers',
         '--ignore-failed-sources')
+    # Reports belong to this invocation, outside staging/rollback cleanup. Keep them on failure
+    # as well as success; a later publish always gets a new leaf and cannot replace the first run.
+    $testResultsRoot = Join-Path (Join-Path $repoRoot '.superpowers\publish-media-desktop') ([Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $testResultsRoot | Out-Null
+    Assert-NoReparseTree -Path $testResultsRoot
+    Write-Output "Publish test evidence: $testResultsRoot"
     Invoke-DotNet -DotNetArguments @(
         'test', $solution,
         '-c', 'Release',
         '--no-restore',
         "-p:RestorePackagesPath=$localPackageSource",
-        '--disable-build-servers')
+        '--disable-build-servers',
+        '--logger', 'trx',
+        '--results-directory', $testResultsRoot)
+    if (@(Get-ChildItem -LiteralPath $testResultsRoot -Filter '*.trx' -Recurse -File).Count -eq 0) {
+        throw "The publish test run produced no TRX report: $testResultsRoot"
+    }
 
     New-Item -ItemType Directory -Path $stagingRoot | Out-Null
     Assert-NoReparseTree -Path $stagingRoot
@@ -795,6 +807,17 @@ try {
         Assert-NoReparseTree -Path $stagingToolkit
 
         $stagingSupport = Join-Path $stagingToolkit 'runtime\support'
+        # The solution restore has no RID for Support. Resolve the exact self-contained target
+        # from the same verified offline cache before publishing with --no-restore.
+        Invoke-DotNet -DotNetArguments @(
+            'restore', $supportProject,
+            '-r', 'win-x64',
+            '-p:Configuration=Release',
+            '-p:SelfContained=true',
+            '--source', $localPackageSource,
+            "-p:RestorePackagesPath=$localPackageSource",
+            '--disable-build-servers',
+            '--ignore-failed-sources')
         Invoke-DotNet -DotNetArguments @(
             'publish', $supportProject,
             '-c', 'Release',
@@ -955,11 +978,11 @@ try {
     # promotion completed or every previous artifact was restored: a rollback that cannot finish
     # must leave the only remaining copy where the operator can find it.
     $targets = New-Object System.Collections.ArrayList
-    [void] $targets.Add([pscustomobject] @{ Kind = 'ProductDirectory'; Staged = $stagingPackage; Final = $packageDir; Backup = $backupPackage; Name = $packageName })
-    [void] $targets.Add([pscustomobject] @{ Kind = 'ProductArchive'; Staged = $stagingZip; Final = $zipPath; Backup = $backupZip; Name = $archiveName })
+    [void] $targets.Add([pscustomobject] @{ Kind = 'ProductDirectory'; Staged = $stagingPackage; StagedName = 'product'; Final = $packageDir; Backup = $backupPackage; Name = $packageName })
+    [void] $targets.Add([pscustomobject] @{ Kind = 'ProductArchive'; Staged = $stagingZip; StagedName = $archiveName; Final = $zipPath; Backup = $backupZip; Name = $archiveName })
     if ($isStageCC) {
-        [void] $targets.Add([pscustomobject] @{ Kind = 'ToolkitDirectory'; Staged = $stagingToolkit; Final = $toolkitDir; Backup = $backupToolkit; Name = $toolkitName })
-        [void] $targets.Add([pscustomobject] @{ Kind = 'ToolkitArchive'; Staged = $stagingToolkitZip; Final = $toolkitZipPath; Backup = $backupToolkitZip; Name = $toolkitArchiveName })
+        [void] $targets.Add([pscustomobject] @{ Kind = 'ToolkitDirectory'; Staged = $stagingToolkit; StagedName = 'toolkit'; Final = $toolkitDir; Backup = $backupToolkit; Name = $toolkitName })
+        [void] $targets.Add([pscustomobject] @{ Kind = 'ToolkitArchive'; Staged = $stagingToolkitZip; StagedName = $toolkitArchiveName; Final = $toolkitZipPath; Backup = $backupToolkitZip; Name = $toolkitArchiveName })
     }
     if ($FaultPoint -ceq 'BeforePromotion') {
         throw 'Injected promotion fault before any target moved.'
@@ -986,7 +1009,7 @@ try {
         }
 
         foreach ($target in $targets) {
-            Assert-DirectChild -Path $target.Staged -Parent $stagingRoot -ExpectedName $target.Name
+            Assert-DirectChild -Path $target.Staged -Parent $stagingRoot -ExpectedName $target.StagedName
             Assert-DirectChild -Path $target.Final -Parent $distRoot -ExpectedName $target.Name
             Assert-NoReparseTree -Path $target.Staged
             Move-Item -LiteralPath $target.Staged -Destination $target.Final
