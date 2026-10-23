@@ -96,7 +96,6 @@ public sealed class RuntimeAndLogDiagnosticProbe(
     IDirectoryProbe directoryProbe) : ISystemDiagnosticProbe
 {
     private const int MaximumManifestBytes = 64 * 1024;
-    private const string Stage5CBVersionPrefix = "4.0.0-stage5cb+";
 
     private static readonly JsonSerializerOptions ManifestJsonOptions = new()
     {
@@ -284,18 +283,24 @@ public sealed class RuntimeAndLogDiagnosticProbe(
 
     private bool IsValid(PackageVersionManifest? manifest)
     {
-        if (manifest is null
-            || !string.Equals(
-                manifest.StageCheckpoint,
-                "5C-B",
-                StringComparison.Ordinal)
-            || !IsLowercaseCommit(manifest.SourceCommit))
+        if (manifest is null || !IsLowercaseCommit(manifest.SourceCommit))
+        {
+            return false;
+        }
+
+        string? versionPrefix = manifest.StageCheckpoint switch
+        {
+            "5C-B" => "4.0.0-stage5cb+",
+            "5C-C" => "4.0.0-stage5cc+",
+            _ => null
+        };
+        if (versionPrefix is null)
         {
             return false;
         }
 
         string expectedInformationalVersion =
-            Stage5CBVersionPrefix + manifest.SourceCommit;
+            versionPrefix + manifest.SourceCommit;
         return string.Equals(
                 manifest.InformationalVersion,
                 expectedInformationalVersion,

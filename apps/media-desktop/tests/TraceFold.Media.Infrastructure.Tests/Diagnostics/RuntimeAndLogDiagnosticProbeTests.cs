@@ -76,25 +76,53 @@ public sealed class RuntimeAndLogDiagnosticProbeTests
         Assert.Equal("diagnostics.runtime.manifest_invalid", item.ErrorCode);
     }
 
-    [Fact]
-    public async Task Valid_manifest_and_writable_log_root_are_healthy()
+    [Theory]
+    [InlineData("5C-B", "stage5cb")]
+    [InlineData("5C-C", "stage5cc")]
+    public async Task Valid_manifest_and_writable_log_root_are_healthy(
+        string stageCheckpoint,
+        string versionStage)
     {
         using RuntimeFixture fixture = RuntimeFixture.Create(logDirectory: true);
-        fixture.WriteValidManifest();
+        string version = $"4.0.0-{versionStage}+{SourceCommit}";
+        fixture.WriteManifest(stageCheckpoint, SourceCommit, version);
 
-        SystemDiagnosticItem item = Assert.Single(await fixture.Probe()
+        SystemDiagnosticItem item = Assert.Single(await fixture.Probe(
+                informationalVersion: version)
             .CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(SystemDiagnosticSeverity.Healthy, item.Severity);
         Assert.Null(item.ErrorCode);
         Assert.Contains(item.Facts, fact => fact.Key == "runtime.stage_checkpoint"
-            && fact.Value == "5C-B"
+            && fact.Value == stageCheckpoint
             && fact.Sensitivity == SystemDiagnosticFactSensitivity.Shareable);
         Assert.Contains(item.Facts, fact => fact.Key == "runtime.source_commit"
             && fact.Value == SourceCommit
             && fact.Sensitivity == SystemDiagnosticFactSensitivity.Shareable);
         Assert.Contains(item.Facts, fact => fact.Key == "runtime.logs.writable"
             && fact.Value == "是");
+    }
+
+    [Theory]
+    [InlineData("5C-B", "stage5cc", "stage5cc")]
+    [InlineData("5C-C", "stage5cb", "stage5cb")]
+    [InlineData("5C-C", "stage5cc", "stage5cb")]
+    [InlineData("5C-D", "stage5cd", "stage5cd")]
+    public async Task Stage_and_assembly_identity_must_both_match_the_manifest(
+        string stageCheckpoint,
+        string manifestStage,
+        string assemblyStage)
+    {
+        using RuntimeFixture fixture = RuntimeFixture.Create(logDirectory: true);
+        fixture.WriteManifest(stageCheckpoint, SourceCommit,
+            $"4.0.0-{manifestStage}+{SourceCommit}");
+
+        SystemDiagnosticItem item = Assert.Single(await fixture.Probe(
+                informationalVersion: $"4.0.0-{assemblyStage}+{SourceCommit}")
+            .CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(SystemDiagnosticSeverity.Unavailable, item.Severity);
+        Assert.Equal("diagnostics.runtime.manifest_invalid", item.ErrorCode);
     }
 
     [Theory]
