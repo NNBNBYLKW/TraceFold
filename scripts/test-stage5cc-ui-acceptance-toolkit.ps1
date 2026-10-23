@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata', 'OfflineEntry')]
+    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata', 'OfflineEntry', 'Packaging')]
     [string] $Suite = 'All'
 )
 
@@ -61,6 +61,13 @@ $script:suites = [ordered] @{
     # the package, and every rejection is checked against "nothing was started", not a message.
     OfflineEntry = @(
         'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.OfflineEntry.Tests.ps1'
+    )
+    # The producer: two packages from one source, a member table generated from the staged bytes,
+    # the structural smokes and the four-target promotion with rollback. Every case starts the
+    # real publish script through -File in a fixture repository; only the SDK and the product
+    # payload are stand-ins, and each case says so.
+    Packaging = @(
+        'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Packaging.Tests.ps1'
     )
 }
 

@@ -55,9 +55,14 @@ that declares another name is refused before anything starts (toolkit.support_ex
 Two registry entries (Conflict, Library) import scenarios/TraceFold.UiAcceptance.Aggregate.psm1 and
 fall back to the copy one directory up. The package check reads the same two candidates in the same
 order and requires the file that would be imported to be a member; a request whose engine is absent
-is refused with toolkit.scenario_dependency_missing before the support tool runs. The MainChain
-media-tools declaration is also a member when it exists; an unlisted or changed declaration answers
-Blocked with pinned_media_tools_declaration_unverified instead of being read unverified.
+is refused with toolkit.scenario_dependency_missing before the support tool runs. Every entry in
+the scenario registry is a required source file, so a package can never be assembled from whatever
+happens to exist in the checkout.
+
+The MainChain media-tools declaration (apps/media-desktop/tools/ffmpeg/win-x64/manifest.json) is a
+required member: the producer copies the declaration it already verified against the FFmpeg
+distribution, the structure smoke pins its sizes and digests to the product's ffmpeg.exe and
+ffprobe.exe, and a declaration that is missing, unlisted or changed is refused before promotion.
 
 The entry verifies the manifest before it starts anything: a rooted, traversing, non-canonical,
 duplicate or reparse-pointed member, a missing member, a size or hash mismatch, an unlisted file
@@ -77,6 +82,34 @@ The driver archive digest (source mode only), the extracted/packaged executable 
 PE file version are different facts. In package mode there is no archive, so the archive fields
 stay null / not-packaged and the executable digest never stands in for them. Without Git, the
 script repository commit stays unknown instead of being guessed.
+
+Where this package comes from
+-----------------------------
+
+scripts/publish-media-desktop.ps1 -StageCheckpoint 5C-C produces two artifacts from the same
+tested source: the product (TraceFold-MediaDesktop-Stage5C-C-win-x64) and this toolkit
+(TraceFold-MediaDesktop-Stage5C-C-UiAcceptance-win-x64), each with a same-named ZIP. Both are
+built in staging, both ZIPs are created there, the structural smoke runs there, and only then
+are the four final targets replaced together; a failed promotion restores the previous pair.
+
+toolkit.json is generated from the bytes that were staged, never copied from an example: the
+member table is walked out of the staged trees, and the support and driver payloads are listed
+file by file. The driver's archive identity (file name, size and SHA-256 of winappcli-x64.zip)
+is kept separate from the extracted winapp.exe digest, and the archive is only unpacked after
+that identity and every member name have been checked. Debug symbols are not part of a
+distributed payload; the dropped names are recorded under driver.excludedMembers.
+
+scripts/smoke-stage5cc-ui-acceptance-toolkit.ps1 verifies the structure - manifest, member
+rows, complete support and driver trees, contract fixtures, version stamp and the product
+boundary - without starting the product, the support CLI or the driver. It also asks this entry
+to verify itself with -ValidateOnly. Only -RunStartupLayout delegates to a real scenario run.
+scripts/smoke-media-desktop-package.ps1 keeps the earlier business probes for the product. The
+producer runs that smoke as the promotion gate: the complete 5C-C path (package identity, native
+window and the four probe scenarios) must pass before any of the four final targets is touched.
+A real publish passes no launcher and the smoke starts the packaged product; tests pass
+-ProductSmokeLauncher so the same four requests and exit-code rules run against a controlled
+process, and the recorded ProductLaunchProbe then stays NotRun. -IdentityOnly is a separate
+read-only presence/version check and is never a promotion qualification.
 
 Boundaries
 ----------

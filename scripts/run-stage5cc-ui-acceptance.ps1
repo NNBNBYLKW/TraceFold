@@ -40,7 +40,11 @@ param(
     [string] $OutputDirectory,
     [ValidateSet('All','StartupLayout','MainChain','Conflict','ConflictKeepBoth','ConflictReplace','ConflictSkip','ProcessingFailureRetry','BatchMetadataUndo','LibraryFilterNaming','Library','Taxonomy','Diagnostics','SingleInstance','Visual')]
     [string[]] $Scenario = @('All'),
-    [string] $ToolkitDirectory
+    [string] $ToolkitDirectory,
+    # Package check only: verifies toolkit.json and every member exactly as a run would, then
+    # exits before the product, output, driver or support is touched. The packaging pipeline uses
+    # this to prove a freshly staged toolkit is consumable without starting anything.
+    [switch] $ValidateOnly
 )
 
 Set-StrictMode -Version Latest
@@ -332,7 +336,9 @@ function Read-Stage5CCToolkitPackage {
 
     # The contract declares the fixture assets this toolkit owes. They are re-hashed here, from the
     # package itself, so a moved toolkit never reaches a scenario with a stale or missing fixture.
-    $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
+    # ReadAllText is used instead of Get-Content -Raw because Windows PowerShell decodes a BOM-less
+    # UTF-8 file as ANSI, which corrupts the contract's non-ASCII strings before ConvertFrom-Json.
+    $contract = [IO.File]::ReadAllText($contractPath) | ConvertFrom-Json
     $fixtureAssets = @()
     if ($null -ne $contract.PSObject.Properties['fixtureAssets']) { $fixtureAssets = @($contract.fixtureAssets) }
     foreach ($asset in $fixtureAssets) {
@@ -385,6 +391,28 @@ if ($packageMode) {
 else {
     $script:repositoryRoot = Split-Path -Parent $PSScriptRoot
 }
+
+if ($ValidateOnly) {
+    if (-not $packageMode) {
+        [Console]::Error.WriteLine('-ValidateOnly needs -ToolkitDirectory: only a package carries a manifest to verify.')
+        exit $ExitInvalidArguments
+    }
+    # Everything a run would verify has already been verified above. Nothing is started, created
+    # or written: the summary is the whole answer, and it is one JSON line so a caller can read
+    # the counts instead of scraping prose.
+    [pscustomobject] @{
+        schema            = 'tracefold-toolkit-validation'
+        toolkitRoot       = [string] $script:toolkitPackage.Root
+        memberCount       = [int] $script:toolkitPackage.MemberCount
+        fixtureCount      = [int] $script:toolkitPackage.FixtureCount
+        supportExecutable = [string] $script:toolkitPackage.SupportExecutable
+        driverExecutable  = [string] $script:toolkitPackage.DriverExecutable
+        contractPath      = [string] $script:toolkitPackage.ContractPath
+        resultsRoot       = [string] $script:toolkitPackage.ResultsRoot
+    } | ConvertTo-Json -Compress
+    exit 0
+}
+
 $script:uiRoot = Join-Path $script:repositoryRoot 'scripts/ui-acceptance'
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Contracts.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Processes.psm1') -Force -DisableNameChecking
