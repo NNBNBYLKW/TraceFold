@@ -182,6 +182,7 @@ function New-PackagingFixture {
             'scripts/smoke-media-desktop-package.ps1',
             'scripts/smoke-stage5cc-ui-acceptance-toolkit.ps1',
             'scripts/run-stage5cc-ui-acceptance.ps1',
+            'scripts/Run-Stage5CC-Acceptance.ps1',
             'scripts/ui-acceptance/README.txt',
             'scripts/test-stage5cc-ui-acceptance-toolkit.ps1',
             'apps/media-desktop/TraceFold.MediaDesktop.slnx',
@@ -216,7 +217,9 @@ function New-PackagingFixture {
     Write-PackagingText -Path (Join-Path $repo 'apps\media-desktop\tools\ffmpeg\win-x64\manifest.json') -Text ($ffmpegManifest | ConvertTo-Json -Depth 5)
 
     if (-not $WithoutLauncher) {
-        Write-PackagingText -Path (Join-Path $repo 'scripts\Run-Stage5CC-Acceptance.cmd') -Text "@echo off`r`nrem CONTROLLED TEST SHAPE - not a product implementation.`r`nexit /b 0`r`n"
+        # The real launcher: the package the fixture produces must carry the same bytes the
+        # toolkit will, not a marker that only satisfies the readiness gate.
+        Copy-PackagingSource -Source (Join-Path $script:root 'scripts\Run-Stage5CC-Acceptance.cmd') -Destination (Join-Path $repo 'scripts\Run-Stage5CC-Acceptance.cmd')
     }
     if (-not $WithoutVisualScenario) {
         Write-PackagingText -Path (Join-Path $repo 'scripts\ui-acceptance\scenarios\70-visual-keyboard-matrix.ps1') -Text "# CONTROLLED TEST SHAPE - visual matrix scenario marker for the readiness gate.`n"
@@ -480,7 +483,24 @@ function Get-TestCases {
                     $toolkitEntries = @(Get-PackagingZipEntries -Path $toolkitZip)
                     Assert-True ($toolkitEntries -contains 'toolkit.json') 'the toolkit archive must carry its manifest'
                     Assert-True ($toolkitEntries -contains 'scripts/run-stage5cc-ui-acceptance.ps1') 'the toolkit archive must carry the entry'
+                    Assert-True ($toolkitEntries -contains 'Run-Stage5CC-Acceptance.cmd') 'the launcher must be at the package root'
+                    Assert-True ($toolkitEntries -contains 'scripts/Run-Stage5CC-Acceptance.ps1') 'the launcher helper must ride next to the entry'
+                    Assert-True (-not ($toolkitEntries -contains 'scripts/Run-Stage5CC-Acceptance.cmd')) 'the launcher must not stay under scripts'
                     Assert-True (-not ($toolkitEntries -contains 'winapp.pdb')) 'debug symbols must not be packaged'
+
+                    # The manifest must list both launcher files with their real bytes, and the
+                    # structure smoke consumes the same rows.
+                    foreach ($launcherRelative in @('Run-Stage5CC-Acceptance.cmd', 'scripts/Run-Stage5CC-Acceptance.ps1')) {
+                        $launcherRow = @($manifest.members | Where-Object { $_.path -eq $launcherRelative })
+                        Assert-Equal 1 $launcherRow.Count ('the launcher needs one member row: ' + $launcherRelative)
+                        $launcherDisk = Join-Path $toolkitDir ($launcherRelative -replace '/', '\')
+                        Assert-Equal ([long] $launcherRow[0].bytes) ([long] (Get-Item -LiteralPath $launcherDisk).Length) ('the launcher row size must match: ' + $launcherRelative)
+                        Assert-Equal ([string] $launcherRow[0].sha256) ((Get-FileHash -LiteralPath $launcherDisk -Algorithm SHA256).Hash) ('the launcher row hash must match: ' + $launcherRelative)
+                    }
+                    Assert-Equal `
+                        (Get-FileHash -LiteralPath (Join-Path $script:root 'scripts\Run-Stage5CC-Acceptance.cmd') -Algorithm SHA256).Hash `
+                        (Get-FileHash -LiteralPath (Join-Path $toolkitDir 'Run-Stage5CC-Acceptance.cmd') -Algorithm SHA256).Hash `
+                        'the launcher at the package root must be the real one'
 
                     $productFiles = @(Get-ChildItem -LiteralPath $productDir -Recurse -File)
                     Assert-True (@($productFiles | Where-Object { $_.Name -eq 'winapp.exe' }).Count -eq 0) 'the product must not carry the driver'
@@ -739,6 +759,19 @@ function Get-TestCases {
                     $fixture = New-PackagingFixture -Attempt $base -WithoutLauncher
                     $result = Assert-PackagingRefused -Fixture $fixture -ExpectedText 'stage5c_c_not_ready'
                     Assert-Contains $result.Output 'launcher' ('the missing piece must be named: ' + $result.Output)
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'a checkpoint without its launcher helper is reported as not ready before dist exists'
+            Body = {
+                $base = New-PackagingAttempt
+                try {
+                    $fixture = New-PackagingFixture -Attempt $base
+                    Remove-PackagingFixtureFile -Fixture $fixture -Relative 'scripts/Run-Stage5CC-Acceptance.ps1'
+                    $result = Assert-PackagingRefused -Fixture $fixture -ExpectedText 'stage5c_c_not_ready'
+                    Assert-Contains $result.Output 'launcher-helper' ('the missing helper must be named: ' + $result.Output)
                 }
                 finally { Remove-UiTestTree -Path $base }
             }

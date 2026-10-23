@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata', 'OfflineEntry', 'Packaging')]
+    [ValidateSet('All', 'Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'IntakeScenario', 'WorkflowScenario', 'Aggregate', 'HostCondition', 'Metadata', 'OfflineEntry', 'Packaging', 'Launcher')]
     [string] $Suite = 'All'
 )
 
@@ -68,6 +68,11 @@ $script:suites = [ordered] @{
     # payload are stand-ins, and each case says so.
     Packaging = @(
         'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Packaging.Tests.ps1'
+    )
+    # The package-root launcher: the real .cmd, the system PowerShell 5.1 and the real public
+    # entry. Every case proves the console was still open before the controlled input arrived.
+    Launcher = @(
+        'scripts/ui-acceptance/tests/TraceFold.UiAcceptance.Launcher.Tests.ps1'
     )
 }
 

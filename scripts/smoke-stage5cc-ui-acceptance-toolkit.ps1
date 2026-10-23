@@ -184,6 +184,8 @@ try {
     $uiRoot = Join-Path $toolkitRoot 'scripts/ui-acceptance'
     $required = New-Object 'System.Collections.Generic.List[string]'
     $required.Add('scripts/run-stage5cc-ui-acceptance.ps1')
+    $required.Add('Run-Stage5CC-Acceptance.cmd')
+    $required.Add('scripts/Run-Stage5CC-Acceptance.ps1')
     foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata')) {
         $required.Add('scripts/ui-acceptance/TraceFold.UiAcceptance.' + $moduleName + '.psm1')
     }
@@ -196,6 +198,7 @@ try {
         Assert-Smoke -Condition ($rows.ContainsKey($relative)) -Message ('consumed file has no member row: ' + $relative)
         Assert-Smoke -Condition ([IO.File]::Exists((Resolve-PackageRelativePath -Root $toolkitRoot -Relative $relative -Label 'required'))) -Message ('consumed file is missing: ' + $relative)
     }
+    Assert-Smoke -Condition (-not $rows.ContainsKey('scripts/Run-Stage5CC-Acceptance.cmd')) -Message 'the launcher is under scripts; the package root must carry it'
 
     $covered = New-Object 'System.Collections.Generic.List[string]'
     Add-TreeFiles -Root $toolkitRoot -Directory (Join-Path $uiRoot 'report-template') -Sink $covered

@@ -1,6 +1,14 @@
 TraceFold Stage 5CC UI acceptance toolkit
 =========================================
 
+The package root carries Run-Stage5CC-Acceptance.cmd, the operator entry. It starts the system
+Windows PowerShell 5.1 at %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe with
+scripts/Run-Stage5CC-Acceptance.ps1, which resolves the toolkit from its own location, finds the
+sibling or explicit product, picks a fresh results leaf and starts the public entry. The console
+always pauses and the entry's exit code is preserved. The complete mode (All plus -ThemeMatrix
+Both) is refused with exit code 3 because this entry has no ThemeMatrix support; a single scenario
+is started with -Scenario <name>.
+
 The public entry is scripts/run-stage5cc-ui-acceptance.ps1. It owns the whole outer walk:
 request precheck -> preparation -> one Runner invocation per scenario -> report and owned cleanup.
 Nothing here starts the product by itself, touches the registry, or installs anything globally.
@@ -41,9 +49,10 @@ toolkit.json at the package root is the data contract:
   driver           memberName (must be winapp.exe), bytes, sha256
   members[]        path, bytes, sha256, source for every file this entry consumes
 
-The member table must cover the whole consumed closure, not only a few named files: the entry
-script, every module in scripts/ui-acceptance, every file under report-template, the complete
-support payload, the complete driver payload, the contract, and the contract's fixtureAssets.
+The member table must cover the whole consumed closure, not only a few named files: the package-root
+launcher, its scripts/ helper, the entry script, every module in scripts/ui-acceptance, every file
+under report-template, the complete support payload, the complete driver payload, the contract, and
+the contract's fixtureAssets.
 report-template/index.html is required by name (toolkit.template_missing): an empty template
 directory is not enough. A file that exists in one of those trees but has no row is refused with
 toolkit.member_unlisted, because otherwise it would be imported or copied without ever being

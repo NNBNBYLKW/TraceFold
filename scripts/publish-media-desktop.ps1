@@ -360,6 +360,8 @@ function Assert-ToolkitCoverage {
 
     $required = New-Object System.Collections.ArrayList
     [void] $required.Add('scripts/run-stage5cc-ui-acceptance.ps1')
+    [void] $required.Add('Run-Stage5CC-Acceptance.cmd')
+    [void] $required.Add('scripts/Run-Stage5CC-Acceptance.ps1')
     foreach ($moduleName in @('Contracts', 'Driver', 'Processes', 'Evidence', 'Runner', 'Workflows', 'Metadata', 'Aggregate')) {
         [void] $required.Add('scripts/ui-acceptance/TraceFold.UiAcceptance.' + $moduleName + '.psm1')
     }
@@ -373,6 +375,9 @@ function Assert-ToolkitCoverage {
         if (-not $index.Contains([string] $relative)) {
             throw ('stage5c_c_toolkit_incomplete: ' + $relative)
         }
+    }
+    if ($index.Contains('scripts/Run-Stage5CC-Acceptance.cmd')) {
+        throw 'stage5c_c_toolkit_layout: the launcher must be at the package root, not under scripts.'
     }
 
     foreach ($tree in @('runtime/support', 'runtime/driver', 'scripts/ui-acceptance/report-template')) {
@@ -517,6 +522,7 @@ if ($isStageCC) {
     $requiredInputs = New-Object System.Collections.ArrayList
     foreach ($entry in @(
             [pscustomobject]@{ Path = 'scripts/Run-Stage5CC-Acceptance.cmd'; Label = 'launcher' },
+            [pscustomobject]@{ Path = 'scripts/Run-Stage5CC-Acceptance.ps1'; Label = 'launcher-helper' },
             [pscustomobject]@{ Path = 'docs/media-desktop-stage5cc-visual-uia-test-guide.md'; Label = 'test-guide' },
             [pscustomobject]@{ Path = 'docs/media-desktop-stage5cc-visual-uia-acceptance.md'; Label = 'acceptance-record' },
             [pscustomobject]@{ Path = 'scripts/ui-acceptance/scenarios/70-visual-keyboard-matrix.ps1'; Label = 'visual-matrix-scenario' },
@@ -836,7 +842,11 @@ try {
         }
         Add-ToolkitTree -SourceDirectory (Join-Path $repoRoot 'scripts/ui-acceptance/report-template') -DestinationRelative 'scripts/ui-acceptance/report-template' -SourceLabel 'template'
         Copy-ToolkitFile -Source (Join-Path $repoRoot 'scripts/ui-acceptance/README.txt') -DestinationRelative 'scripts/ui-acceptance/README.txt' -SourceLabel 'readme'
-        Copy-ToolkitFile -Source (Join-Path $repoRoot 'scripts/Run-Stage5CC-Acceptance.cmd') -DestinationRelative 'scripts/Run-Stage5CC-Acceptance.cmd' -SourceLabel 'launcher'
+        # The launcher is the package's front door: it belongs at the toolkit root, with its
+        # single-purpose helper under scripts next to the public entry. Putting the .cmd under
+        # scripts again would leave the root without the double-clickable entry.
+        Copy-ToolkitFile -Source (Join-Path $repoRoot 'scripts/Run-Stage5CC-Acceptance.cmd') -DestinationRelative 'Run-Stage5CC-Acceptance.cmd' -SourceLabel 'launcher'
+        Copy-ToolkitFile -Source (Join-Path $repoRoot 'scripts/Run-Stage5CC-Acceptance.ps1') -DestinationRelative 'scripts/Run-Stage5CC-Acceptance.ps1' -SourceLabel 'launcher-helper'
         Copy-ToolkitFile -Source (Join-Path $repoRoot 'docs/media-desktop-stage5cc-visual-uia-test-guide.md') -DestinationRelative 'docs/media-desktop-stage5cc-visual-uia-test-guide.md' -SourceLabel 'guide'
         Copy-ToolkitFile -Source (Join-Path $repoRoot 'docs/media-desktop-stage5cc-visual-uia-acceptance.md') -DestinationRelative 'docs/media-desktop-stage5cc-visual-uia-acceptance.md' -SourceLabel 'guide'
         Copy-ToolkitFile -Source $contractPath -DestinationRelative 'apps/media-desktop/tools/ui-acceptance-contract/stage5cc-uia-contract.json' -SourceLabel 'contract'
