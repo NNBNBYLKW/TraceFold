@@ -1,5 +1,17 @@
 # 当前恢复点
 
+## 2026-10-23 发布准备收尾后的状态
+
+以 [本轮整合报告](RELEASE-PREP-INTEGRATION-20261023.md) 为最新进度入口。下方旧恢复点是迁移时的历史记录，暂停状态及四项残差不代表本轮结束状态。
+
+- 实现提交：`36ffcf8`、`7977c6d`、`8ce837a`；本轮成果按用户最新要求整合到本地 `main`，未 push、打标签或对外发布。
+- Task13 开发残差已闭合：PS7/PS5.1 各 395/395，公开入口至真实70/Runner/Evidence 的 Source/移动Package × Both/CurrentOnly 受控整链通过，Synthetic 标记保留。
+- 当前小阶段已收尾：修复 Stage5CC 运行清单兼容性，真实发布成功，.NET 1260/1260，产品真实 smoke 和工具包结构校验通过。两份 ZIP 绑定 `8ce837a6909ef4f0b6f6f62360fad1d0817175f3`。
+- 停点：尚未运行正式真实 `SingleInstance` 场景或 `All -ThemeMatrix Both`，未完成真实视觉/键鼠矩阵、截图终审和最终 Stage5CC 验收；clean VM 为 NotRun。
+- 整合操作仅在 `T:/Windows/Documents/GitHub/TraceFold/.superpowers/release-prep-20261023` 完成。原主目录仍为 `codex/main-workspace-20261023`、HEAD `1062ce8`，既有28件候选文件哈希未变。不要直接覆盖它或 reset/stash 来切换主线。
+
+## 迁移时恢复点（历史原文保留）
+
 2026-10-23（Europe/London）。本页是事实摘要，不是最终产品验收记录。迁移期间没有重跑项目测试。
 
 当前已确定六成员工作流：总负责人、助理、协调员、执行者、reviewer、攻坚者，具体职责及外部检索、问题升级和暂停规则见根AGENTS.md。六名成员均已初始化；本轮仅授权工作流文档小任务；Task13及真实产品/UI开发仍暂停；下述代码及验收恢复点不变。

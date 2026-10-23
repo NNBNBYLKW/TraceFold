@@ -1,17 +1,5 @@
 # TraceFold：Codex接续规则
 
-## 2026-10-23 独立发布准备分支覆盖规则
-
-用户最新指令要求本任务不用六角色机制，由主代理和子代理在独立分支完成，且不干扰现有工作流。
-本分支为 `codex/release-prep-20261023`，检出目录为
-`T:/Windows/Documents/GitHub/TraceFold/.superpowers/release-prep-20261023`。
-下面的六角色、原主目录唯一活动检出及开发暂停条款不用于本独立任务；其余数据隔离、单一写入 owner、验证、清理及发布边界继续适用。
-原主目录、其它 worktree 和旧证据只读，不向其源码、index 或现有运行目录写入。
-后续接续先读 `docs/codex/RELEASE-PREP-20261023.md`；下方及原接续文档保留迁移背景，不作为本分支的最新执行状态。
-
-已验证原生 PS7 宿主为 `C:/Users/29070/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe`；
-`C:/Program Files/PowerShell/7/pwsh.exe` 在本机不存在。PS5.1 为 `C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe`。
-
 用户于2026-10-23改为全Codex工作流，并要求回归原主目录。唯一活动工作区为 `T:/Windows/Documents/GitHub/TraceFold`，使用接续分支 `codex/main-workspace-20261023`；旧候选和临时接续worktree冻结只读。
 
 - 开始先读 `docs/codex/START-HERE.md`、`CURRENT-STATE.md`；经验在 `LESSONS-LEARNED.md`。按需查原件，不加载整段旧聊天/全部历史。

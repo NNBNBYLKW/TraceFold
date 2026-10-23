@@ -1,5 +1,13 @@
 # TraceFold新对话入口
 
+## 最新入口：发布准备收尾与主线整合
+
+先读 [RELEASE-PREP-INTEGRATION-20261023.md](RELEASE-PREP-INTEGRATION-20261023.md) 和 CURRENT-STATE.md 顶部。
+本轮已完成开发回归、真实产包及产品 smoke，并按用户要求把成果整合到本地 main。完整真实 UI 验收仍未完成；本轮按用户最新指令停在此处。
+主目录的接续分支与未提交候选保持原样，主线整合检出位于 `.superpowers/release-prep-20261023`。后续不要误将两处工作树或受控与真实验证结果混为一谈。
+
+## 迁移时入口（历史原文保留）
+
 2026-10-23（Europe/London）。用户已退出WorkBuddy工作流；当前处于迁移后暂停点，尚未开始新的开发。
 
 ## 只读这几项开始
