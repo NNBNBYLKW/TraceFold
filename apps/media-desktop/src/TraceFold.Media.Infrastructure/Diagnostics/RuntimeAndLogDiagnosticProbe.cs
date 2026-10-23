@@ -299,6 +299,16 @@ public sealed class RuntimeAndLogDiagnosticProbe(
             return false;
         }
 
+        // Stage 5C-C carries this field while staging (NotRun) and after the native smoke
+        // succeeds (Passed). It describes that probe; it cannot replace version validation.
+        if (manifest.ProductLaunchProbe.ValueKind != JsonValueKind.Undefined
+            && (manifest.StageCheckpoint != "5C-C"
+                || manifest.ProductLaunchProbe.ValueKind != JsonValueKind.String
+                || manifest.ProductLaunchProbe.GetString() is not ("NotRun" or "Passed")))
+        {
+            return false;
+        }
+
         string expectedInformationalVersion =
             versionPrefix + manifest.SourceCommit;
         return string.Equals(
@@ -441,7 +451,8 @@ public sealed class RuntimeAndLogDiagnosticProbe(
     private sealed record PackageVersionManifest(
         string? StageCheckpoint,
         string? SourceCommit,
-        string? InformationalVersion);
+        string? InformationalVersion,
+        JsonElement ProductLaunchProbe = default);
 
     private enum ManifestState
     {

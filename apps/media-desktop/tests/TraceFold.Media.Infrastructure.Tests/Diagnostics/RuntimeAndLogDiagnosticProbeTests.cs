@@ -139,6 +139,53 @@ public sealed class RuntimeAndLogDiagnosticProbeTests
         Assert.Equal("diagnostics.runtime.manifest_invalid", item.ErrorCode);
     }
 
+    [Theory]
+    [InlineData("NotRun")]
+    [InlineData("Passed")]
+    public async Task Stage5cc_manifest_accepts_the_publishers_probe_status(string probeStatus)
+    {
+        using RuntimeFixture fixture = RuntimeFixture.Create(logDirectory: true);
+        string version = $"4.0.0-stage5cc+{SourceCommit}";
+        File.WriteAllText(fixture.ManifestPath, JsonSerializer.Serialize(new
+        {
+            StageCheckpoint = "5C-C",
+            SourceCommit,
+            InformationalVersion = version,
+            ProductLaunchProbe = probeStatus
+        }));
+
+        SystemDiagnosticItem item = Assert.Single(await fixture.Probe(
+                informationalVersion: version)
+            .CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(SystemDiagnosticSeverity.Healthy, item.Severity);
+        Assert.Null(item.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("5C-B", "stage5cb", "\"Passed\"")]
+    [InlineData("5C-C", "stage5cc", "null")]
+    [InlineData("5C-C", "stage5cc", "true")]
+    [InlineData("5C-C", "stage5cc", "0")]
+    [InlineData("5C-C", "stage5cc", "\"Unknown\"")]
+    [InlineData("5C-C", "stage5cc", "\"passed\"")]
+    public async Task Launch_probe_status_is_typed_and_limited_to_Stage5cc(
+        string stage, string versionStage, string probeJson)
+    {
+        using RuntimeFixture fixture = RuntimeFixture.Create(logDirectory: true);
+        string version = $"4.0.0-{versionStage}+{SourceCommit}";
+        File.WriteAllText(fixture.ManifestPath,
+            "{\"StageCheckpoint\":\"" + stage + "\",\"SourceCommit\":\"" + SourceCommit
+            + "\",\"InformationalVersion\":\"" + version + "\",\"ProductLaunchProbe\":" + probeJson + "}");
+
+        SystemDiagnosticItem item = Assert.Single(await fixture.Probe(
+                informationalVersion: version)
+            .CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(SystemDiagnosticSeverity.Unavailable, item.Severity);
+        Assert.Equal("diagnostics.runtime.manifest_invalid", item.ErrorCode);
+    }
+
     public static TheoryData<string> InvalidManifestJson =>
         new()
         {
