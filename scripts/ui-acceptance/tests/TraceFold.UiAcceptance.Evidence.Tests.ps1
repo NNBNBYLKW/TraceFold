@@ -11,16 +11,19 @@ function Get-TestCases {
                 [IO.File]::WriteAllBytes($png, (Get-UiTestPngBytes))
                 try {
                     $token = 'secret-token'
+                    $collectorOrder = New-Object System.Collections.Generic.List[string]
                     $collect = @{
-                        screenshot = { $png }
+                        screenshot = { $collectorOrder.Add('screenshot'); $png }
                         uiaTree = { '{"tree":[]}' }
-                        lastCommand = { '{"status":"Failed","message":"secret-token"}' }
+                        lastCommand = { $collectorOrder.Add('lastCommand'); '{"status":"Failed","message":"secret-token"}' }
                         productLog = { '{"events":[{"message":"secret-token at C:\\Users\\someone\\log.txt"}]}' }
                         stateSnapshot = { '{"tables":{},"taxonomy":{}}' }
                         processLedger = { 'pid=123 secret-token' }
                     }
                     $refs = Write-UiFailureEvidence -OwnedRoot $root -OutputDirectory $out -ScenarioId 'startup' -StepId 'open' -Collectors $collect -RunToken $token
                     Assert-Equal 6 @($refs.PSObject.Properties).Count
+                    Assert-Equal 'lastCommand' $collectorOrder[0]
+                    Assert-Equal 'screenshot' $collectorOrder[1]
                     Assert-True ([IO.File]::Exists((Join-Path $out $refs.screenshot)))
                     $text = Get-Content -LiteralPath (Join-Path $out $refs.lastCommand) -Raw
                     Assert-NotContains $text $token
@@ -686,15 +689,27 @@ function Get-TestCases {
                 try {
                     $withVisual = Join-Path $base 'run-visual'
                     $runOutput = $withVisual
+                    $pngBytes = Get-UiTestPngBytes
                     $scenario = {
-                        [IO.File]::WriteAllBytes((Join-Path $runOutput 'a.png'), (Get-UiTestPngBytes))
+                        [IO.File]::WriteAllBytes((Join-Path $runOutput 'a.png'), $pngBytes)
                         [pscustomobject]@{
                             Status='Passed';Reason='';Artifacts=@('a.png');Viewports=@('1024x720')
                             Visual=[ordered]@{status='NotRun';synthetic=$true;entries=@([ordered]@{state='library';status='NotRun';theme='light';viewport='1024x720';page='library';image='a.png'})}
                         }
                     }.GetNewClosure()
                     $result = Invoke-UiAcceptanceRun -ScenarioId 'index-consumer' -Scenario $scenario -Cleanup {} -OwnedRoot $owned -OutputDirectory $withVisual -Metadata $metadata
-                    Assert-Equal 'Passed' ([string] $result.Status)
+                    $statusDetail = ''
+                    if ([IO.File]::Exists([string] $result.ReportPath)) {
+                        $reportText = [IO.File]::ReadAllText([string] $result.ReportPath)
+                        try {
+                            $failedReport = $reportText | ConvertFrom-Json
+                            $statusDetail = 'reason=' + [string] @($failedReport.scenarios)[0].steps[0].reason
+                        }
+                        catch {
+                            $statusDetail = 'report-json=' + $reportText
+                        }
+                    }
+                    Assert-Equal 'Passed' ([string] $result.Status) $statusDetail
                     Assert-Equal 0 ([int] $result.ExitCode)
                     Assert-True ([IO.File]::Exists((Join-Path $withVisual 'index.html'))) 'the runner produced the page'
                     $data = Get-Content -LiteralPath (Join-Path $withVisual 'screenshots.json') -Raw | ConvertFrom-Json
@@ -798,6 +813,79 @@ function Get-TestCases {
                     Assert-Contains $html 'not a real product screenshot'
                 }
                 finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'durable projection returns a new redacted tree and keeps safe identity facts'
+            Body = {
+                $token = 'projection-secret-token'
+                $root = 'C:\Users\someone\owned-run'
+                $executable = Join-Path $root 'TraceFold.Media.exe'
+                $hash = 'A'.PadRight(64, 'A')
+                $raw = [ordered] @{
+                    runTokenState = '[redacted-token]'
+                    ownedRootState = '[redacted-path]'
+                    message = ('command failed for ' + $token + ' at ' + $executable)
+                    pid = 42
+                    processId = [long] 43
+                    exitCode = 1
+                    exitObserved = $true
+                    imageSha256 = $hash
+                    close = [ordered] @{
+                        processId = 44
+                        startUtcTicks = [long] 638000000000000000
+                        accepted = $true
+                    }
+                    items = @([ordered] @{ message = ('item failed at ' + $executable + ' with ' + $token) })
+                }
+
+                $safe = ConvertTo-UiDurableEvidenceProjection -Value $raw `
+                    -RunToken $token -OwnedRoot $root -ExecutablePath $executable
+
+                Assert-Equal '[redacted-token]' ([string] $safe.runTokenState)
+                Assert-Equal '[redacted-path]' ([string] $safe.ownedRootState)
+                Assert-NotContains ([string] $safe.message) $token
+                Assert-NotContains ([string] $safe.message) $executable
+                Assert-Contains ([string] $safe.message) '[redacted-token]'
+                Assert-Contains ([string] $safe.message) '[redacted-path]'
+                Assert-Equal 42 ([int] $safe.pid)
+                Assert-Equal 43 ([long] $safe.processId)
+                Assert-Equal 1 ([int] $safe.exitCode)
+                Assert-Equal $true ([bool] $safe.exitObserved)
+                Assert-Equal $hash ([string] $safe.imageSha256)
+                Assert-Equal 44 ([int] $safe.close.processId)
+                Assert-Equal ([long] 638000000000000000) ([long] $safe.close.startUtcTicks)
+                Assert-Equal 1 @($safe.items).Count
+                Assert-NotContains ([string] @($safe.items)[0].message) $token
+                Assert-NotContains ([string] @($safe.items)[0].message) $executable
+                Assert-Contains ([string] @($safe.items)[0].message) '[redacted-token]'
+                Assert-Contains ([string] @($safe.items)[0].message) '[redacted-path]'
+                # The source is an input only; every redaction lives in the returned tree.
+                Assert-Equal ('command failed for ' + $token + ' at ' + $executable) ([string] $raw.message)
+                Assert-Equal 44 ([int] $raw.close.processId)
+                Assert-Throws {
+                    ConvertTo-UiDurableEvidenceProjection -Value ([ordered] @{ token = 'forbidden' }) `
+                        -RunToken $token -OwnedRoot $root -ExecutablePath $executable
+                }
+                Assert-Throws {
+                    ConvertTo-UiDurableEvidenceProjection -Value ([ordered] @{ processId = '43' }) `
+                        -RunToken $token -OwnedRoot $root -ExecutablePath $executable
+                }
+                Assert-Throws {
+                    ConvertTo-UiDurableEvidenceProjection -Value ([ordered] @{ runToken = $token }) `
+                        -RunToken $token -OwnedRoot $root -ExecutablePath $executable
+                }
+                Assert-Throws {
+                    ConvertTo-UiDurableEvidenceProjection -Value ([ordered] @{ executablePath = $executable }) `
+                        -RunToken $token -OwnedRoot $root -ExecutablePath $executable
+                }
+                try { throw [InvalidOperationException]::new(('nested failure ' + $executable)) }
+                catch {
+                    $errorFact = ConvertTo-UiDurableEvidenceProjection -Value $_ `
+                        -RunToken $token -OwnedRoot $root -ExecutablePath $executable
+                    Assert-NotContains ([string] $errorFact.message) $executable
+                    Assert-Contains ([string] $errorFact.message) '[redacted-path]'
+                }
             }
         }
     )

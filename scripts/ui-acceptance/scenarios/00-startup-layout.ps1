@@ -870,5 +870,11 @@ catch {
         $code = 'startup_layout.unexpected'
     }
     $status = if ($blockedFailureCodes -ccontains $code) { 'Blocked' } else { 'Failed' }
-    return [pscustomobject] @{ ScenarioId = $ScenarioId; Status = $status; Reason = $code; Viewports = @(); Artifacts = @() }
+    return [pscustomobject] @{
+        ScenarioId = $ScenarioId
+        Status = $status
+        Reason = $code
+        Viewports = @($viewports)
+        Artifacts = @($artifacts)
+    }
 }

@@ -3153,6 +3153,111 @@ function Get-TestCases {
             }
         },
         @{
+            Name = 'the foreground failure observation preserves one-sample handles and safe current identity facts'
+            Body = {
+                $path = Join-Path $script:uiRoot 'scenarios/61-single-instance-safety.ps1'
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref] $tokens, [ref] $errors)
+                Assert-Equal 0 @($errors).Count
+                $wanted = @('Get-SingleInstanceCurrentIdentityObservation',
+                    'New-SingleInstanceForegroundObservation',
+                    'ConvertTo-SingleInstanceDurableJson',
+                    'Write-SingleInstanceForegroundObservation')
+                $text = New-Object System.Collections.Generic.List[string]
+                foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+                    if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
+                }
+                Assert-Equal 4 $text.Count
+                . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
+
+                $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-si-foreground-' + [guid]::NewGuid().ToString('N'))
+                $current = $null
+                try {
+                    [void] [IO.Directory]::CreateDirectory($sandbox)
+                    $secretToken = 'foreground-token-72a563b1'
+                    $secretRoot = Join-Path $sandbox 'owned-root'
+                    $secretExe = Join-Path $sandbox 'product\TraceFold.Media.exe'
+                    $secretImageHash = 'C' * 64
+                    $current = [Diagnostics.Process]::GetCurrentProcess()
+                    $currentTicks = [long] $current.StartTime.ToUniversalTime().Ticks
+                    $currentPath = [string] $current.MainModule.FileName
+                    $currentHash = (Get-FileHash -LiteralPath $currentPath -Algorithm SHA256).Hash
+
+                    $matchedIdentity = Get-SingleInstanceCurrentIdentityObservation -ProcessId $PID `
+                        -ExpectedStartUtcTicks $currentTicks -ExpectedExecutablePath $currentPath `
+                        -ExpectedExecutableSha256 $currentHash
+                    Assert-Equal 'matched' ([string] $matchedIdentity.state)
+                    Assert-Equal $PID ([int] $matchedIdentity.processId)
+                    Assert-Equal $currentTicks ([long] $matchedIdentity.startUtcTicks)
+                    Assert-Equal $currentHash ([string] $matchedIdentity.imageSha256)
+                    Assert-True $matchedIdentity.identityMatched
+
+                    $mismatchIdentity = Get-SingleInstanceCurrentIdentityObservation -ProcessId $PID `
+                        -ExpectedStartUtcTicks ($currentTicks + 1) -ExpectedExecutablePath $currentPath `
+                        -ExpectedExecutableSha256 $currentHash
+                    Assert-Equal 'mismatch' ([string] $mismatchIdentity.state)
+                    Assert-Equal 'single.instance.current_identity_mismatch' ([string] $mismatchIdentity.reason)
+
+                    $unknownIdentity = Get-SingleInstanceCurrentIdentityObservation -ProcessId ([int]::MaxValue) `
+                        -ExpectedStartUtcTicks $currentTicks -ExpectedExecutablePath $currentPath `
+                        -ExpectedExecutableSha256 $currentHash
+                    Assert-Equal 'unknown' ([string] $unknownIdentity.state)
+                    Assert-Equal 'single.instance.current_identity_unavailable' ([string] $unknownIdentity.reason)
+
+                    $observation = New-SingleInstanceForegroundObservation `
+                        -ExpectedPrimaryPid 7331 -ExpectedPrimaryWindowHandle 11 -ExpectedPrimaryStartUtcTicks 73310 `
+                        -ActualForegroundWindowHandle 22 -ActualForegroundOwnerPid 900 `
+                        -FreshPrimaryWindowHandle 33 -FreshPrimaryOwnerPid 7331 `
+                        -CurrentOwnedIdentity $matchedIdentity -ExecutableImageSha256 $secretImageHash `
+                        -FailureStage 'activation-guard' `
+                        -FailureCode ('single.instance.foreground_window_not_primary at ' + $secretExe + ' token ' + $secretToken)
+                    Assert-Equal 11 ([long] $observation.expectedPrimaryWindowHandle)
+                    Assert-Equal 22 ([long] $observation.actualForegroundWindowHandle)
+                    Assert-Equal 900 ([int] $observation.actualForegroundOwnerPid)
+                    Assert-Equal 33 ([long] $observation.freshPrimaryWindowHandle)
+                    Assert-Equal 7331 ([int] $observation.freshPrimaryOwnerPid)
+                    $unknownObservation = New-SingleInstanceForegroundObservation `
+                        -ExpectedPrimaryPid 7331 -ExpectedPrimaryWindowHandle 11 -ExpectedPrimaryStartUtcTicks 73310 `
+                        -ActualForegroundWindowHandle 0 -ActualForegroundOwnerPid $null `
+                        -FreshPrimaryWindowHandle 0 -FreshPrimaryOwnerPid $null `
+                        -CurrentOwnedIdentity $unknownIdentity -FailureStage 'foreground-owner' `
+                        -FailureCode 'single.instance.window_owner_unknown' `
+                        -FreshPrimaryOwnerReason 'single.instance.fresh_primary_window_missing'
+                    Assert-Equal 'unknown' ([string] $unknownObservation.actualForegroundState)
+                    Assert-Equal 'single.instance.foreground_sample_incomplete' ([string] $unknownObservation.actualForegroundReason)
+                    Assert-Equal 'unknown' ([string] $unknownObservation.freshPrimaryState)
+                    Assert-Equal 'single.instance.fresh_primary_window_missing' ([string] $unknownObservation.freshPrimaryReason)
+
+                    $out = Join-Path $sandbox 'output'
+                    [void] [IO.Directory]::CreateDirectory($out)
+                    $name = Write-SingleInstanceForegroundObservation -OutputDirectory $out -Observation $observation `
+                        -RunToken $secretToken -OwnedRoot $secretRoot -ExecutablePath $secretExe
+                    Assert-Equal 'single-instance-foreground-observation.json' $name
+                    $json = [IO.File]::ReadAllText((Join-Path $out $name))
+                    $doc = $json | ConvertFrom-Json
+                    foreach ($secret in @($secretToken, $secretRoot, $secretExe)) {
+                        Assert-True ($json.IndexOf($secret, [StringComparison]::OrdinalIgnoreCase) -lt 0) ('foreground evidence leaked ' + $secret)
+                    }
+                    Assert-Equal 7331 ([int] $doc.expectedPrimaryPid)
+                    Assert-Equal 11 ([long] $doc.expectedPrimaryWindowHandle)
+                    Assert-Equal 22 ([long] $doc.actualForegroundWindowHandle)
+                    Assert-Equal 900 ([int] $doc.actualForegroundOwnerPid)
+                    Assert-Equal 33 ([long] $doc.freshPrimaryWindowHandle)
+                    Assert-Equal 7331 ([int] $doc.freshPrimaryOwnerPid)
+                    Assert-Equal 'matched' ([string] $doc.currentOwnedIdentity.state)
+                    Assert-Equal $currentHash ([string] $doc.currentOwnedIdentity.imageSha256)
+                    Assert-Equal 'activation-guard' ([string] $doc.failureStage)
+                    Assert-True (-not [string]::IsNullOrWhiteSpace([string] $doc.observedUtc))
+                    Assert-Equal 'single.instance.foreground_window_not_primary at [redacted-path] token [redacted-token]' ([string] $doc.failureCode)
+                }
+                finally {
+                    if ($null -ne $current) { $current.Dispose() }
+                    Remove-UiTestTree -Path $sandbox
+                }
+            }
+        },
+        @{
             Name = 'the exit evidence writes every required document and lists a failed write as its own fact'
             Body = {
                 # The writer is driven as it really is, lifted by AST, over real temporary directories.
@@ -3166,12 +3271,15 @@ function Get-TestCases {
                 Assert-Equal 0 @($errors).Count
                 $wanted = @('Complete-SingleInstanceControlRelease', 'New-SingleInstanceReleaseAttempt',
                     'ConvertTo-SingleInstanceErrorFact', 'New-SingleInstanceFallbackErrorFact',
-                    'New-SingleInstanceErrorFactSafe', 'Write-SingleInstanceExitEvidence')
+                    'New-SingleInstanceErrorFactSafe', 'Get-SingleInstanceOptionalProperty',
+                    'ConvertTo-SingleInstanceDurableCloseFact', 'ConvertTo-SingleInstanceDurableErrorFact',
+                    'ConvertTo-SingleInstanceDurableSuccessEvidence', 'ConvertTo-SingleInstanceDurableJson',
+                    'Write-SingleInstanceExitEvidence')
                 $text = New-Object System.Collections.Generic.List[string]
                 foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
                     if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
                 }
-                Assert-Equal 6 $text.Count
+                Assert-Equal 11 $text.Count
                 . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
 
                 if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
@@ -3179,6 +3287,12 @@ function Get-TestCases {
                 $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-si-evidence-' + [guid]::NewGuid().ToString('N'))
                 try {
                     [void] [IO.Directory]::CreateDirectory($sandbox)
+                    $secretToken = 'probe-token-durable-7f6d4b52'
+                    $secretRoot = Join-Path $sandbox 'owned-root'
+                    $secretExe = Join-Path $sandbox 'product\TraceFold.Media.exe'
+                    $secretExeHash = 'A' * 64
+                    $nestedError = $null
+                    try { throw ('single.instance.nested_exception at ' + $secretRoot + ' exe ' + $secretExe + ' token ' + $secretToken) } catch { $nestedError = $_ }
 
                     # The attempts come from real runs of the shared release unit, and they are
                     # handed over in the shape production uses: a generic object list. Wrapping one
@@ -3204,8 +3318,55 @@ function Get-TestCases {
                     [void] [IO.Directory]::CreateDirectory($okOut)
                     $artifacts = New-Object System.Collections.Generic.List[string]
                     $failures = New-Object System.Collections.Generic.List[object]
+                    $successEvidence = [ordered] @{
+                        scenarioId = 'single-instance'
+                        primaryPid = 7331
+                        runTokenState = '[redacted-token]'
+                        ownedRootState = '[redacted-path]'
+                        executableName = 'TraceFold.Media.exe'
+                        executableSha256 = $secretExeHash
+                        controlReleaseReadBack = ('released ' + $secretToken + ' via ' + $secretExe)
+                        expectedDatabaseName = 'media-desktop.db'
+                        databaseFileNamesBefore = @('media-desktop.db')
+                        databaseFileNamesAfter = @('media-desktop.db')
+                        secondaryExitCode = 0
+                        primaryClose = [ordered] @{
+                            role = ('owner ' + $secretRoot)
+                            processId = 7331
+                            startUtcTicks = 73310
+                            identityMatched = $true
+                            closeRequested = $true
+                            closeAccepted = $true
+                            exitObserved = $true
+                            exitCode = 7
+                        }
+                        restartClose = [ordered] @{
+                            role = 'restart'
+                            processId = 4242
+                            startUtcTicks = 42420
+                            identityMatched = $true
+                            closeRequested = $true
+                            closeAccepted = $true
+                            exitObserved = $true
+                            exitCode = 0
+                        }
+                        process = [ordered] @{
+                            runToken = $secretToken
+                            ownedRoot = $secretRoot
+                            executablePath = $secretExe
+                        }
+                        command = [ordered] @{
+                            commandLine = ('"' + $secretExe + '" /acceptance ' + $secretToken)
+                            secondaryArgv = @($secretExe, '--probe')
+                        }
+                        exception = $nestedError
+                        exits = @(
+                            [ordered] @{ role = 'primary'; exitObserved = $true; exitCode = 0 },
+                            [ordered] @{ role = 'restart'; exitObserved = $true; exitCode = 7 })
+                    }
                     $outcome = Write-SingleInstanceExitEvidence -OutputDirectory $okOut -Artifacts $artifacts -Failures $failures `
-                        -SuccessEvidence ([ordered] @{ scenarioId = 'single-instance'; value = 1 }) -BusinessErrorRecord $null `
+                        -RunToken $secretToken -OwnedRoot $secretRoot -ExecutablePath $secretExe -ExecutableSha256 $secretExeHash `
+                        -SuccessEvidence $successEvidence -BusinessErrorRecord $null `
                         -BusinessStage 'restart-verified' -ReleaseAttempts $listAttempts -FactoryReleaseReport $null
                     Assert-Equal 'True' ([string] $outcome.controlReleaseWritten) 'the release record is required once a release ran'
                     Assert-Equal 'True' ([string] $outcome.successEvidenceWritten) 'the success evidence is required for a pass'
@@ -3217,6 +3378,10 @@ function Get-TestCases {
                     # the older runtime's Get-Content would decode them with the console code page.
                     $releaseText = [IO.File]::ReadAllText((Join-Path $okOut 'single-instance-control-release.json'))
                     $releaseDoc = $releaseText | ConvertFrom-Json
+                    $safetyText = [IO.File]::ReadAllText((Join-Path $okOut 'single-instance-safety.json'))
+                    $safetyDoc = $safetyText | ConvertFrom-Json
+                    $successJsonTexts = @(Get-ChildItem -LiteralPath $okOut -File -Filter '*.json' | ForEach-Object { [IO.File]::ReadAllText($_.FullName) })
+                    Assert-Equal 2 $successJsonTexts.Count 'every success artifact JSON must be scanned'
                     Assert-Equal 'True' ([string] $releaseDoc.releaseAttempted)
                     Assert-Equal 'True' ([string] $releaseDoc.confirmed) 'the confirmed fact is the record of record'
                     Assert-Equal 1 ([int] $releaseDoc.attemptCount)
@@ -3225,6 +3390,32 @@ function Get-TestCases {
                     # No raw ErrorRecord may ever reach the document.
                     Assert-True ($releaseText -notmatch 'actionErrorRecord') 'the raw record must not be serialised'
                     Assert-True ($releaseText -notmatch 'CLIXML') 'no CLIXML may be written'
+                    foreach ($text in $successJsonTexts) {
+                        foreach ($secret in @($secretToken, $secretRoot, $secretExe)) {
+                            Assert-True ($text.IndexOf($secret, [StringComparison]::OrdinalIgnoreCase) -lt 0) ('durable success evidence leaked ' + $secret)
+                        }
+                    }
+                    Assert-True ($null -eq $safetyDoc.PSObject.Properties['process']) 'unknown raw identity objects are not part of the durable schema'
+                    Assert-True ($null -eq $safetyDoc.PSObject.Properties['command']) 'raw commands are not part of the durable schema'
+                    Assert-True ($null -eq $safetyDoc.PSObject.Properties['exception']) 'success evidence does not smuggle a raw exception'
+                    foreach ($forbiddenProperty in @('runToken', 'ownedRoot', 'executablePath', 'secondaryArgv', 'secondaryDataRootEnv', 'expectedDatabasePath')) {
+                        Assert-True ($null -eq $safetyDoc.PSObject.Properties[$forbiddenProperty]) ('raw durable key must be removed: ' + $forbiddenProperty)
+                    }
+                    Assert-Equal 'owner [redacted-path]' ([string] $safetyDoc.primaryClose.role) 'nested strings are recursively protected'
+                    Assert-Equal 'released [redacted-token] via [redacted-path]' ([string] $safetyDoc.controlReleaseReadBack) 'known safe fields still recurse through the shared projection'
+                    Assert-Equal 7331 ([int] $safetyDoc.primaryClose.processId) 'the primary PID survives the close-fact whitelist'
+                    Assert-True $safetyDoc.primaryClose.identityMatched 'the image identity match survives'
+                    Assert-True $safetyDoc.primaryClose.closeRequested 'the close request survives'
+                    Assert-True $safetyDoc.primaryClose.closeAccepted 'the close acceptance survives'
+                    Assert-True $safetyDoc.primaryClose.exitObserved 'the held-process exit observation survives'
+                    Assert-Equal 7 ([int] $safetyDoc.primaryClose.exitCode) 'the real primary exit code survives'
+                    Assert-Equal 4242 ([int] $safetyDoc.restartClose.processId) 'the restart PID survives the close-fact whitelist'
+                    Assert-Equal 0 ([int] $safetyDoc.restartClose.exitCode) 'the real restart exit code survives'
+                    Assert-Equal 7331 ([int] $safetyDoc.primaryPid) 'the safe PID fact survives redaction'
+                    Assert-Equal 0 ([int] $safetyDoc.secondaryExitCode) 'the real secondary exit code survives redaction'
+                    Assert-Equal 'media-desktop.db' ([string] @($safetyDoc.databaseFileNamesBefore)[0]) 'the DB relative name survives'
+                    Assert-Equal 'TraceFold.Media.exe' ([string] $safetyDoc.artifactContext.executableName)
+                    Assert-Equal $secretExeHash ([string] $safetyDoc.artifactContext.executableSha256) 'the image hash survives redaction'
 
                     # 2. a failed run: the failure forensics hold the original error at the top level
                     # and list the release and read back errors as their own facts.
@@ -3233,10 +3424,19 @@ function Get-TestCases {
                     $artifacts2 = New-Object System.Collections.Generic.List[string]
                     $failures2 = New-Object System.Collections.Generic.List[object]
                     $business = $null
-                    try { throw 'single.instance.probe_business_failure' } catch { $business = $_ }
+                    try { throw ('single.instance.probe_business_failure at ' + $secretRoot + ' exe ' + $secretExe + ' token ' + $secretToken) } catch { $business = $_ }
                     $business.Exception.Data['TraceFold.SingleInstanceClose'] = @(
-                        [pscustomobject] @{ role = 'primary'; exitObserved = $true; exitCode = 0 },
+                        [ordered] @{
+                            role = 'primary'; processId = 7331; startUtcTicks = 73310
+                            identityMatched = $true; closeRequested = $true; closeAccepted = $true
+                            exitObserved = $true; exitCode = 0
+                            command = [ordered] @{ runToken = $secretToken; ownedRoot = $secretRoot; executablePath = $secretExe }
+                        },
                         [pscustomobject] @{ role = 'restart'; exitObserved = $true; exitCode = $null })
+                    $failures2.Add([pscustomobject] @{
+                        stage = 'nested-failure'
+                        details = [ordered] @{ runToken = $secretToken; ownedRoot = $secretRoot; executablePath = $secretExe }
+                    })
                     $stub = [pscustomobject] @{ Note = 'x' }
                     $stub | Add-Member -MemberType ScriptMethod -Name Close -Value { throw 'stub close failed' }
                     $stub | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
@@ -3250,6 +3450,7 @@ function Get-TestCases {
                     # the failing safety net retry does, and the standing facts come from that last
                     # attempt.
                     $outcome2 = Write-SingleInstanceExitEvidence -OutputDirectory $badOut -Artifacts $artifacts2 -Failures $failures2 `
+                        -RunToken $secretToken -OwnedRoot $secretRoot -ExecutablePath $secretExe -ExecutableSha256 $secretExeHash `
                         -SuccessEvidence $null -BusinessErrorRecord $business -BusinessStage 'secondary-exited' `
                         -ReleaseAttempts @($failedAttempt, $bothAttempt) -FactoryReleaseReport $factoryReport
                     Assert-Equal 'True' ([string] $outcome2.stageErrorWritten)
@@ -3264,6 +3465,9 @@ function Get-TestCases {
                     Assert-Equal 2 @($errorDoc.closeObservations).Count 'both close observations must survive the failure writer'
                     Assert-True $errorDoc.closeObservations[1].exitObserved
                     Assert-True ($null -eq $errorDoc.closeObservations[1].exitCode) 'the writer must preserve an unknown exit code'
+                    Assert-True ($null -eq $errorDoc.closeObservations[1].PSObject.Properties['processId']) 'an unavailable PID is not emitted as a dangerous null key'
+                    Assert-Equal 'unknown' ([string] $errorDoc.closeObservations[1].processIdState)
+                    Assert-Equal 'single.instance.close_process_id_missing' ([string] $errorDoc.closeObservations[1].processIdReason)
                     Assert-Equal 'release-safety-net' ([string] $errorDoc.releaseActionError.stage)
                     Assert-True ($errorDoc.releaseActionError.errorType -like '*MethodInvocationException') 'the action error kind must be retained'
                     Assert-Equal 'release-safety-net' ([string] $errorDoc.releaseReadBackError.stage)
@@ -3276,6 +3480,24 @@ function Get-TestCases {
                     # standing attempt keeps the fact nodes the forensics read.
                     $badReleaseText = [IO.File]::ReadAllText((Join-Path $badOut 'single-instance-control-release.json'))
                     $badReleaseDoc = $badReleaseText | ConvertFrom-Json
+                    $failureJsonTexts = @(Get-ChildItem -LiteralPath $badOut -File -Filter '*.json' | ForEach-Object { [IO.File]::ReadAllText($_.FullName) })
+                    Assert-Equal 2 $failureJsonTexts.Count 'every failure artifact JSON must be scanned'
+                    foreach ($text in $failureJsonTexts) {
+                        foreach ($secret in @($secretToken, $secretRoot, $secretExe)) {
+                            Assert-True ($text.IndexOf($secret, [StringComparison]::OrdinalIgnoreCase) -lt 0) ('durable failure evidence leaked ' + $secret)
+                        }
+                    }
+                    Assert-True ($null -eq $errorDoc.closeObservations[0].PSObject.Properties['command']) 'nested command identity is removed by the close-fact whitelist'
+                    Assert-True ($null -eq $errorDoc.exitFailures[0].PSObject.Properties['details']) 'unknown failure details are removed by the error-fact whitelist'
+                    foreach ($forbiddenProperty in @('runToken', 'ownedRoot', 'executablePath')) {
+                        Assert-True ($null -eq $errorDoc.PSObject.Properties[$forbiddenProperty]) ('raw failure key must be removed: ' + $forbiddenProperty)
+                    }
+                    Assert-Equal 'nested-failure' ([string] $errorDoc.exitFailures[0].stage) 'the failure stage survives the whitelist'
+                    Assert-True $errorDoc.closeObservations[0].identityMatched 'the close identity match survives failure evidence'
+                    Assert-True $errorDoc.closeObservations[0].closeRequested 'the close request survives failure evidence'
+                    Assert-True $errorDoc.closeObservations[0].closeAccepted 'the close acceptance survives failure evidence'
+                    Assert-Equal 0 ([int] $errorDoc.closeObservations[0].exitCode) 'the safe exit fact survives failure redaction'
+                    Assert-Equal $secretExeHash ([string] $errorDoc.artifactContext.executableSha256)
                     Assert-Equal 2 ([int] $badReleaseDoc.attemptCount) 'both attempts must be kept'
                     Assert-Equal 'success-path' ([string] @($badReleaseDoc.attempts)[0].source) 'the earlier attempt stays first'
                     Assert-Equal 'safety-net' ([string] @($badReleaseDoc.attempts)[1].source) 'the standing attempt stays last'
@@ -3408,6 +3630,9 @@ function Get-TestCases {
                         'Assert-SingleInstanceSecondStartDatabase',
                         'Assert-SingleInstanceSecondaryExit',
                         'Get-SingleInstanceFinalVerdict',
+                        'Get-SingleInstanceCurrentIdentityObservation',
+                        'New-SingleInstanceForegroundObservation',
+                        'Write-SingleInstanceForegroundObservation',
                         'Invoke-SingleInstanceCloseAndRestart',
                         'Import-SingleInstanceFactoryReleaseReport',
                         'Invoke-SingleInstanceSafetyNet',
@@ -3419,10 +3644,11 @@ function Get-TestCases {
                 Assert-Equal 3 @($invocations | Where-Object { $_ -ceq 'Complete-SingleInstanceControlRelease' }).Count 'the release unit must run from the factory, the success path and the safety net'
                 Assert-Equal 3 @($invocations | Where-Object { $_ -ceq 'New-SingleInstanceReleaseAttempt' }).Count 'every release path must record its attempt'
                 Assert-True (@($invocations | Where-Object { $_ -ceq 'ConvertTo-SingleInstanceErrorFact' }).Count -ge 6) 'every error kind must go through the shared fact converter'
-                # The safe wrapper is the only conversion used inside any failure path: six call sites
-                # (the hand over read, the safety net guard, the exit evidence guard and the three
-                # document writes), and no catch converts through the raw converter.
-                Assert-Equal 6 @($invocations | Where-Object { $_ -ceq 'New-SingleInstanceErrorFactSafe' }).Count 'every catch context must convert through the fallback backed wrapper'
+                # The safe wrapper is the only conversion used inside any failure path: seven call
+                # sites (the hand over read, the safety net guard, the foreground observation write,
+                # the exit evidence guard and the three document writes), and no catch converts
+                # through the raw converter.
+                Assert-Equal 7 @($invocations | Where-Object { $_ -ceq 'New-SingleInstanceErrorFactSafe' }).Count 'every catch context must convert through the fallback backed wrapper'
                 Assert-True (-not $source.Contains('ConvertTo-SingleInstanceErrorFact -ErrorRecord $_')) 'no catch context may call the raw converter'
 
                 # The order is the contract: the release happens, the safety net follows it, then the
@@ -3435,6 +3661,34 @@ function Get-TestCases {
                 Assert-True ($safetyCall -gt $releaseCall) 'the safety net must run after the release attempt'
                 Assert-True ($writerCall -gt $safetyCall) 'the exit evidence must be written after the release'
                 Assert-True ($verdictCall -gt $writerCall) 'the result must be decided after the exit evidence'
+                Assert-True ($source -cmatch '-ExecutablePath \$ExecutablePath -ExecutableSha256 \$executableSha256') 'the writer must receive the safety identity for every durable document'
+                Assert-True (@($invocations | Where-Object { $_ -ceq 'ConvertTo-UiDurableEvidenceProjection' }).Count -ge 4) 'the scenario must use the shared durable projection at each upstream sanitisation point'
+                Assert-True (-not $source.Contains('function Protect-SingleInstanceDurableText')) 'the scenario must not carry a second redactor'
+                Assert-True (-not $source.Contains('function ConvertTo-SingleInstanceDurableValue')) 'the scenario must not carry a second recursive projector'
+                $activationSample = $source.IndexOf('$foregroundHandle = Get-ForegroundWindowHandle')
+                $activationGuard = $source.IndexOf('Assert-SingleInstanceActivated -PrimaryPid $primaryPid')
+                $foregroundWrite = $source.IndexOf('$foregroundObservationArtifact = Write-SingleInstanceForegroundObservation')
+                $activationRethrow = $source.IndexOf('throw $activationFailure')
+                Assert-True ($activationSample -gt 0 -and $activationGuard -gt $activationSample) 'the existing activation guard must still consume the one foreground sample'
+                Assert-True ($foregroundWrite -gt $activationGuard) 'the foreground observation must be written only after the guard reports a failure'
+                Assert-True ($activationRethrow -gt $foregroundWrite) 'the original activation failure must be rethrown after the observation attempt'
+                foreach ($rawDurableAssignment in @(
+                        'runToken                = $RunToken',
+                        'ownedRoot               = $root',
+                        'executablePath          = $exe',
+                        'secondaryArgv            = $secondaryArgv',
+                        'secondaryDataRootEnv    = $root')) {
+                    Assert-True (-not $source.Contains($rawDurableAssignment)) ($rawDurableAssignment + ' must not be persisted as a raw durable identity')
+                }
+                foreach ($safeProjection in @(
+                        'runTokenState',
+                        'ownedRootState',
+                        'executableSha256',
+                        'secondaryExecutableMatches',
+                        'restartExecutableMatches',
+                        'restartOwnedRootMatches')) {
+                    Assert-True ($source.Contains($safeProjection)) ($safeProjection + ' must remain in the success evidence')
+                }
                 # Every guarded failure in the finally and every write failure is named as its own fact.
                 foreach ($stage in @('release-safety-net-guard', 'exit-evidence', 'control-release-write', 'stage-error-write', 'success-evidence-write')) {
                     Assert-True ($source -cmatch ('-Stage ''' + $stage + '''')) ('the failure of ' + $stage + ' must be recorded as its own fact')
@@ -3463,14 +3717,17 @@ function Get-TestCases {
                 Assert-Equal 0 @($errors).Count
                 $wanted = @('Complete-SingleInstanceControlRelease', 'New-SingleInstanceReleaseAttempt',
                     'ConvertTo-SingleInstanceErrorFact', 'New-SingleInstanceFallbackErrorFact',
-                    'New-SingleInstanceErrorFactSafe', 'New-NonForegroundControlWindow',
+                    'New-SingleInstanceErrorFactSafe', 'Get-SingleInstanceOptionalProperty',
+                    'ConvertTo-SingleInstanceDurableCloseFact', 'ConvertTo-SingleInstanceDurableErrorFact',
+                    'ConvertTo-SingleInstanceDurableSuccessEvidence', 'ConvertTo-SingleInstanceDurableJson',
+                    'New-NonForegroundControlWindow',
                     'Import-SingleInstanceFactoryReleaseReport', 'Invoke-SingleInstanceSafetyNet',
                     'Write-SingleInstanceExitEvidence', 'Get-SingleInstanceFinalVerdict')
                 $text = New-Object System.Collections.Generic.List[string]
                 foreach ($fn in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
                     if ($wanted -ccontains $fn.Name) { $text.Add($fn.Extent.Text) }
                 }
-                Assert-Equal 10 $text.Count
+                Assert-Equal 15 $text.Count
                 . ([scriptblock]::Create(($text -join [Environment]::NewLine)))
 
                 if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms }
@@ -3831,9 +4088,13 @@ function Get-TestCases {
                 Assert-Equal 'C:\probe\TraceFold.Media.exe' ([string] $facts.restartExecutable)
                 Assert-Equal 'C:\probe\owned' ([string] $facts.restartOwnedRoot)
                 Assert-True $facts.primaryClose.identityMatched 'the held primary must match its registered identity'
+                Assert-True $facts.primaryClose.closeRequested 'the primary close must really be requested'
+                Assert-True $facts.primaryClose.closeAccepted 'the primary close must be accepted'
                 Assert-True $facts.primaryClose.exitObserved 'the primary exit must be observed on its held object'
                 Assert-Equal 0 $facts.primaryClose.exitCode
                 Assert-True $facts.restartClose.identityMatched 'the restart must match its new registered identity'
+                Assert-True $facts.restartClose.closeRequested 'the restart close must really be requested'
+                Assert-True $facts.restartClose.closeAccepted 'the restart close must be accepted'
                 Assert-True $facts.restartClose.exitObserved 'the restart must exit before the unit succeeds'
                 Assert-Equal 0 $facts.restartClose.exitCode
                 Assert-Equal 0 $facts.restartResidueCount

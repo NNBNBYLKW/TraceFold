@@ -435,6 +435,9 @@ if ($ValidateOnly) {
 $script:uiRoot = Join-Path $script:repositoryRoot 'scripts/ui-acceptance'
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Contracts.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Processes.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Evidence.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Driver.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Workflows.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Runner.psm1') -Force -DisableNameChecking
 # Metadata and provenance producers: one implementation per field family, consumed below.
 Import-Module (Join-Path $script:uiRoot 'TraceFold.UiAcceptance.Metadata.psm1') -Force -DisableNameChecking
@@ -690,6 +693,269 @@ function Get-Stage5CCOwnedLedger {
         $records += [pscustomobject] @{ ProcessId = $processId; StartUtcTicks = $ticks; ExecutablePath = $parts[2] }
     }
     return ,$records
+}
+
+function Test-Stage5CCPathWithinDirectory {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $Directory
+    )
+
+    $full = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetFullPath($Directory).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    return $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-Stage5CCProcessState {
+    param([Parameter(Mandatory)] $Record)
+
+    $state = [ordered] @{
+        alive = $false
+        identityMatched = $false
+        executableName = [IO.Path]::GetFileName([string] $Record.ExecutablePath)
+        error = ''
+    }
+    $process = $null
+    try {
+        $process = [Diagnostics.Process]::GetProcessById([int] $Record.ProcessId)
+        $state.alive = -not $process.HasExited
+        if ($state.alive) {
+            $currentTicks = $process.StartTime.ToUniversalTime().Ticks
+            $currentPath = [string] $process.MainModule.FileName
+            $state.identityMatched = (
+                $currentTicks -eq [long] $Record.StartUtcTicks -and
+                [IO.Path]::GetFullPath($currentPath) -ieq [IO.Path]::GetFullPath([string] $Record.ExecutablePath)
+            )
+        }
+    }
+    catch {
+        $state.error = [string] $_.Exception.Message
+    }
+    finally {
+        if ($null -ne $process) { $process.Dispose() }
+    }
+    return [pscustomobject] $state
+}
+
+function Get-Stage5CCObservedProductProcess {
+    param(
+        [Parameter(Mandatory)][string] $OwnedRoot,
+        [Parameter(Mandatory)][string] $ProductDirectory
+    )
+
+    $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $OwnedRoot
+    foreach ($record in $ledger) {
+        $path = [string] $record.ExecutablePath
+        if ([IO.Path]::GetFileName($path) -ine 'TraceFold.Media.exe') { continue }
+        if (-not (Test-Stage5CCPathWithinDirectory -Path $path -Directory $ProductDirectory)) { continue }
+        $state = Get-Stage5CCProcessState -Record $record
+        if ($state.alive -and $state.identityMatched) {
+            return [pscustomobject] @{
+                ProcessId = [int] $record.ProcessId
+                StartUtcTicks = [long] $record.StartUtcTicks
+                ExecutablePath = [string] $path
+            }
+        }
+    }
+    return $null
+}
+
+function Test-Stage5CCProductWasStarted {
+    param(
+        [Parameter(Mandatory)][string] $OwnedRoot,
+        [Parameter(Mandatory)][string] $ProductDirectory
+    )
+
+    $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $OwnedRoot
+    foreach ($record in $ledger) {
+        $path = [string] $record.ExecutablePath
+        if ([IO.Path]::GetFileName($path) -ieq 'TraceFold.Media.exe' -and
+            (Test-Stage5CCPathWithinDirectory -Path $path -Directory $ProductDirectory)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Read-Stage5CCFailureProductLog {
+    param([Parameter(Mandatory)][string] $OwnedRoot)
+
+    $events = New-Object System.Collections.Generic.List[string]
+    $failures = New-Object System.Collections.Generic.List[string]
+    $files = @()
+    $logDirectory = Join-Path $OwnedRoot 'logs'
+    if ([IO.Directory]::Exists($logDirectory)) {
+        $files = @(Get-ChildItem -LiteralPath $logDirectory -Filter 'tracefold-*.log' -File |
+            Sort-Object LastWriteTimeUtc, Name)
+    }
+    foreach ($file in $files) {
+        $stream = $null
+        $reader = $null
+        try {
+            $stream = [IO.FileStream]::new(
+                $file.FullName,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false, $false), $true)
+            $tail = New-Object 'System.Collections.Generic.Queue[string]'
+            while (-not $reader.EndOfStream) {
+                $line = $reader.ReadLine()
+                if ($null -eq $line) { break }
+                $tail.Enqueue([string] $line)
+                while ($tail.Count -gt 200) { [void] $tail.Dequeue() }
+            }
+            foreach ($line in $tail.ToArray()) {
+                $events.Add('[' + $file.Name + '] ' + $line)
+            }
+        }
+        catch {
+            $failures.Add($file.Name + ': ' + [string] $_.Exception.Message)
+        }
+        finally {
+            if ($null -ne $reader) { $reader.Dispose() }
+            elseif ($null -ne $stream) { $stream.Dispose() }
+        }
+    }
+    $state = 'captured'
+    if ($files.Count -eq 0) { $state = 'captured-empty' }
+    elseif ($failures.Count -gt 0) { $state = 'captured-partial' }
+    return [ordered] @{
+        events      = [string[]] $events.ToArray()
+        fileNames   = [string[]] @($files | ForEach-Object { $_.Name })
+        captureState = $state
+        readFailures = [string[]] $failures.ToArray()
+    }
+}
+
+function New-Stage5CCFailureEvidenceCollectors {
+    param(
+        [Parameter(Mandatory)][string] $OwnedRoot,
+        [Parameter(Mandatory)][string] $ProductDirectory,
+        [Parameter(Mandatory)][string] $SupportPath,
+        [Parameter(Mandatory)][string] $WinAppPath,
+        [Parameter(Mandatory)][string] $RunToken,
+        [AllowNull()][string] $ProductHash
+    )
+
+    $screenshot = {
+        $productProcess = Get-Stage5CCObservedProductProcess -OwnedRoot $OwnedRoot -ProductDirectory $ProductDirectory
+        if ($null -eq $productProcess) { throw 'failure evidence: observable product process is unavailable' }
+        $captureDirectory = Join-Path $OwnedRoot ('failure-capture-' + [guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($captureDirectory)
+        $source = Join-Path $captureDirectory 'failure.png'
+        $captured = Invoke-WinAppObservation -Arguments @('ui','screenshot','TraceFoldMainWindow','--output',$source) `
+            -ProcessId ([int] $productProcess.ProcessId) -TimeoutSeconds 15 -WinAppPath $WinAppPath `
+            -RunToken $RunToken -OwnedRoot $OwnedRoot
+        if ($captured.Status -cne 'Passed' -or -not [IO.File]::Exists($source)) {
+            throw 'failure evidence: screenshot unavailable'
+        }
+        Assert-UiOwnedEvidenceFile -Path $source -OwnedRoot $OwnedRoot
+        Assert-UiPngBytes -Bytes ([IO.File]::ReadAllBytes($source))
+        return $source
+    }.GetNewClosure()
+
+    $uiaTree = {
+        $productProcess = Get-Stage5CCObservedProductProcess -OwnedRoot $OwnedRoot -ProductDirectory $ProductDirectory
+        if ($null -eq $productProcess) { throw 'failure evidence: observable product process is unavailable' }
+        $rawNodes = @(Read-UiAcceptanceTree -ProcessId ([int] $productProcess.ProcessId) -WinAppPath $WinAppPath `
+            -RunToken $RunToken -OwnedRoot $OwnedRoot -FailureCode 'failure_evidence.uia_unavailable')
+        $nodes = @()
+        foreach ($node in $rawNodes) {
+            $nodes += [ordered] @{
+                automationId = Get-UiAcceptanceNodeProperty -Node $node -Name 'automationId'
+                selector = Get-UiAcceptanceNodeProperty -Node $node -Name 'selector'
+                controlType = Get-UiAcceptanceNodeProperty -Node $node -Name 'type'
+                className = Get-UiAcceptanceNodeProperty -Node $node -Name 'className'
+                name = Get-UiAcceptanceNodeProperty -Node $node -Name 'name'
+                enabled = Get-UiAcceptanceNodeProperty -Node $node -Name 'isEnabled'
+                offscreen = Get-UiAcceptanceNodeProperty -Node $node -Name 'isOffscreen'
+                x = Get-UiAcceptanceNodeProperty -Node $node -Name 'x'
+                y = Get-UiAcceptanceNodeProperty -Node $node -Name 'y'
+                width = Get-UiAcceptanceNodeProperty -Node $node -Name 'width'
+                height = Get-UiAcceptanceNodeProperty -Node $node -Name 'height'
+            }
+        }
+        return [ordered] @{
+            tree = $nodes
+            nodeCount = $nodes.Count
+            captureState = 'captured'
+            executableName = [IO.Path]::GetFileName($productProcess.ExecutablePath)
+            executableSha256 = $ProductHash
+        }
+    }.GetNewClosure()
+
+    $lastCommand = {
+        $record = Get-UiDriverLastResult
+        if ($null -eq $record) { throw 'failure evidence: no driver result is available' }
+        return $record
+    }.GetNewClosure()
+
+    $productLog = {
+        if (-not (Test-Stage5CCProductWasStarted -OwnedRoot $OwnedRoot -ProductDirectory $ProductDirectory)) {
+            throw 'failure evidence: the product was not dispatched'
+        }
+        return Read-Stage5CCFailureProductLog -OwnedRoot $OwnedRoot
+    }.GetNewClosure()
+
+    $stateSnapshot = {
+        if (-not (Test-Stage5CCProductWasStarted -OwnedRoot $OwnedRoot -ProductDirectory $ProductDirectory)) {
+            throw 'failure evidence: the product was not dispatched'
+        }
+        $result = Invoke-UiAcceptanceSupportCommand -SupportPath $SupportPath `
+            -Arguments @('snapshot','--data-root',$OwnedRoot,'--token',$RunToken) -TimeoutMs 30000
+        if ($result.ExitCode -ne 0) { throw 'failure evidence: support snapshot failed' }
+        $data = ConvertFrom-UiAcceptanceJson -Text ([string] $result.Stdout) -Source 'support snapshot'
+        Assert-UiAcceptanceFields -InputObject $data -Required @('tables','taxonomy')
+        $snapshot = [ordered] @{
+            tables = $data.tables
+            taxonomy = $data.taxonomy
+            captureState = 'captured'
+            supportExitCode = [int] $result.ExitCode
+        }
+        if ($null -ne $data.PSObject.Properties['formalAssets']) { $snapshot['formalAssets'] = $data.formalAssets }
+        return $snapshot
+    }.GetNewClosure()
+
+    $processLedger = {
+        $ledger = Get-Stage5CCOwnedLedger -OwnedRoot $OwnedRoot
+        if ($null -eq $ledger) { $ledger = @() }
+        $lines = New-Object System.Collections.Generic.List[string]
+        $aliveCount = 0
+        $identityCount = 0
+        $index = 0
+        foreach ($record in $ledger) {
+            $state = Get-Stage5CCProcessState -Record $record
+            if ($state.alive) { $aliveCount++ }
+            if ($state.identityMatched) { $identityCount++ }
+            $kind = 'other'
+            if ([IO.Path]::GetFileName([string] $record.ExecutablePath) -ieq 'TraceFold.Media.exe' -and
+                (Test-Stage5CCPathWithinDirectory -Path ([string] $record.ExecutablePath) -Directory $ProductDirectory)) {
+                $kind = 'product'
+            }
+            $imageHash = $null
+            if ($kind -ceq 'product') { $imageHash = $ProductHash }
+            $lines.Add((
+                'process[{0}] kind={1} executableName={2} alive={3} identityMatched={4} imageSha256={5} state={6}' -f
+                $index, $kind, $state.executableName, $state.alive, $state.identityMatched,
+                $(if ([string]::IsNullOrWhiteSpace($imageHash)) { 'Unknown' } else { $imageHash }),
+                $(if ([string]::IsNullOrWhiteSpace([string] $state.error)) { 'captured' } else { 'unknown' })
+            ))
+            $index++
+        }
+        $lines.Insert(0, ('ledgerState={0} entryCount={1} aliveCount={2} identityMatchedCount={3}' -f
+            $(if ($ledger.Count -gt 0) { 'captured' } else { 'captured-empty' }), $ledger.Count, $aliveCount, $identityCount))
+        return ($lines.ToArray() -join [Environment]::NewLine)
+    }.GetNewClosure()
+
+    return @{
+        screenshot = $screenshot
+        uiaTree = $uiaTree
+        lastCommand = $lastCommand
+        productLog = $productLog
+        stateSnapshot = $stateSnapshot
+        processLedger = $processLedger
+    }
 }
 
 # [D0203-E2 EVIDENCE-FUNCTION]
@@ -1417,18 +1683,34 @@ foreach ($name in $pending) {
             metadataEvidence = $metadataBlock['metadataEvidence']
         }
 
-        $result = Invoke-UiAcceptanceRun -ScenarioId $name `
-            -Scenario {
+        # Every scenario, including the dedicated SingleInstance release forensics, gets the shared
+        # six-part failure evidence at the Runner boundary. The product and its owned root are still
+        # observable there because cleanup has not started; SingleInstance's own release/exit
+        # documents remain additional evidence and are never replaced by this common set.
+        $failureEvidenceCollectors = New-Stage5CCFailureEvidenceCollectors `
+            -OwnedRoot $runRoot -ProductDirectory $product -SupportPath (Join-Path $runSupport 'TraceFold.Media.UiAcceptance.Support.exe') `
+            -WinAppPath (Join-Path $runDriver 'winapp.exe') -RunToken $runToken `
+            -ProductHash ([string] $metadata['productHash'])
+        Reset-UiDriverLastResult
+        $runArguments = @{
+            ScenarioId = $name
+            Scenario = {
                 # Counted on the line where the scenario really runs and nowhere else: preparation
                 # that failed above never reaches it, so 'dispatchedCount' cannot inflate, and a
                 # scenario that does run is counted exactly once.
                 Register-UiAcceptanceDispatch -Name $name -Ledger $dispatched
                 Invoke-UiAcceptanceScenario -Path $scenarioPath -Arguments $entryArguments
-            } `
-            -Cleanup $cleanupBody `
-            -OwnedRoot $runRoot -OutputDirectory $runOutput -Metadata $metadata `
-            -RunToken $runToken -SupportPath $supportExecutable `
-            -ApprovedDirectories @($product)
+            }
+            Cleanup = $cleanupBody
+            OwnedRoot = $runRoot
+            OutputDirectory = $runOutput
+            Metadata = $metadata
+            RunToken = $runToken
+            SupportPath = $supportExecutable
+            ApprovedDirectories = @($product)
+        }
+        $runArguments['EvidenceCollectors'] = $failureEvidenceCollectors
+        $result = Invoke-UiAcceptanceRun @runArguments
         $reportPath = [string] $result.ReportPath
         if ([IO.File]::Exists($reportPath)) {
             $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json

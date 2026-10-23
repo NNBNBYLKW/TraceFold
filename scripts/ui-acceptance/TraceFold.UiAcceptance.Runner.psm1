@@ -446,7 +446,7 @@ function Invoke-UiAcceptanceRun {
             try {
                 $evidenceOutput = Join-Path $OutputDirectory 'evidence'
                 $captured = Write-UiFailureEvidence -OwnedRoot $OwnedRoot -OutputDirectory $evidenceOutput -ScenarioId $ScenarioId -StepId 'failure' -Collectors $EvidenceCollectors -RunToken $RunToken
-                $refs = @($captured.PSObject.Properties | ForEach-Object { 'evidence/' + $_.Value })
+                $refs = @($refs) + @($captured.PSObject.Properties | ForEach-Object { 'evidence/' + $_.Value })
             }
             catch {
                 $reason += '; evidence capture failed: ' + $_.Exception.Message

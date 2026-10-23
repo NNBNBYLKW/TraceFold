@@ -3,6 +3,71 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'TraceFold.UiAcceptance.Contracts.psm1') -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'TraceFold.UiAcceptance.Processes.psm1') -DisableNameChecking
 $script:mutationSteps = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+$script:lastDriverResult = $null
+
+function Set-UiDriverLastResult {
+    param(
+        [Parameter(Mandatory)][string] $WinAppPath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Arguments,
+        [Parameter(Mandatory)] $Result,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = ''
+    )
+
+    $exitCode = $null
+    if ($null -ne $Result.PSObject.Properties['ExitCode'] -and $null -ne $Result.ExitCode) {
+        $exitCode = [int] $Result.ExitCode
+    }
+    $timedOut = $null
+    if ($null -ne $Result.PSObject.Properties['TimedOut'] -and $null -ne $Result.TimedOut) {
+        $timedOut = [bool] $Result.TimedOut
+    }
+    $attempts = $null
+    if ($null -ne $Result.PSObject.Properties['Attempts'] -and $null -ne $Result.Attempts) {
+        $attempts = [int] $Result.Attempts
+    }
+    $errorText = ''
+    if ($null -ne $Result.PSObject.Properties['Error']) {
+        $errorText = Protect-UiAcceptanceText -Value ([string] $Result.Error) -RunToken $RunToken -OwnedRoot $OwnedRoot
+    }
+    $safeArguments = @()
+    foreach ($argument in @($Arguments)) {
+        $safeArguments += Protect-UiAcceptanceText -Value ([string] $argument) -RunToken $RunToken -OwnedRoot $OwnedRoot
+    }
+    $script:lastDriverResult = [pscustomobject] @{
+        Status        = [string] $Result.Status
+        ExitCode      = $exitCode
+        TimedOut      = $timedOut
+        Attempts      = $attempts
+        Error         = $errorText
+        Arguments     = [string[]] $safeArguments
+        ExecutableName = [IO.Path]::GetFileName($WinAppPath)
+        ObservedUtc   = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+}
+
+function Reset-UiDriverLastResult {
+    [CmdletBinding()]
+    param()
+    $script:lastDriverResult = $null
+}
+
+function Get-UiDriverLastResult {
+    [CmdletBinding()]
+    param()
+    if ($null -eq $script:lastDriverResult) { return $null }
+    $record = $script:lastDriverResult
+    return [pscustomobject] @{
+        Status        = [string] $record.Status
+        ExitCode      = $record.ExitCode
+        TimedOut      = $record.TimedOut
+        Attempts      = $record.Attempts
+        Error         = [string] $record.Error
+        Arguments     = [string[]] @($record.Arguments)
+        ExecutableName = [string] $record.ExecutableName
+        ObservedUtc   = [string] $record.ObservedUtc
+    }
+}
 
 function Test-UiForegroundProcess {
     param([int] $ProcessId)
@@ -91,11 +156,17 @@ function Invoke-UiDriverProcess {
     param(
         [Parameter(Mandatory)][string] $WinAppPath,
         [Parameter(Mandatory)][string[]] $Arguments,
-        [Parameter(Mandatory)][int] $TimeoutMs
+        [Parameter(Mandatory)][int] $TimeoutMs,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = ''
     )
     if ($TimeoutMs -le 0) { throw 'Driver timeout must be positive.' }
     try { $target = (Resolve-Path -LiteralPath $WinAppPath -ErrorAction Stop).ProviderPath }
-    catch { return [pscustomobject]@{ ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver unavailable' } }
+    catch {
+        $result = [pscustomobject]@{ Status='Blocked'; ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver unavailable'; Attempts=0; Error='driver unavailable'; Data=$null }
+        Set-UiDriverLastResult -WinAppPath $WinAppPath -Arguments $Arguments -Result $result -RunToken $RunToken -OwnedRoot $OwnedRoot
+        return $result
+    }
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $commandArguments = New-Object 'System.Collections.Generic.List[string]'
     if ([IO.Path]::GetExtension($target) -ieq '.ps1') {
@@ -113,20 +184,29 @@ function Invoke-UiDriverProcess {
     $process.StartInfo = $start
     try {
         try { [void] $process.Start() }
-        catch { return [pscustomobject]@{ ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver could not start' } }
+        catch {
+            $result = [pscustomobject]@{ Status='Blocked'; ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver could not start'; Attempts=0; Error='driver could not start'; Data=$null }
+            Set-UiDriverLastResult -WinAppPath $WinAppPath -Arguments $Arguments -Result $result -RunToken $RunToken -OwnedRoot $OwnedRoot
+            return $result
+        }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutMs)) {
             try { $process.Kill($true) } catch { try { $process.Kill() } catch {} }
             [void] $process.WaitForExit(2000)
-            return [pscustomobject]@{ ExitCode = 5; TimedOut = $true; Stdout = ''; Stderr = 'driver deadline exceeded' }
+            $result = [pscustomobject]@{ Status='Blocked'; ExitCode=5; TimedOut=$true; Stdout=''; Stderr='driver deadline exceeded'; Attempts=0; Error='driver deadline exceeded'; Data=$null }
+            Set-UiDriverLastResult -WinAppPath $WinAppPath -Arguments $Arguments -Result $result -RunToken $RunToken -OwnedRoot $OwnedRoot
+            return $result
         }
-        return [pscustomobject]@{
+        $result = [pscustomobject]@{
             ExitCode = $process.ExitCode
             TimedOut = $false
             Stdout = $stdout.GetAwaiter().GetResult()
             Stderr = $stderr.GetAwaiter().GetResult()
         }
+        $projected = New-UiDriverResult -Raw $result -Attempts 1 -RunToken $RunToken -OwnedRoot $OwnedRoot
+        Set-UiDriverLastResult -WinAppPath $target -Arguments $Arguments -Result $projected -RunToken $RunToken -OwnedRoot $OwnedRoot
+        return $result
     }
     finally { $process.Dispose() }
 }
@@ -180,7 +260,7 @@ function Invoke-WinAppObservation {
         $argv = @($Arguments) + @('-a', [string] $ProcessId)
         if ($Arguments[1] -ceq 'wait-for') { $argv += @('--timeout', [string] $remaining) }
         $argv += '--json'
-        $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $remaining
+        $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $remaining -RunToken $RunToken -OwnedRoot $OwnedRoot
         $attempts++
         $result = New-UiDriverResult -Raw $raw -Attempts $attempts -RunToken $RunToken -OwnedRoot $OwnedRoot
         if ($result.Status -eq 'Passed' -or $result.ExitCode -eq 2 -or $result.ExitCode -eq 10) { return $result }
@@ -209,7 +289,7 @@ function Invoke-WinAppMutation {
     if ($Arguments[1] -eq 'send-keys') { throw 'send-keys requires a separate foreground ownership gate.' }
     if (-not $script:mutationSteps.Add($StepId)) { throw ('A UI mutation step may be executed only once: ' + $StepId) }
     $argv = @($Arguments) + @('-a', [string] $ProcessId, '--json')
-    $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $TimeoutMs
+    $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $TimeoutMs -RunToken $RunToken -OwnedRoot $OwnedRoot
     return New-UiDriverResult -Raw $raw -Attempts 1 -RunToken $RunToken -OwnedRoot $OwnedRoot
 }
 
@@ -228,12 +308,14 @@ function Invoke-WinAppKeyboard {
     )
     if ($Arguments.Count -lt 3 -or $Arguments[0] -cne 'ui' -or $Arguments[1] -cne 'send-keys') { throw 'Expected ui send-keys arguments.' }
     if (-not (& $DesktopCheck) -or -not (& $ForegroundCheck $ProcessId)) {
-        return [pscustomobject]@{ Status='Blocked'; ExitCode=5; Data=$null; Error='foreground desktop ownership unavailable'; Attempts=0; TimedOut=$false }
+        $result = [pscustomobject]@{ Status='Blocked'; ExitCode=5; Data=$null; Error='foreground desktop ownership unavailable'; Attempts=0; TimedOut=$false }
+        Set-UiDriverLastResult -WinAppPath $WinAppPath -Arguments $Arguments -Result $result -RunToken $RunToken -OwnedRoot $OwnedRoot
+        return $result
     }
     if (-not $script:mutationSteps.Add($StepId)) { throw ('A UI mutation step may be executed only once: ' + $StepId) }
     $argv = @($Arguments) + @('--via','send-input','-a',[string]$ProcessId,'--json')
-    $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $TimeoutMs
+    $raw = Invoke-UiDriverProcess -WinAppPath $WinAppPath -Arguments $argv -TimeoutMs $TimeoutMs -RunToken $RunToken -OwnedRoot $OwnedRoot
     return New-UiDriverResult -Raw $raw -Attempts 1 -RunToken $RunToken -OwnedRoot $OwnedRoot
 }
 
-Export-ModuleMember -Function @('Reset-UiAcceptanceMutationSteps','Invoke-UiDriverProcess','Invoke-WinAppObservation','Invoke-WinAppMutation','Invoke-WinAppKeyboard','Test-UiForegroundProcess')
+Export-ModuleMember -Function @('Reset-UiAcceptanceMutationSteps','Reset-UiDriverLastResult','Get-UiDriverLastResult','Invoke-UiDriverProcess','Invoke-WinAppObservation','Invoke-WinAppMutation','Invoke-WinAppKeyboard','Test-UiForegroundProcess')

@@ -250,19 +250,21 @@ function New-StartupLayoutTreeSequence {
     param(
         [Parameter(Mandatory)][string] $Path,
         [switch] $OmitInspectorNode,
-        [switch] $OmitMaterializedRow
+        [switch] $OmitMaterializedRow,
+        [switch] $OmitThirdViewportRow
     )
 
     $settings = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -SettingsPage -OmitInspectorNode:$OmitInspectorNode
     $settingsConfigured = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -InspectorOpenButtonEnabled $true -SettingsPage -OmitInspectorNode:$OmitInspectorNode
 
     $rowSwitch = -not $OmitMaterializedRow
+    $thirdViewportRowSwitch = $rowSwitch -and (-not $OmitThirdViewportRow)
     $inboxEmpty = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -OmitInspectorNode:$OmitInspectorNode
     $rowPresent = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
     $rowSelected = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
     $viewport1024 = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
     $viewport1280 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -InspectorX 900 -OmitInspectorNode:$OmitInspectorNode
-    $viewport1600 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -InspectorX 1200 -OmitInspectorNode:$OmitInspectorNode
+    $viewport1600 = New-StartupLayoutTree -NavigationWidth 176 -InlineInspector $true -InspectorOpenButtonEnabled $true -IncludeInboxRow:$thirdViewportRowSwitch -InspectorX 1200 -OmitInspectorNode:$OmitInspectorNode
     $drawerOpen = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $true -InspectorOpenButtonEnabled $true -InspectorX 720 -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
     $drawerClosed = New-StartupLayoutTree -NavigationWidth 48 -InlineInspector $false -InspectorOpenButtonEnabled $true -IncludeInboxRow:$rowSwitch -OmitInspectorNode:$OmitInspectorNode
 
@@ -927,7 +929,7 @@ function Get-TestCases {
                         processLedger={ 'owned' }
                     }
                     $result = Invoke-UiAcceptanceRun -ScenarioId 'startup' -Scenario { throw 'product failure' } -Cleanup { $script:order += 'cleanup' } -OwnedRoot $root -OutputDirectory (Join-Path $base 'out') -Metadata $script:metadata -EvidenceCollectors $collect
-                    Assert-Equal 1 $result.ExitCode
+                    Assert-Equal 1 $result.ExitCode 'the failed lifecycle scenario reports a non-zero Runner exit'
                     Assert-Equal 'capture' $script:order[0]
                     Assert-Equal 'cleanup' $script:order[1]
                     $report = Get-Content -LiteralPath $result.ReportPath -Raw | ConvertFrom-Json
@@ -1293,6 +1295,39 @@ function Get-TestCases {
                     $result = Invoke-UiAcceptanceScenario -Path (Join-Path $script:uiRoot 'scenarios/00-startup-layout.ps1') -Arguments $arguments
                     Assert-Equal 'Failed' $result.Status
                     Assert-Contains $result.Reason 'startup_layout'
+                }
+                finally {
+                    foreach ($name in @('TRACEFOLD_FAKE_UIA_TREE_SEQ','TRACEFOLD_FAKE_UIA_STATE','TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN')) {
+                        Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
+                    }
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'startup layout failure keeps artifacts and viewports produced before the failing phase'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
+                [void][IO.Directory]::CreateDirectory((Join-Path $base 'owned'))
+                [IO.File]::WriteAllBytes((Join-Path $base 'TraceFold.Media.exe'), [byte[]]@(1))
+                $sequence = Join-Path $base 'tree-sequence.json'
+                try {
+                    # The third viewport no longer shows the prepared row. The first two viewports
+                    # have already produced real UIA trees and screenshots by this point.
+                    New-StartupLayoutTreeSequence -Path $sequence -OmitThirdViewportRow
+
+                    $env:TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN = '1'
+                    $env:TRACEFOLD_FAKE_UIA_TREE_SEQ = $sequence
+                    $env:TRACEFOLD_FAKE_UIA_STATE = (Join-Path $base 'sequence-state.txt')
+                    $arguments = New-StartupLayoutScenarioArguments -Base $base -Overrides @{}
+                    $result = Invoke-UiAcceptanceScenario -Path (Join-Path $script:uiRoot 'scenarios/00-startup-layout.ps1') -Arguments $arguments
+                    Assert-Equal 'Failed' $result.Status
+                    Assert-Contains $result.Reason 'startup_layout'
+                    Assert-True (@($result.Artifacts).Count -gt 0) 'the failure must keep artifacts produced before the failing phase'
+                    Assert-True (@($result.Viewports).Count -gt 0) 'completed viewport facts must survive the same failure'
+                    foreach ($artifact in @($result.Artifacts)) {
+                        Assert-True ([IO.File]::Exists((Join-Path $base ('out/' + [string] $artifact)))) ('the retained artifact must exist: ' + $artifact)
+                    }
                 }
                 finally {
                     foreach ($name in @('TRACEFOLD_FAKE_UIA_TREE_SEQ','TRACEFOLD_FAKE_UIA_STATE','TRACEFOLD_FAKE_SUPPORT_ANY_TOKEN')) {
@@ -2009,6 +2044,202 @@ function Get-TestCases {
                     Assert-Throws { Register-UiAcceptanceDispatch -Name 'Visual' -Ledger $null }
                 }
                 finally { $ledger.Clear() }
+            }
+        },
+        @{
+            Name = 'failure evidence captures after control release and before owned product cleanup'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-life-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
+                $product = Join-Path $base 'product'
+                $root = Join-Path $base 'owned'
+                $out = Join-Path $base 'out'
+                [void][IO.Directory]::CreateDirectory($product)
+                [void][IO.Directory]::CreateDirectory($root)
+                $productProcess = $null
+                $script:order = @()
+                try {
+                    # A copied native process gives the runner a real live image at the expected product
+                    # path, while the existing fake driver supplies only the observation endpoint.
+                    $fakeProduct = Join-Path $product 'TraceFold.Media.exe'
+                    Copy-Item -LiteralPath (Join-Path (Join-Path $env:WINDIR 'System32') 'ping.exe') -Destination $fakeProduct
+                    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+                    $startInfo.FileName = $fakeProduct
+                    $startInfo.Arguments = '-n 30 127.0.0.1'
+                    $startInfo.UseShellExecute = $false
+                    $startInfo.CreateNoWindow = $true
+                    $productProcess = [Diagnostics.Process]::Start($startInfo)
+                    $productProcess.Refresh()
+                    $identity = [pscustomobject] @{
+                        ProcessId = [int] $productProcess.Id
+                        StartUtcTicks = [long] $productProcess.StartTime.ToUniversalTime().Ticks
+                        ExecutablePath = [IO.Path]::GetFullPath($fakeProduct)
+                    }
+                    [IO.File]::AppendAllText((Join-Path $root 'owned-processes.txt'),
+                        ('{0}|{1}|{2}' -f $identity.ProcessId,$identity.StartUtcTicks,$identity.ExecutablePath) + [Environment]::NewLine)
+
+                    $fakeWinApp = Join-Path $script:uiRoot 'tests/fixtures/fake-winapp.ps1'
+                    Reset-UiAcceptanceMutationSteps
+                    Reset-UiDriverLastResult
+                    $preFailure = Invoke-WinAppMutation -StepId 'lifecycle-pre-failure' `
+                        -Arguments @('ui','invoke','OriginalFailure') -ProcessId $identity.ProcessId `
+                        -WinAppPath $fakeWinApp -RunToken 'lifecycle-token' -OwnedRoot $root
+                    Assert-Equal 'Passed' $preFailure.Status
+
+                    $collectors = @{
+                        lastCommand = {
+                            $script:order += 'lastCommand'
+                            Get-UiDriverLastResult
+                        }
+                        screenshot = {
+                            $script:order += 'screenshot'
+                            $productProcess.Refresh()
+                            if ($productProcess.HasExited) { throw 'product exited before screenshot capture' }
+                            $capture = Join-Path $root 'lifecycle.png'
+                            $observation = Invoke-WinAppObservation -Arguments @('ui','screenshot','TraceFoldMainWindow','--output',$capture) `
+                                -ProcessId $identity.ProcessId -TimeoutSeconds 2 -WinAppPath $fakeWinApp `
+                                -RunToken 'lifecycle-token' -OwnedRoot $root
+                            if ($observation.Status -cne 'Passed') { throw 'screenshot observation failed' }
+                            return $capture
+                        }
+                        uiaTree = {
+                            $script:order += 'uiaTree'
+                            $productProcess.Refresh()
+                            if ($productProcess.HasExited) { throw 'product exited before UIA capture' }
+                            $observation = Invoke-WinAppObservation -Arguments @('ui','inspect') `
+                                -ProcessId $identity.ProcessId -TimeoutSeconds 2 -WinAppPath $fakeWinApp `
+                                -RunToken 'lifecycle-token' -OwnedRoot $root
+                            if ($observation.Status -cne 'Passed') { throw 'UIA observation failed' }
+                            return [ordered] @{ tree = @($observation.Data.tree) }
+                        }
+                        productLog = { '{"events":[]}' }
+                        stateSnapshot = { '{"tables":{},"taxonomy":{}}' }
+                        processLedger = { 'owned process matched' }
+                    }
+
+                    $inventory = {
+                        param($id)
+                        $productProcess.Refresh()
+                        if ($productProcess.HasExited) { return $null }
+                        return [pscustomobject] @{
+                            ProcessId = [int] $productProcess.Id
+                            StartUtcTicks = [long] $productProcess.StartTime.ToUniversalTime().Ticks
+                            ExecutablePath = [IO.Path]::GetFullPath($fakeProduct)
+                        }
+                    }
+                    $stop = {
+                        param($id)
+                        $script:order += 'stop'
+                        $target = [Diagnostics.Process]::GetProcessById($id)
+                        try {
+                            if (-not $target.HasExited) { $target.Kill(); [void] $target.WaitForExit(3000) }
+                        }
+                        finally { $target.Dispose() }
+                    }
+                    $scenario = {
+                        $script:order += 'control-release'
+                        $productProcess.Refresh()
+                        if ($productProcess.HasExited) { throw 'product was already gone after control release' }
+                        [IO.File]::WriteAllText((Join-Path $out 'single-instance-control-release.json'),
+                            '{"state":"released"}', [Text.UTF8Encoding]::new($false))
+                        [pscustomobject] @{
+                            Status = 'Failed'
+                            Reason = 'single.instance.foreground_window_not_primary'
+                            Artifacts = @('single-instance-control-release.json')
+                        }
+                    }
+                    $cleanup = {
+                        $script:order += 'cleanup'
+                        $productProcess.Refresh()
+                        if ($productProcess.HasExited) { throw 'product was gone before Runner cleanup' }
+                    }
+
+                    $result = Invoke-UiAcceptanceRun -ScenarioId 'singleinstance-lifecycle' `
+                        -Scenario $scenario -Cleanup $cleanup -OwnedRoot $root -OutputDirectory $out `
+                        -Metadata $script:metadata -EvidenceCollectors $collectors `
+                        -RunToken 'lifecycle-token' -OwnedProcessLedger @($identity) `
+                        -ApprovedDirectories @($product) -ProcessInventory $inventory -ProcessStop $stop
+                    Assert-Equal 'control-release,lastCommand,screenshot,uiaTree,cleanup,stop' (@($script:order) -join ',')
+                    Assert-Equal 1 $result.ExitCode
+                    $report = Get-Content -LiteralPath $result.ReportPath -Raw | ConvertFrom-Json
+                    Assert-Contains ([string] $report.scenarios[0].steps[0].reason) 'single.instance.foreground_window_not_primary'
+                    Assert-NotContains ([string] $report.scenarios[0].steps[0].reason) 'evidence capture failed'
+                    $paths = @($report.scenarios[0].steps[0].evidencePaths)
+                    Assert-Equal 7 $paths.Count
+                    Assert-Equal 'single-instance-control-release.json' ([string] $paths[0])
+                    Assert-Equal 6 @($paths | Where-Object { $_ -like 'evidence/*' }).Count
+                    $lastPath = @($paths | Where-Object { $_ -like 'evidence/*lastcommand.json' })
+                    Assert-Equal 1 $lastPath.Count 'the report keeps exactly one lastCommand evidence reference'
+                    $lastText = Get-Content -LiteralPath (Join-Path $out ([string] $lastPath[0])) -Raw
+                    Assert-Contains $lastText 'OriginalFailure'
+                    Assert-NotContains $lastText 'screenshot'
+                    $productProcess.Refresh()
+                    Assert-True $productProcess.HasExited 'the owned product is stopped only after evidence by Runner cleanup'
+                }
+                finally {
+                    if ($null -ne $productProcess) {
+                        try {
+                            $productProcess.Refresh()
+                            if (-not $productProcess.HasExited) {
+                                $productProcess.Kill()
+                                [void] $productProcess.WaitForExit(3000)
+                            }
+                        }
+                        catch { }
+                        $productProcess.Dispose()
+                    }
+                    Remove-UiTestTree -Path $base
+                }
+            }
+        },
+        @{
+            Name = 'runner appends failure evidence after scenario artifacts'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-run-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
+                $root = Join-Path $base 'owned'
+                [void][IO.Directory]::CreateDirectory($root)
+                $png = Join-Path $root 'shot.png'
+                [IO.File]::WriteAllBytes($png, (Get-UiTestPngBytes))
+                $script:order = @()
+                try {
+                    $collect = @{
+                        screenshot={ $png }
+                        uiaTree={ '{"tree":[]}' }
+                        lastCommand={ '{"status":"Failed"}' }
+                        productLog={ '{"events":[]}' }
+                        stateSnapshot={ '{"tables":{},"taxonomy":{}}' }
+                        processLedger={ 'owned' }
+                    }
+                    $result = Invoke-UiAcceptanceRun -ScenarioId 'startup' `
+                        -Scenario { [pscustomobject]@{ Status='Failed'; Reason='product failure'; Artifacts=@('startup-before-failure.json') } } `
+                        -Cleanup { } -OwnedRoot $root -OutputDirectory (Join-Path $base 'out') `
+                        -Metadata $script:metadata -EvidenceCollectors $collect
+                    $report = Get-Content -LiteralPath $result.ReportPath -Raw | ConvertFrom-Json
+                    $paths = @($report.scenarios[0].steps[0].evidencePaths)
+                    Assert-Equal 7 $paths.Count 'the scenario artifact and all six failure evidence references survive'
+                    Assert-Equal 'startup-before-failure.json' ([string] $paths[0]) 'the scenario artifact keeps its original position'
+                    Assert-Equal 6 @($paths | Where-Object { $_ -like 'evidence/*' }).Count 'each failure evidence reference is appended once'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'entry wires shared failure evidence to every scenario including the dedicated single-instance path'
+            Body = {
+                $entryPath = Join-Path $script:root 'scripts/run-stage5cc-ui-acceptance.ps1'
+                $entry = Get-Content -LiteralPath $entryPath -Raw
+                Assert-Contains $entry 'New-Stage5CCFailureEvidenceCollectors'
+                Assert-Contains $entry 'Reset-UiDriverLastResult'
+                Assert-True ($entry.Contains("`$runArguments['EvidenceCollectors'] = `$failureEvidenceCollectors")) 'the Runner call receives the evidence collectors'
+                Assert-True (-not $entry.Contains("if (`$name -cne 'SingleInstance')")) 'no scenario is exempt from the shared failure evidence'
+                $collectorIndex = $entry.IndexOf('$failureEvidenceCollectors = New-Stage5CCFailureEvidenceCollectors')
+                $resetIndex = $entry.IndexOf('Reset-UiDriverLastResult')
+                $runnerIndex = $entry.IndexOf('$result = Invoke-UiAcceptanceRun @runArguments')
+                Assert-True ($collectorIndex -ge 0 -and $resetIndex -gt $collectorIndex -and $runnerIndex -gt $resetIndex) 'collectors and reset are wired before the only relevant Runner call'
+
+                $startupPath = Join-Path $script:uiRoot 'scenarios/00-startup-layout.ps1'
+                $startup = Get-Content -LiteralPath $startupPath -Raw
+                Assert-Contains $startup 'Viewports = @($viewports)'
+                Assert-Contains $startup 'Artifacts = @($artifacts)'
             }
         }
     )

@@ -128,8 +128,9 @@ function Test-GuardRegionsFamiliesAndParams {
     }
 
     # the public parameter surface is untouched: the same inputs and nothing more
-    $paramAt = $text.IndexOf("param(`n")
-    Assert-HostConditionTrue ($paramAt -gt 0) 'the entry param block is present'
+    $paramAt = $text.IndexOf("param(`r`n")
+    if ($paramAt -lt 0) { $paramAt = $text.IndexOf("param(`n") }
+    Assert-HostConditionTrue ($paramAt -ge 0) 'the entry param block is present'
     $paramEnd = $text.IndexOf("`n)", $paramAt)
     Assert-HostConditionTrue ($paramEnd -gt $paramAt) 'the entry param block closes'
     $paramBlock = $text.Substring($paramAt, $paramEnd - $paramAt)

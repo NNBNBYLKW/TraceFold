@@ -98,6 +98,72 @@ function Get-TestCases {
                 }
                 finally { Remove-Item Env:TRACEFOLD_FAKE_ARGV_LOG -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue }
             }
+        },
+        @{
+            Name = 'last driver result resets and records real and blocked commands'
+            Body = {
+                $base = Join-Path ([IO.Path]::GetTempPath()) ('tracefold-last-' + [guid]::NewGuid().ToString('N'))
+                [void][IO.Directory]::CreateDirectory($base)
+                try {
+                    Reset-UiAcceptanceMutationSteps
+                    Reset-UiDriverLastResult
+                    Assert-True ($null -eq (Get-UiDriverLastResult))
+
+                    $passed = Invoke-WinAppMutation -StepId 'last-result-passed' `
+                        -Arguments @('ui','invoke','NameBox') -ProcessId 31415 -WinAppPath $script:fake
+                    Assert-Equal 'Passed' $passed.Status
+                    $last = Get-UiDriverLastResult
+                    Assert-Equal 'Passed' $last.Status
+                    Assert-Equal 0 ([int] $last.ExitCode)
+                    Assert-Equal 1 ([int] $last.Attempts)
+                    Assert-Equal 'ui' ([string] @($last.Arguments)[0])
+                    Assert-Equal 'invoke' ([string] @($last.Arguments)[1])
+                    Assert-Equal 'NameBox' ([string] @($last.Arguments)[2])
+                    Assert-Equal 'fake-winapp.ps1' ([string] $last.ExecutableName)
+
+                    $blocked = Invoke-WinAppKeyboard -StepId 'last-result-blocked' `
+                        -Arguments @('ui','send-keys','Escape') -ProcessId 44 -WinAppPath $script:fake `
+                        -ForegroundCheck { $false } -DesktopCheck { $true }
+                    Assert-Equal 'Blocked' $blocked.Status
+                    $last = Get-UiDriverLastResult
+                    Assert-Equal 'Blocked' $last.Status
+                    Assert-Equal 'foreground desktop ownership unavailable' ([string] $last.Error)
+                    Assert-Equal 'send-keys' ([string] @($last.Arguments)[1])
+
+                    $owned = Join-Path $base 'owned'
+                    [void][IO.Directory]::CreateDirectory($owned)
+                    $screenshot = Join-Path $owned 'failure.png'
+                    $captured = Invoke-WinAppObservation -Arguments @('ui','screenshot','TraceFoldMainWindow','--output',$screenshot) `
+                        -ProcessId 31415 -TimeoutSeconds 2 -WinAppPath $script:fake `
+                        -RunToken 'last-result-token' -OwnedRoot $owned
+                    Assert-Equal 'Passed' $captured.Status
+                    $last = Get-UiDriverLastResult
+                    $argumentText = @($last.Arguments) -join ' '
+                    Assert-NotContains $argumentText 'last-result-token'
+                    Assert-NotContains $argumentText $owned
+                    Assert-Contains $argumentText '[redacted-path]'
+
+                    $env:TRACEFOLD_FAKE_STDERR = ('last-result-token ' + (Join-Path $owned 'error.log'))
+                    $env:TRACEFOLD_FAKE_EXIT_CODE = '1'
+                    $failed = Invoke-WinAppMutation -StepId 'last-result-failed' `
+                        -Arguments @('ui','invoke','NameBox') -ProcessId 31415 -WinAppPath $script:fake `
+                        -RunToken 'last-result-token' -OwnedRoot $owned
+                    Assert-Equal 'Failed' $failed.Status
+                    $last = Get-UiDriverLastResult
+                    Assert-NotContains ([string] $last.Error) 'last-result-token'
+                    Assert-NotContains ([string] $last.Error) $owned
+                    Assert-Contains ([string] $last.Error) '[redacted-token]'
+                    Assert-Contains ([string] $last.Error) '[redacted-path]'
+
+                    Reset-UiDriverLastResult
+                    Assert-True ($null -eq (Get-UiDriverLastResult))
+                }
+                finally {
+                    Remove-Item Env:TRACEFOLD_FAKE_STDERR -ErrorAction SilentlyContinue
+                    Remove-Item Env:TRACEFOLD_FAKE_EXIT_CODE -ErrorAction SilentlyContinue
+                    Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
     )
 }

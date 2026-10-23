@@ -79,6 +79,111 @@ function ConvertTo-UiSafeValue {
     return $Value
 }
 
+<#
+.SYNOPSIS
+    Projects a durable evidence document without changing the in-memory source.
+
+.DESCRIPTION
+    Scenario code keeps the real process identities it needs for its own checks. This public
+    projection is the one boundary to use before that evidence is serialised: it returns a new
+    object tree, redacts capability values and machine paths, and preserves safe scalar facts such
+    as hashes, booleans, exit codes and timestamps. Dictionary and custom-object properties become
+    PSCustomObject nodes; enumerable values become arrays. Raw capability/path fields, other
+    dangerous keys and unknown CLR objects are refused rather than being serialised implicitly;
+    callers carry logical state labels and safe executable name/hash fields instead.
+#>
+function Test-UiDurableEvidenceKey {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Key,
+        [AllowNull()] $Value
+    )
+
+    if ($Key -ieq 'runtoken' -or $Key -ieq 'ownedroot' -or $Key -ieq 'executablepath') { return $false }
+    if ($Key -ieq 'pid' -or $Key -ieq 'processid') {
+        if ($null -eq $Value -or $Value -is [bool] -or -not $Value.GetType().IsValueType) { return $false }
+        try { return ([long] $Value -ge 0) }
+        catch { return $false }
+    }
+    return -not (Test-UiAcceptanceDangerousKey -Key $Key)
+}
+
+function ConvertTo-UiDurableEvidenceProjection {
+    [CmdletBinding()]
+    param(
+        [AllowNull()] $Value,
+        [AllowEmptyString()][string] $RunToken = '',
+        [AllowEmptyString()][string] $OwnedRoot = '',
+        [AllowEmptyString()][string] $ExecutablePath = ''
+    )
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Management.Automation.ErrorRecord]) {
+        $position = ''
+        $stack = ''
+        if ($null -ne $Value.InvocationInfo) {
+            $position = [string] $Value.InvocationInfo.PositionMessage
+        }
+        if ($null -ne $Value.ScriptStackTrace) { $stack = [string] $Value.ScriptStackTrace }
+        $fact = [ordered] @{
+            errorType = $Value.Exception.GetType().FullName
+            errorId   = [string] $Value.FullyQualifiedErrorId
+            category  = [string] $Value.CategoryInfo.Category
+            position  = $position
+            stack     = $stack
+            message   = [string] $Value.Exception.Message
+        }
+        return ConvertTo-UiDurableEvidenceProjection -Value $fact -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+    }
+    if ($Value -is [System.Exception]) {
+        $fact = [ordered] @{
+            errorType = $Value.GetType().FullName
+            message   = [string] $Value.Message
+            stack     = [string] $Value.StackTrace
+        }
+        return ConvertTo-UiDurableEvidenceProjection -Value $fact -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+    }
+    if ($Value -is [string]) {
+        $safe = [string] $Value
+        if (-not [string]::IsNullOrEmpty($ExecutablePath)) {
+            $safe = [regex]::Replace($safe, [regex]::Escape($ExecutablePath), '[redacted-path]', 'IgnoreCase')
+        }
+        return Protect-UiAcceptanceText -Value $safe -RunToken $RunToken -OwnedRoot $OwnedRoot
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $safe = [ordered] @{}
+        foreach ($key in $Value.Keys) {
+            $safeKey = [string] $key
+            if (-not (Test-UiDurableEvidenceKey -Key $safeKey -Value $Value[$key])) {
+                throw ('Evidence contains a forbidden key: ' + $safeKey)
+            }
+            $safe[$safeKey] = ConvertTo-UiDurableEvidenceProjection -Value $Value[$key] `
+                -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+        }
+        return [pscustomobject] $safe
+    }
+    if ($Value -is [pscustomobject]) {
+        $safe = [ordered] @{}
+        foreach ($property in $Value.PSObject.Properties) {
+            if (-not (Test-UiDurableEvidenceKey -Key $property.Name -Value $property.Value)) {
+                throw ('Evidence contains a forbidden key: ' + $property.Name)
+            }
+            $safe[$property.Name] = ConvertTo-UiDurableEvidenceProjection -Value $property.Value `
+                -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+        }
+        return [pscustomobject] $safe
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $safeItems = New-Object System.Collections.Generic.List[object]
+        foreach ($item in $Value) {
+            $safeItems.Add((ConvertTo-UiDurableEvidenceProjection -Value $item `
+                -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath))
+        }
+        return ,$safeItems.ToArray()
+    }
+    if ($Value -is [ValueType] -or $Value -is [Guid]) { return $Value }
+    throw ('Durable evidence contains an unsupported value type: ' + $Value.GetType().FullName)
+}
+
 function Write-UiFailureEvidence {
     [CmdletBinding()]
     param(
@@ -89,7 +194,9 @@ function Write-UiFailureEvidence {
         [Parameter(Mandatory)][hashtable] $Collectors,
         [string] $RunToken
     )
-    $required = @('screenshot','uiaTree','lastCommand','productLog','stateSnapshot','processLedger')
+    # Read the already-finished command first: the screenshot and UIA collectors below issue new
+    # driver calls and would otherwise replace the failure-causing result before it is persisted.
+    $required = @('lastCommand','screenshot','uiaTree','productLog','stateSnapshot','processLedger')
     foreach ($key in $required) { if (-not $Collectors.ContainsKey($key)) { throw ('Missing evidence collector: ' + $key) } }
     $slug = ConvertTo-UiAcceptanceSlug -Value ($ScenarioId + '-' + $StepId)
     $temp = Join-Path $OwnedRoot ('evidence-' + $slug)
@@ -126,7 +233,7 @@ function Write-UiFailureEvidence {
             if ($key -eq 'lastCommand' -and $null -eq $value.PSObject.Properties['status'] -and $null -eq $value.PSObject.Properties['Status']) { throw 'Last command status is missing.' }
             if ($key -eq 'stateSnapshot') { Assert-UiAcceptanceFields -InputObject $value -Required @('tables','taxonomy') }
             if ($key -eq 'productLog') { Assert-UiAcceptanceFields -InputObject $value -Required @('events') }
-            $safe = ConvertTo-UiSafeValue -Value $value -RunToken $RunToken -OwnedRoot $OwnedRoot
+            $safe = ConvertTo-UiDurableEvidenceProjection -Value $value -RunToken $RunToken -OwnedRoot $OwnedRoot
             $json = ConvertTo-Json -InputObject $safe -Depth 30
             $name = $slug + '-' + (ConvertTo-UiAcceptanceSlug -Value $key) + '.json'
             [IO.File]::WriteAllText((Join-Path $temp $name), $json, [Text.UTF8Encoding]::new($false))
@@ -637,6 +744,7 @@ function Write-UiVisualIndex {
 }
 
 Export-ModuleMember -Function @(
+    'ConvertTo-UiDurableEvidenceProjection',
     'Write-UiFailureEvidence',
     'Write-UiAcceptanceReport',
     'Write-UiRedactedTreeEvidence',

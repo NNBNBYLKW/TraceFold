@@ -315,7 +315,11 @@ function New-VisualIntegrationTree {
     $driverPath = Join-Path $uiRoot 'TraceFold.UiAcceptance.Driver.psm1'
     $driverOld = @'
     try { $target = (Resolve-Path -LiteralPath $WinAppPath -ErrorAction Stop).ProviderPath }
-    catch { return [pscustomobject]@{ ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver unavailable' } }
+    catch {
+        $result = [pscustomobject]@{ Status='Blocked'; ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver unavailable'; Attempts=0; Error='driver unavailable'; Data=$null }
+        Set-UiDriverLastResult -WinAppPath $WinAppPath -Arguments $Arguments -Result $result -RunToken $RunToken -OwnedRoot $OwnedRoot
+        return $result
+    }
 '@
     $driverNew = @'
     $fixtureDriver = [string] $env:TRACEFOLD_VISUAL_DRIVER
@@ -324,7 +328,11 @@ function New-VisualIntegrationTree {
     }
     else {
         try { $target = (Resolve-Path -LiteralPath $WinAppPath -ErrorAction Stop).ProviderPath }
-        catch { return [pscustomobject]@{ ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver unavailable' } }
+        catch {
+            $result = [pscustomobject]@{ Status='Blocked'; ExitCode=5; TimedOut=$false; Stdout=''; Stderr='driver unavailable'; Attempts=0; Error='driver unavailable'; Data=$null }
+            Set-UiDriverLastResult -WinAppPath $WinAppPath -Arguments $Arguments -Result $result -RunToken $RunToken -OwnedRoot $OwnedRoot
+            return $result
+        }
     }
 '@
     $patch = Replace-VisualIntegrationOnce -Path $driverPath -Old $driverOld -New $driverNew `

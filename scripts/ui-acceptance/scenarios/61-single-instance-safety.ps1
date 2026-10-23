@@ -308,6 +308,119 @@ function Assert-SingleInstanceActivated {
     if ($ForegroundOwnerPid -ne $PrimaryPid) { throw 'single.instance.primary_not_activated' }
 }
 
+function Get-SingleInstanceCurrentIdentityObservation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int] $ProcessId,
+        [Parameter(Mandatory)][long] $ExpectedStartUtcTicks,
+        [Parameter(Mandatory)][string] $ExpectedExecutablePath,
+        [Parameter(Mandatory)][string] $ExpectedExecutableSha256
+    )
+    $result = [ordered] @{
+        state           = 'unknown'
+        reason          = ''
+        startUtcTicks   = $null
+        imageSha256     = $null
+        identityMatched = $null
+    }
+    if ($ProcessId -gt 0) { $result['processId'] = $ProcessId }
+    if ($ProcessId -le 0) {
+        $result.reason = 'single.instance.current_identity_process_missing'
+        return [pscustomobject] $result
+    }
+    $process = $null
+    try {
+        $process = [Diagnostics.Process]::GetProcessById($ProcessId)
+        # Keep one held object while PID, birth and image are read together.
+        $null = $process.Handle
+        if ($process.HasExited) {
+            $result.reason = 'single.instance.current_identity_process_exited'
+            return [pscustomobject] $result
+        }
+        $actualPid = [int] $process.Id
+        $actualStartUtcTicks = [long] $process.StartTime.ToUniversalTime().Ticks
+        $actualExecutablePath = [IO.Path]::GetFullPath([string] $process.MainModule.FileName)
+        $actualImageSha256 = (Get-FileHash -LiteralPath $actualExecutablePath -Algorithm SHA256).Hash
+        $result.processId = $actualPid
+        $result.startUtcTicks = $actualStartUtcTicks
+        $result.imageSha256 = $actualImageSha256
+        $samePath = ($actualExecutablePath -ieq [IO.Path]::GetFullPath($ExpectedExecutablePath))
+        $sameImage = ($actualImageSha256 -ceq $ExpectedExecutableSha256)
+        $result.identityMatched = ([bool] ($actualPid -eq $ProcessId -and
+            $actualStartUtcTicks -eq $ExpectedStartUtcTicks -and $samePath -and $sameImage))
+        if ([bool] $result.identityMatched) {
+            $result.state = 'matched'
+        }
+        else {
+            $result.state = 'mismatch'
+            $result.reason = 'single.instance.current_identity_mismatch'
+        }
+    }
+    catch {
+        $result.state = 'unknown'
+        $result.reason = 'single.instance.current_identity_unavailable'
+    }
+    finally {
+        if ($null -ne $process) { $process.Dispose() }
+    }
+    return [pscustomobject] $result
+}
+
+function New-SingleInstanceForegroundObservation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int] $ExpectedPrimaryPid,
+        [Parameter(Mandatory)][long] $ExpectedPrimaryWindowHandle,
+        [Parameter(Mandatory)][long] $ExpectedPrimaryStartUtcTicks,
+        [long] $ActualForegroundWindowHandle = 0,
+        [AllowNull()] $ActualForegroundOwnerPid,
+        [long] $FreshPrimaryWindowHandle = 0,
+        [AllowNull()] $FreshPrimaryOwnerPid,
+        [AllowNull()] $CurrentOwnedIdentity,
+        [string] $ExecutableImageSha256 = '',
+        [string] $FailureStage = '',
+        [string] $FailureCode = '',
+        [string] $FreshPrimaryOwnerReason = ''
+    )
+    $foregroundOwner = $null
+    if ($null -ne $ActualForegroundOwnerPid) {
+        try {
+            $candidate = [int] $ActualForegroundOwnerPid
+            if ($candidate -gt 0) { $foregroundOwner = $candidate }
+        }
+        catch { }
+    }
+    $freshOwner = $null
+    if ($null -ne $FreshPrimaryOwnerPid) {
+        try {
+            $candidate = [int] $FreshPrimaryOwnerPid
+            if ($candidate -gt 0) { $freshOwner = $candidate }
+        }
+        catch { }
+    }
+    return [pscustomobject] [ordered] @{
+        schemaVersion              = 1
+        scenarioId                 = 'single-instance'
+        observedUtc                = [DateTimeOffset]::UtcNow.ToString('o')
+        failureStage               = $FailureStage
+        failureCode                = $FailureCode
+        executableImageSha256      = $ExecutableImageSha256
+        expectedPrimaryPid         = $ExpectedPrimaryPid
+        expectedPrimaryWindowHandle = $(if ($ExpectedPrimaryWindowHandle -gt 0) { $ExpectedPrimaryWindowHandle } else { $null })
+        expectedPrimaryStartUtcTicks = $(if ($ExpectedPrimaryStartUtcTicks -gt 0) { $ExpectedPrimaryStartUtcTicks } else { $null })
+        actualForegroundWindowHandle = $(if ($ActualForegroundWindowHandle -gt 0) { $ActualForegroundWindowHandle } else { $null })
+        actualForegroundOwnerPid   = $foregroundOwner
+        actualForegroundState      = $(if ($ActualForegroundWindowHandle -gt 0 -and $null -ne $foregroundOwner) { 'captured' } else { 'unknown' })
+        actualForegroundReason     = $(if ($ActualForegroundWindowHandle -gt 0 -and $null -ne $foregroundOwner) { '' } else { 'single.instance.foreground_sample_incomplete' })
+        freshPrimaryWindowHandle   = $(if ($FreshPrimaryWindowHandle -gt 0) { $FreshPrimaryWindowHandle } else { $null })
+        freshPrimaryOwnerPid       = $freshOwner
+        freshPrimaryState          = $(if ($null -ne $freshOwner) { 'captured' } else { 'unknown' })
+        freshPrimaryReason         = $(if ($null -ne $freshOwner) { '' } elseif (-not [string]::IsNullOrWhiteSpace($FreshPrimaryOwnerReason)) { $FreshPrimaryOwnerReason } else { 'single.instance.fresh_primary_owner_unavailable' })
+        sameForegroundSampleNote   = 'the actual foreground handle and owner PID come from the one sample used by the activation guard'
+        currentOwnedIdentity       = $CurrentOwnedIdentity
+    }
+}
+
 # The release of the controlled window as one unit, called by both the success path and the safety
 # net so the two can never drift apart. It uses only what the object already offers and it reads the
 # result back rather than treating a call that did not throw as proof: an object that is not disposed
@@ -639,6 +752,165 @@ function Get-SingleInstanceFinalVerdict {
     return [pscustomobject] @{ Status = $status; Reason = $reason }
 }
 
+function Get-SingleInstanceOptionalProperty {
+    [CmdletBinding()]
+    param(
+        [AllowNull()] $InputObject,
+        [Parameter(Mandatory)][string] $Name
+    )
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($Name)) { return $InputObject[$Name] }
+        return $null
+    }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function ConvertTo-SingleInstanceDurableCloseFact {
+    [CmdletBinding()]
+    param(
+        [AllowNull()] $Observation,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        [string] $ExecutablePath = ''
+    )
+    if ($null -eq $Observation) { return $null }
+    $role = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'role'
+    $processId = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'processId'
+    $startUtcTicks = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'startUtcTicks'
+    $identityMatched = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'identityMatched'
+    $closeRequested = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'closeRequested'
+    $closeAccepted = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'closeAccepted'
+    $exitObserved = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'exitObserved'
+    $exitCode = Get-SingleInstanceOptionalProperty -InputObject $Observation -Name 'exitCode'
+    $safe = [ordered] @{
+        role            = $(if ($null -eq $role) { $null } else { ConvertTo-UiDurableEvidenceProjection -Value ([string] $role) -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath })
+        processIdState  = 'unknown'
+        processIdReason = ''
+        startUtcTicksState = 'unknown'
+        startUtcTicksReason = ''
+        identityMatched = $(if ($identityMatched -is [bool]) { [bool] $identityMatched } else { $null })
+        closeRequested  = $(if ($closeRequested -is [bool]) { [bool] $closeRequested } else { $null })
+        closeAccepted   = $(if ($closeAccepted -is [bool]) { [bool] $closeAccepted } else { $null })
+        exitObserved    = $(if ($exitObserved -is [bool]) { [bool] $exitObserved } else { $null })
+        exitCode        = $(if ($null -eq $exitCode) { $null } elseif ($exitCode -is [ValueType]) { [int] $exitCode } else { $null })
+    }
+    if ($processId -is [ValueType] -and [long] $processId -gt 0) {
+        $safe['processId'] = [int] $processId
+        $safe['processIdState'] = 'captured'
+    }
+    else {
+        $safe['processIdReason'] = 'single.instance.close_process_id_missing'
+    }
+    if ($startUtcTicks -is [ValueType] -and [long] $startUtcTicks -gt 0) {
+        $safe['startUtcTicks'] = [long] $startUtcTicks
+        $safe['startUtcTicksState'] = 'captured'
+    }
+    else {
+        $safe['startUtcTicksReason'] = 'single.instance.close_start_time_missing'
+    }
+    return [pscustomobject] $safe
+}
+
+function ConvertTo-SingleInstanceDurableErrorFact {
+    [CmdletBinding()]
+    param(
+        [AllowNull()] $Fact,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        [string] $ExecutablePath = ''
+    )
+    if ($null -eq $Fact) { return $null }
+    $safe = [ordered] @{}
+    foreach ($name in @('stage', 'errorType', 'errorId', 'category', 'position', 'stack', 'message')) {
+        $value = Get-SingleInstanceOptionalProperty -InputObject $Fact -Name $name
+        $safe[$name] = $(if ($null -eq $value) { $null } else { ConvertTo-UiDurableEvidenceProjection -Value ([string] $value) -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath })
+    }
+    return [pscustomobject] $safe
+}
+
+function ConvertTo-SingleInstanceDurableSuccessEvidence {
+    [CmdletBinding()]
+    param(
+        [AllowNull()] $Evidence,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        [string] $ExecutablePath = ''
+    )
+    if ($null -eq $Evidence) { return $null }
+    $allowed = @(
+        'scenarioId', 'runTokenState', 'ownedRootState', 'executableName', 'executableSha256',
+        'primaryPid', 'primaryWindowHandle', 'primaryWindowAfter', 'primaryStartedUtc',
+        'preObservationStatus', 'postObservationStatus', 'secondaryArgvCount',
+        'secondaryExecutableMatches', 'secondaryDataRootState', 'secondaryDataRootMatchesOwnedRoot',
+        'secondaryPid', 'secondaryStartUtc', 'secondaryEndUtc', 'secondaryExitCode',
+        'foregroundWindowHandle', 'foregroundMatchesPrimary', 'foregroundOwnerPid',
+        'controlWindowHandle', 'controlWindowOwnerPid', 'controlWindowClosed',
+        'controlReleaseReadBack', 'controlReleaseFailure', 'controlReleaseStage', 'businessStage',
+        'preForegroundHandle', 'preForegroundOwnerPid', 'preStateNote',
+        'expectedDatabaseName', 'databaseFileNamesBefore', 'databaseFileNamesAfter',
+        'databaseFileNamesCreated', 'dbSidecarFileNamesBefore', 'dbSidecarFileNamesAfter',
+        'dbSidecarNote', 'libraryFilesBefore', 'libraryFilesAfter', 'libraryFileNamesCreated',
+        'closeAccepted', 'primaryClose', 'residueAfterClose', 'restartPid', 'restartWindowHandle',
+        'restartObservationStatus', 'restartClose', 'residueAfterRestartClose',
+        'restartExecutableName', 'restartExecutableMatches', 'restartOwnedRootState',
+        'restartOwnedRootMatches', 'activationProof', 'observabilityNote', 'databaseScopeNote',
+        'singleInstanceKeyScope')
+    $safe = [ordered] @{}
+    foreach ($name in $allowed) {
+        $value = Get-SingleInstanceOptionalProperty -InputObject $Evidence -Name $name
+        if ($name -ceq 'primaryClose' -or $name -ceq 'restartClose') {
+            $safe[$name] = ConvertTo-SingleInstanceDurableCloseFact -Observation $value -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+        }
+        elseif ($null -ne $value) {
+            $safe[$name] = ConvertTo-UiDurableEvidenceProjection -Value $value -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+        }
+    }
+    return [pscustomobject] $safe
+}
+
+function ConvertTo-SingleInstanceDurableJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Document,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        [string] $ExecutablePath = ''
+    )
+
+    $safe = ConvertTo-UiDurableEvidenceProjection -Value $Document -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+    $json = ConvertTo-Json -InputObject $safe -Depth 20
+    foreach ($sensitive in @($RunToken, $OwnedRoot, $ExecutablePath)) {
+        if ([string]::IsNullOrEmpty($sensitive)) { continue }
+        if ($json.IndexOf($sensitive, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw 'single.instance.durable_evidence_leak'
+        }
+    }
+    return $json
+}
+
+function Write-SingleInstanceForegroundObservation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $OutputDirectory,
+        [Parameter(Mandatory)] $Observation,
+        [string] $RunToken = '',
+        [string] $OwnedRoot = '',
+        [string] $ExecutablePath = ''
+    )
+    $name = 'single-instance-foreground-observation.json'
+    $target = Join-Path $OutputDirectory $name
+    if ([IO.File]::Exists($target) -or [IO.Directory]::Exists($target)) {
+        throw 'Foreground observation evidence already exists.'
+    }
+    $json = ConvertTo-SingleInstanceDurableJson -Document $Observation `
+        -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+    [IO.File]::WriteAllText($target, $json, [Text.UTF8Encoding]::new($false))
+    return $name
+}
+
 # The exit evidence, written after the release and only on the way out. Each document is guarded on
 # its own: a write that fails becomes its own lightweight fact and leaves the required state
 # incomplete instead of being swallowed, and there is no retry, no substitute file and no second
@@ -653,6 +925,8 @@ function Write-SingleInstanceExitEvidence {
         [Parameter(Mandatory)] $Failures,
         [string] $RunToken = '',
         [string] $OwnedRoot = '',
+        [string] $ExecutablePath = '',
+        [string] $ExecutableSha256 = '',
         $SuccessEvidence,
         $BusinessErrorRecord,
         [string] $BusinessStage = '',
@@ -669,6 +943,19 @@ function Write-SingleInstanceExitEvidence {
     # with "Argument types do not match" on both engines. An array, a list or nothing all work.
     $attempts = $ReleaseAttempts
     if ($null -eq $attempts) { $attempts = @() }
+    $artifactContext = [ordered] @{}
+    if (-not [string]::IsNullOrWhiteSpace($ExecutablePath)) {
+        $artifactContext['executableName'] = [IO.Path]::GetFileName($ExecutablePath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExecutableSha256)) {
+        $artifactContext['executableSha256'] = $ExecutableSha256
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RunToken)) {
+        $artifactContext['runTokenState'] = '[redacted-token]'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OwnedRoot)) {
+        $artifactContext['ownedRootState'] = '[redacted-path]'
+    }
 
     # 1. the release record, whenever a release really was attempted. Every attempt keeps its own
     # action and read back facts, so a later attempt never erases an earlier failure.
@@ -677,15 +964,18 @@ function Write-SingleInstanceExitEvidence {
         foreach ($attempt in $attempts) {
             $closeFact = $null
             if ($null -ne $attempt.closeErrorRecord) {
-                $closeFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.closeErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $closeBase = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.closeErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $closeFact = ConvertTo-SingleInstanceDurableErrorFact -Fact $closeBase -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
             }
             $disposeFact = $null
             if ($null -ne $attempt.disposeErrorRecord) {
-                $disposeFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.disposeErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $disposeBase = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.disposeErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $disposeFact = ConvertTo-SingleInstanceDurableErrorFact -Fact $disposeBase -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
             }
             $readBackFact = $null
             if ($null -ne $attempt.readBackErrorRecord) {
-                $readBackFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.readBackErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $readBackBase = ConvertTo-SingleInstanceErrorFact -ErrorRecord $attempt.readBackErrorRecord -Stage ([string] $attempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $readBackFact = ConvertTo-SingleInstanceDurableErrorFact -Fact $readBackBase -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
             }
             $attemptDocuments += [ordered] @{
                 source              = [string] $attempt.source
@@ -717,9 +1007,11 @@ function Write-SingleInstanceExitEvidence {
             attemptCount           = $attempts.Count
             attempts               = $attemptDocuments
         }
+        if ($artifactContext.Count -gt 0) { $record['artifactContext'] = $artifactContext }
         try {
             [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-control-release.json'),
-                (ConvertTo-Json -InputObject $record -Depth 6), [Text.UTF8Encoding]::new($false))
+                (ConvertTo-SingleInstanceDurableJson -Document $record -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath),
+                [Text.UTF8Encoding]::new($false))
             $outcome.controlReleaseWritten = $true
             $Artifacts.Add('single-instance-control-release.json')
         }
@@ -732,6 +1024,17 @@ function Write-SingleInstanceExitEvidence {
     # 2. the failure forensics, whenever the run did not pass.
     if ($null -ne $BusinessErrorRecord) {
         $business = ConvertTo-SingleInstanceErrorFact -ErrorRecord $BusinessErrorRecord -Stage $BusinessStage -RunToken $RunToken -OwnedRoot $OwnedRoot
+        $closeObservations = @()
+        $rawCloseObservations = $BusinessErrorRecord.Exception.Data['TraceFold.SingleInstanceClose']
+        if ($null -ne $rawCloseObservations) {
+            foreach ($observation in $rawCloseObservations) {
+                $closeObservations += ConvertTo-SingleInstanceDurableCloseFact -Observation $observation -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+            }
+        }
+        $durableFailures = @()
+        foreach ($failure in $Failures) {
+            $durableFailures += ConvertTo-SingleInstanceDurableErrorFact -Fact $failure -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+        }
         $document = [ordered] @{
             stage                = [string] $business.stage
             errorType            = [string] $business.errorType
@@ -744,10 +1047,8 @@ function Write-SingleInstanceExitEvidence {
             factoryRelease       = $null
             releaseActionError   = $null
             releaseReadBackError = $null
-            closeObservations    = $BusinessErrorRecord.Exception.Data['TraceFold.SingleInstanceClose']
-            # Cast, not wrapped: the shared failure list is a generic object list and @() over one
-            # fails on both engines.
-            exitFailures         = [object[]] $Failures
+            closeObservations    = $closeObservations
+            exitFailures         = $durableFailures
         }
         if ($attempts.Count -gt 0) {
             $lastAttempt = $attempts[$attempts.Count - 1]
@@ -760,10 +1061,12 @@ function Write-SingleInstanceExitEvidence {
                 lastFailure  = [string] $lastAttempt.releaseFailure
             }
             if ($null -ne $lastAttempt.actionErrorRecord) {
-                $document.releaseActionError = ConvertTo-SingleInstanceErrorFact -ErrorRecord $lastAttempt.actionErrorRecord -Stage ([string] $lastAttempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $actionFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $lastAttempt.actionErrorRecord -Stage ([string] $lastAttempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $document.releaseActionError = ConvertTo-SingleInstanceDurableErrorFact -Fact $actionFact -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
             }
             if ($null -ne $lastAttempt.readBackErrorRecord) {
-                $document.releaseReadBackError = ConvertTo-SingleInstanceErrorFact -ErrorRecord $lastAttempt.readBackErrorRecord -Stage ([string] $lastAttempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $readBackFact = ConvertTo-SingleInstanceErrorFact -ErrorRecord $lastAttempt.readBackErrorRecord -Stage ([string] $lastAttempt.stage) -RunToken $RunToken -OwnedRoot $OwnedRoot
+                $document.releaseReadBackError = ConvertTo-SingleInstanceDurableErrorFact -Fact $readBackFact -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
             }
         }
         if ($null -ne $FactoryReleaseReport) {
@@ -772,9 +1075,11 @@ function Write-SingleInstanceExitEvidence {
                 releaseAttempted = [bool] $FactoryReleaseReport.releaseAttempted
             }
         }
+        if ($artifactContext.Count -gt 0) { $document['artifactContext'] = $artifactContext }
         try {
             [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-stage-error.json'),
-                (ConvertTo-Json -InputObject $document -Depth 8), [Text.UTF8Encoding]::new($false))
+                (ConvertTo-SingleInstanceDurableJson -Document $document -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath),
+                [Text.UTF8Encoding]::new($false))
             $outcome.stageErrorWritten = $true
             $Artifacts.Add('single-instance-stage-error.json')
         }
@@ -787,8 +1092,14 @@ function Write-SingleInstanceExitEvidence {
         # 3. the success evidence. A failure here is the difference between a run that proved
         # something and a run that did not, so it is named as its own required document.
         try {
+            $successDocument = ConvertTo-SingleInstanceDurableSuccessEvidence -Evidence $SuccessEvidence `
+                -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath
+            if ($artifactContext.Count -gt 0) {
+                $successDocument | Add-Member -NotePropertyName artifactContext -NotePropertyValue $artifactContext -Force
+            }
             [IO.File]::WriteAllText((Join-Path $OutputDirectory 'single-instance-safety.json'),
-                (ConvertTo-Json -InputObject $SuccessEvidence -Depth 10), [Text.UTF8Encoding]::new($false))
+                (ConvertTo-SingleInstanceDurableJson -Document $successDocument -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $ExecutablePath),
+                [Text.UTF8Encoding]::new($false))
             $outcome.successEvidenceWritten = $true
             $Artifacts.Add('single-instance-safety.json')
         }
@@ -886,7 +1197,8 @@ function Invoke-SingleInstanceCloseAndRestart {
         }
         $facts = [pscustomobject] @{
             role = $Role; processId = [int] $Identity.ProcessId; startUtcTicks = [long] $Identity.StartUtcTicks
-            identityMatched = $false; closeAccepted = $false; exitObserved = $false; exitCode = $null
+            identityMatched = $false; closeRequested = $false; closeAccepted = $false
+            exitObserved = $false; exitCode = $null
         }
         [void] $closeFacts.Add($facts)
         $process = $null
@@ -898,6 +1210,7 @@ function Invoke-SingleInstanceCloseAndRestart {
             }
             $facts.identityMatched = $true
             if ($process.HasExited) { throw ($prefix + '_exited_before_close') }
+            $facts.closeRequested = $true
             $facts.closeAccepted = [bool] $process.CloseMainWindow()
             if (-not $facts.closeAccepted) { throw ($prefix + '_close_rejected') }
             $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -1008,11 +1321,14 @@ $successEvidence = $null
 $primaryPidOut = $null
 $secondaryExitOut = $null
 $restartPidOut = $null
+$executableSha256 = ''
+$foregroundObservationArtifact = ''
 
 try {
     if (-not [IO.File]::Exists($ExecutablePath)) { throw 'single.instance.executable_missing' }
     $exe = [IO.Path]::GetFullPath($ExecutablePath)
     if ([IO.Path]::GetFileName($exe) -ine 'TraceFold.Media.exe') { throw 'single.instance.executable_missing' }
+    $executableSha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
     $root = [IO.Path]::GetFullPath($OwnedRoot)
 
     # A host without an interactive desktop cannot exercise activation at all.
@@ -1160,14 +1476,61 @@ try {
     # is asked for. The primary is the foreground only if that handle is the primary's own window and
     # that handle's owner is the primary process. Nothing here brings any window forward, clicks it
     # or asks the driver to activate it, because that would manufacture the fact being proved.
-    $foregroundHandle = Get-ForegroundWindowHandle
-    $foregroundOwnerPid = Get-WindowOwnerProcessId -Handle $foregroundHandle
-    $primaryWindowAfter = Get-ProcessWindowHandle -ProcessId $primaryPid
-    Assert-SingleInstanceActivated -PrimaryPid $primaryPid -PrimaryWindowHandle $primaryWindow.ToInt64() `
-        -PrimaryWindowAfterHandle $primaryWindowAfter.ToInt64() `
-        -ForegroundHandle $foregroundHandle.ToInt64() -ForegroundOwnerPid $foregroundOwnerPid
-    if ($primaryWindowAfter.ToInt64() -ne $primaryWindow.ToInt64()) {
-        throw 'single.instance.primary_window_changed'
+    $foregroundHandle = [IntPtr]::Zero
+    $foregroundOwnerPid = $null
+    $primaryWindowAfter = [IntPtr]::Zero
+    $foregroundFailureStage = 'foreground-handle'
+    try {
+        $foregroundHandle = Get-ForegroundWindowHandle
+        $foregroundFailureStage = 'foreground-owner'
+        $foregroundOwnerPid = Get-WindowOwnerProcessId -Handle $foregroundHandle
+        $foregroundFailureStage = 'fresh-primary-window'
+        $primaryWindowAfter = Get-ProcessWindowHandle -ProcessId $primaryPid
+        $foregroundFailureStage = 'activation-guard'
+        Assert-SingleInstanceActivated -PrimaryPid $primaryPid -PrimaryWindowHandle $primaryWindow.ToInt64() `
+            -PrimaryWindowAfterHandle $primaryWindowAfter.ToInt64() `
+            -ForegroundHandle $foregroundHandle.ToInt64() -ForegroundOwnerPid $foregroundOwnerPid
+        if ($primaryWindowAfter.ToInt64() -ne $primaryWindow.ToInt64()) {
+            throw 'single.instance.primary_window_changed'
+        }
+    }
+    catch {
+        $activationFailure = $_
+        $freshPrimaryOwnerPid = $null
+        $freshPrimaryOwnerReason = ''
+        if ($primaryWindowAfter -ne [IntPtr]::Zero) {
+            try { $freshPrimaryOwnerPid = Get-WindowOwnerProcessId -Handle $primaryWindowAfter }
+            catch { $freshPrimaryOwnerReason = 'single.instance.fresh_primary_owner_unavailable' }
+        }
+        else {
+            $freshPrimaryOwnerReason = 'single.instance.fresh_primary_window_missing'
+        }
+        $currentIdentity = Get-SingleInstanceCurrentIdentityObservation -ProcessId $primaryPid `
+            -ExpectedStartUtcTicks ([long] $primary.StartUtcTicks) `
+            -ExpectedExecutablePath ([string] $primary.ExecutablePath) `
+            -ExpectedExecutableSha256 $executableSha256
+        $foregroundObservation = New-SingleInstanceForegroundObservation `
+            -ExpectedPrimaryPid $primaryPid -ExpectedPrimaryWindowHandle $primaryWindow.ToInt64() `
+            -ExpectedPrimaryStartUtcTicks ([long] $primary.StartUtcTicks) `
+            -ActualForegroundWindowHandle $foregroundHandle.ToInt64() `
+            -ActualForegroundOwnerPid $foregroundOwnerPid `
+            -FreshPrimaryWindowHandle $primaryWindowAfter.ToInt64() `
+            -FreshPrimaryOwnerPid $freshPrimaryOwnerPid `
+            -CurrentOwnedIdentity $currentIdentity `
+            -ExecutableImageSha256 $executableSha256 `
+            -FailureStage $foregroundFailureStage `
+            -FailureCode ([string] $activationFailure.Exception.Message) `
+            -FreshPrimaryOwnerReason $freshPrimaryOwnerReason
+        try {
+            $foregroundObservationArtifact = Write-SingleInstanceForegroundObservation `
+                -OutputDirectory $OutputDirectory -Observation $foregroundObservation `
+                -RunToken $RunToken -OwnedRoot $OwnedRoot -ExecutablePath $exe
+            [void] $artifacts.Add($foregroundObservationArtifact)
+        }
+        catch {
+            $exitFailures.Add((New-SingleInstanceErrorFactSafe -ErrorRecord $_ -Stage 'foreground-observation-write' -RunToken $RunToken -OwnedRoot $OwnedRoot))
+        }
+        throw $activationFailure
     }
     $foregroundMatches = ($foregroundOwnerPid -eq $primaryPid)
     $scenarioStage = 'activated'
@@ -1211,17 +1574,20 @@ try {
     # --- evidence --------------------------------------------------------------------------------
     $evidence = [ordered] @{
         scenarioId              = $ScenarioId
-        runToken                = $RunToken
-        ownedRoot               = $root
-        executablePath          = $exe
+        runTokenState           = '[redacted-token]'
+        ownedRootState          = '[redacted-path]'
+        executableName          = [IO.Path]::GetFileName($exe)
+        executableSha256        = $executableSha256
         primaryPid              = $primaryPid
         primaryWindowHandle     = $primaryWindow.ToInt64()
         primaryWindowAfter      = $primaryWindowAfter.ToInt64()
         primaryStartedUtc       = $preState.primaryStartedUtc
         preObservationStatus    = [string] $preObservation.Status
         postObservationStatus   = [string] $postObservation.Status
-        secondaryArgv            = $secondaryArgv
-        secondaryDataRootEnv    = $root
+        secondaryArgvCount      = @($secondaryArgv).Count
+        secondaryExecutableMatches = (@($secondaryArgv).Count -eq 1 -and [IO.Path]::GetFullPath([string] $secondaryArgv[0]) -ieq $exe)
+        secondaryDataRootState  = 'captured'
+        secondaryDataRootMatchesOwnedRoot = $true
         secondaryPid             = $secondaryPid
         secondaryStartUtc        = $secondaryStartUtc
         secondaryEndUtc          = $secondaryEndUtc
@@ -1240,16 +1606,16 @@ try {
         preForegroundHandle      = $preState.preForegroundHandle
         preForegroundOwnerPid    = $preState.preForegroundOwnerPid
         preStateNote             = 'a window this harness owns was brought forward first; the primary was required to be out of the foreground before the second start'
-        expectedDatabasePath     = $expectedDbPath
-        databasesBefore          = @($dbBefore)
-        databasesAfter           = @($dbAfter)
-        databasesCreated         = @($dbCreated)
-        dbSidecarsBefore         = @($dbSidecarBefore)
-        dbSidecarsAfter          = @($dbSidecarAfter)
+        expectedDatabaseName     = [IO.Path]::GetFileName($expectedDbPath)
+        databaseFileNamesBefore  = @($dbBefore | ForEach-Object { [IO.Path]::GetFileName([string] $_) })
+        databaseFileNamesAfter   = @($dbAfter | ForEach-Object { [IO.Path]::GetFileName([string] $_) })
+        databaseFileNamesCreated = @($dbCreated | ForEach-Object { [IO.Path]::GetFileName([string] $_) })
+        dbSidecarFileNamesBefore = @($dbSidecarBefore | ForEach-Object { [IO.Path]::GetFileName([string] $_) })
+        dbSidecarFileNamesAfter  = @($dbSidecarAfter | ForEach-Object { [IO.Path]::GetFileName([string] $_) })
         dbSidecarNote            = 'the wal and shm files are the main database sidecars; they are listed separately, are not counted as a second database, and are not frozen'
         libraryFilesBefore       = @($libraryBefore).Count
         libraryFilesAfter        = @($libraryAfter).Count
-        libraryFilesCreated      = @($libraryCreated)
+        libraryFileNamesCreated  = @($libraryCreated | ForEach-Object { [IO.Path]::GetFileName([string] $_) })
         closeAccepted            = $closeAccepted
         primaryClose             = $restartFacts.primaryClose
         residueAfterClose        = [int] $restartFacts.residueCount
@@ -1258,6 +1624,10 @@ try {
         restartObservationStatus = $restartObservationStatus
         restartClose             = $restartFacts.restartClose
         residueAfterRestartClose = [int] $restartFacts.restartResidueCount
+        restartExecutableName    = [IO.Path]::GetFileName([string] $restartFacts.restartExecutable)
+        restartExecutableMatches = ([IO.Path]::GetFullPath([string] $restartFacts.restartExecutable) -ieq $exe)
+        restartOwnedRootState    = 'captured'
+        restartOwnedRootMatches  = ([IO.Path]::GetFullPath([string] $restartFacts.restartOwnedRoot) -ieq $root)
         activationProof          = 'a controlled window owned by this harness took the foreground before the second start; afterwards the foreground handle was read once, that handle owner is the primary pid and the handle is the primary window'
         observabilityNote        = 'the inspect calls show the instance is observable and are not offered as the activation proof'
         databaseScopeNote        = 'only the one expected database and the absence of a second one are asserted; no byte-freeze of the main database, WAL or SHM'
@@ -1277,7 +1647,7 @@ catch {
     # is built here. The release and the exit evidence happen in the finally, each guarded on its
     # own, and the single final result is only built after they really completed.
     $businessErrorRecord = $_
-    $code = $_.Exception.Message
+    $code = $businessErrorRecord.Exception.Message
     if ([string]::IsNullOrWhiteSpace($code) -or $code -notlike 'single.instance.*') {
         $cause = ConvertTo-UiAcceptanceSlug -Value ([string] $code)
         if ($cause.Length -gt 120) { $cause = $cause.Substring(0, 120) }
@@ -1293,7 +1663,7 @@ catch {
     # evidence all agree about it - and a hand over that cannot be read is recorded rather than
     # swallowed. None of this can change the business error, and a confirmed release never turns a
     # business failure green.
-    $received = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $_ -ReleaseAttempts $releaseAttempts `
+    $received = Import-SingleInstanceFactoryReleaseReport -ErrorRecord $businessErrorRecord -ReleaseAttempts $releaseAttempts `
         -Failures $exitFailures -RunToken $RunToken -OwnedRoot $OwnedRoot
     $factoryReleaseReport = $received.report
     if ($null -ne $received.attempt) {
@@ -1321,6 +1691,7 @@ finally {
     try {
         $exitEvidence = Write-SingleInstanceExitEvidence -OutputDirectory $OutputDirectory -Artifacts $artifacts `
             -Failures $exitFailures -RunToken $RunToken -OwnedRoot $OwnedRoot `
+            -ExecutablePath $ExecutablePath -ExecutableSha256 $executableSha256 `
             -SuccessEvidence $successEvidence -BusinessErrorRecord $businessErrorRecord `
             -BusinessStage $scenarioStage -ReleaseAttempts $releaseAttempts -FactoryReleaseReport $factoryReleaseReport
     }
@@ -1350,6 +1721,7 @@ return [pscustomobject] @{
     ReleaseConfirmed  = [bool] $controlWindowClosed
     ReleaseFailure    = [string] $releaseFailure
     EvidenceComplete  = $requiredEvidenceComplete
+    ForegroundObservationArtifact = [string] $foregroundObservationArtifact
     # Cast, not wrapped: this is a generic object list and @() over one fails on both engines.
     ExitFailures      = [object[]] $exitFailures
 }
