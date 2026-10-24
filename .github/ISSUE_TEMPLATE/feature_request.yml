@@ -1,0 +1,21 @@
+name: 功能建议
+description: 描述你希望改善的日常使用体验
+title: "[建议] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        不需要技术方案。请说明你想完成的事情和目前不方便的地方。
+        Issue 和附件公开可见，请勿附上个人路径、私人媒体、数据库或凭据。
+  - type: textarea
+    id: need
+    attributes:
+      label: 你想解决什么问题？
+      description: 在什么情况下，哪一步不方便？
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 希望怎样改善？（可选）
+      description: 描述理想操作或举个例子；没有具体方案也没关系。

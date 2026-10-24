@@ -1,0 +1,42 @@
+name: 使用问题 / 故障
+description: 程序打不开、操作失败或结果与预期不同
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先看 [常见问题](https://github.com/NNBNBYLKW/TraceFold/blob/main/docs/troubleshooting.md)。无需跑验收工具或编译源码；不清楚的项写“不清楚”即可。
+        Issue 和附件公开可见。请遮去个人路径、用户名和私密文件名，不要上传数据库、私人媒体或凭据。
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本或下载附件名
+      description: 能启动时在“设置 → 系统诊断”的“日志与运行环境”查看；不能启动可填 Release 标签或 ZIP 文件名。
+      placeholder: 例如 v4.0.0-stage5cc，产品 ZIP
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本与系统类型
+      description: Win+R 输入 winver 查看版本/build；系统类型可在 Windows“设置 → 系统 → 系统信息”查看。
+      placeholder: 例如 Windows 11 24H2，build 26100，x64；不清楚也可以说明
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 操作步骤、预期和实际结果
+      description: 用自己的话说明在哪个页面做了什么，以及哪里不对。有错误文字或代码请附上。
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        希望看到：……
+        实际看到：……
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 补充信息（可选）
+      description: 发生时间、已尝试的方法、截图或少量日志片段均可。发送前检查公开内容，无日志也可提交。

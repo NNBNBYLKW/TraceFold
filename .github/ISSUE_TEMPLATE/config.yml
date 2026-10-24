@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 首次使用指南
+    url: https://github.com/NNBNBYLKW/TraceFold/blob/main/docs/getting-started.md
+    about: 下载产品包、解压启动、首次设置与入库步骤
+  - name: 常见问题与反馈说明
+    url: https://github.com/NNBNBYLKW/TraceFold/blob/main/SUPPORT.md
+    about: 查看排查入口与公开反馈需要的信息
