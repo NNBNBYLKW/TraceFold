@@ -37,8 +37,11 @@ TraceFold 是一个 Windows 桌面媒体整理工具：把待整理的照片和�
 - [使用指南](docs/getting-started.md)：目录设置、扫描、处理、入库和资料管理。
 - [常见问题与排障](docs/troubleshooting.md)。
 - [获取支持与报告问题](SUPPORT.md)。
-- [桌面端开发说明](apps/media-desktop/README.md)。
 - [文档导航](docs/README.md)。
+
+## 开发与维护
+
+开发者从 [开发文档](docs/development/README.md) 开始，按 [源码起步](docs/development/getting-started.md) 准备环境、构建和启动。
 
 ## 版本状态
 

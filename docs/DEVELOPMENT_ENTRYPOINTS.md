@@ -1,63 +1,30 @@
-# Development Entrypoints
+# 开发入口
 
-## Purpose
+本页按当前组件选择入口。普通媒体整理使用 [用户指南](getting-started.md)；源码开发从 [开发导航](development/README.md) 选择任务。
 
-This document is the default local development and fresh demo DB entrypoint for the current TraceFold baseline.
+## 原生媒体桌面
 
-Use this document when you need:
+- [开发起步](development/getting-started.md)：SDK、依赖恢复、Release 构建与 Debug 启动。
+- [测试与验证](development/testing.md)：.NET 与 PowerShell runner、受影响接缝及证据分层。
+- [本地发布](development/releasing.md)：Stage 5C-C 的输入、参数、P/K 交付物及独立 smoke。
+- [工作区布局](development/workspace-layout.md)：源码、持久证据、缓存和构建产物。
+- [环境与配置](ENV_CONVENTIONS.md)：真实环境变量、原生宿主与外层 TEMP/TMP 包装。
+- [桌面源码说明](../apps/media-desktop/README.md)。
 
-- a fresh SQLite database
-- schema at the current migration head
-- repeatable demo seed data
-- API and Web startup commands
-- a short path to seeded local smoke checks
+原生媒体桌面的日常启动不要求同时运行下方共享 API/Web。
 
-For deeper detail, follow the linked baseline docs after this file.
+## API / Web 独立开发上下文
 
-## Default Reading Order For Setup
+下列流程适用于 `apps/api` 与 `apps/web` 的共享 API 演示环境，使用独立 SQLite 演示库。组件契约与深入说明：
 
-1. `docs/DEVELOPMENT_ENTRYPOINTS.md`
-2. `docs/API_MIGRATION_BASELINE.md`
-3. `docs/API_DEMO_SEED_BASELINE.md`
-4. `docs/API_SEEDED_INTEGRATION_SMOKE.md`
-5. `docs/WEB_CONSUMPTION_BASELINE.md`
+1. [API 迁移](API_MIGRATION_BASELINE.md)
+2. [API 演示数据](API_DEMO_SEED_BASELINE.md)
+3. [API seeded smoke](API_SEEDED_INTEGRATION_SMOKE.md)
+4. [Web API 消费](WEB_CONSUMPTION_BASELINE.md)
+5. [Web 信息结构合同](WEB_INFORMATION_HIERARCHY_CONTRACT.md)
+6. [API 架构规则](ARCHITECTURE_RULES.md)
 
-## Current Web Entry (Post-Phase-1 / Phase 2 V1 / Phase 3 Input Pack Closure-Ready State)
-
-For the current closed Web state, use this reading order:
-
-1. `docs/WEB_CONSUMPTION_BASELINE.md`
-2. `docs/WEB_SHARED_STATE_POLISH_BASELINE.md`
-3. `docs/WEB_KNOWLEDGE_AI_PRESENTATION_BASELINE.md`
-4. `docs/WEB_HEALTH_ALERTS_PRESENTATION_BASELINE.md`
-5. `docs/WEB_POST_PHASE1_OPTIMIZATION_PLAN.md`
-6. `docs/WEB_INFORMATION_HIERARCHY_CONTRACT.md`
-7. `docs/WEB_PP1_CROSS_PAGE_CONSISTENCY_AND_SMOKE_BASELINE.md`
-8. `docs/PHASE2_V1_CLOSURE_BASELINE.md`
-9. `docs/PHASE2_TECHNICAL_SUMMARY_V1.md`
-10. `docs/POST_PHASE2_BILINGUAL_UI_CLOSURE_BASELINE.md` when the task touches current bounded Web bilingual UI support
-11. `docs/PHASE3_V1_INPUT_PACK_CLOSURE_BASELINE.md` when the task touches current Phase 3 input-side Web scope
-12. `docs/PHASE3_READBACK_DETAIL_DENSITY_CLOSURE_BASELINE.md` when the task touches the current bounded detail/readback Web polish pack
-13. `docs/PHASE3_WAVE1_SUMMARY_V1.md` when you need the higher-level implementation-grounded summary spanning both closed Phase 3 Wave 1 packs
-14. `docs/PHASE3_WAVE2_ADAPTER_CONTRACT_BASELINE.md` when the task touches future lightweight capture adapters or adapter-side capture boundaries
-15. `docs/PHASE3_WAVE2_ADAPTERS_CROSS_PLATFORM_CLOSURE_BASELINE.md` when the task touches the current bounded Telegram + Feishu adapter pack
-16. `docs/PHASE3_SUMMARY_AFTER_WAVE2_V1.md` when you need the higher-level technical summary spanning the currently closed Phase 3 Wave 1 and Wave 2 packs
-
-The first four define the current formal Web baseline.
-The optimization and hierarchy docs define the restrained Post-Phase-1 polish direction.
-The closure baseline records the currently closed state for the first Web optimization round.
-The Phase 2 V1 closure baseline records the currently implemented closure-ready expansion across Pending, Capture, Expense, Workbench Round 2, Templates restraint, and local operability.
-The Phase 2 technical summary records the same bounded pack in implementation-facing terms.
-The bilingual UI closure baseline records the currently implemented zh/en Web UI layer without implying backend i18n or broader multilingual platform support.
-The Phase 3 V1 input-pack closure baseline records the currently implemented Quick Capture, Bulk Intake with Preview, and Capture Inbox / Intake Triage surfaces without implying broader Phase 3 completion.
-The Phase 3 readback/detail-density closure baseline records the currently implemented detail-page hierarchy/readback polish without implying broader Phase 3 completion or a broader redesign wave.
-The Phase 3 Wave 1 summary records the same two closed packs at a more concrete summary level without turning them into a new roadmap or a broader completion claim.
-The Phase 3 Wave 2 adapter contract baseline records the bounded capture-first contract future lightweight adapters must inherit before any Telegram or Feishu implementation wave is opened.
-The Phase 3 Wave 2 adapters cross-platform closure baseline records the currently closed bounded Telegram + Feishu lightweight adapter pack without implying broader Wave 2 completion or an adapter platform.
-The Phase 3 summary after Wave 2 records the current Phase 3 state in a more implementation-grounded stage summary without collapsing the bounded-pack structure.
-
-This closed round should not be implicitly reopened.
-Any further Web work should be opened as a new scoped task.
+以下命令是该独立上下文的当前入口；不得把演示库当作个人正式数据库。配置 owner、唯一读取入口和敏感性遵守 [ENV_CONVENTIONS](ENV_CONVENTIONS.md)。
 
 ## Standard Fresh Demo DB Flow
 

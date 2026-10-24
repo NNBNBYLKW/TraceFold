@@ -78,7 +78,13 @@ desktop.ini
 # =========================
 # Local agent / E2E artifacts
 # =========================
+/AGENTS.md
+/docs/codex/
+/docs/development/documentation-rules.md
+/docs/development/history/
 .superpowers/
+artifacts/
+.cache/
 .source-test/
 apps/media-web/.e2e-data/
 apps/media-web/playwright-report/

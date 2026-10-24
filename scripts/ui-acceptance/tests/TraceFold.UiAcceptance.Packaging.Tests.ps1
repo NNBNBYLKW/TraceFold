@@ -181,6 +181,15 @@ elseif ($env:TRACEFOLD_FIXTURE_CONTAMINATE -eq '1') {
     [void][IO.Directory]::CreateDirectory($leak)
     [IO.File]::WriteAllText((Join-Path $leak 'leaked.ps1'), '# acceptance payload that must never ride along')
 }
+elseif ($env:TRACEFOLD_FIXTURE_CONTAMINATE -in @('artifacts', '.cache', '.worktrees')) {
+    $leak = Join-Path $out $env:TRACEFOLD_FIXTURE_CONTAMINATE
+    [void][IO.Directory]::CreateDirectory($leak)
+    [IO.File]::WriteAllText((Join-Path $leak 'private.txt'), 'CONTROLLED private workspace payload')
+    if ($env:TRACEFOLD_FIXTURE_HIDE_PRIVATE -eq '1') {
+        [IO.File]::SetAttributes($leak, ([IO.File]::GetAttributes($leak) -bor [IO.FileAttributes]::Hidden))
+        if (-not ([IO.File]::GetAttributes($leak) -band [IO.FileAttributes]::Hidden)) { throw 'shim: Hidden attribute was not set' }
+    }
+}
 exit 0
 '@
     Write-PackagingText -Path (Join-Path $BinDirectory 'dotnet-shim.ps1') -Text $shim
@@ -485,12 +494,8 @@ function Assert-PackagingRefused {
 }
 
 # The pinned archive is the local v0.5.0 file; the suite refuses to run without it rather than
-# substituting a look-alike. It lives in the package root, never inside the worktree.
-$script:packagingWinAppArchive = Join-Path (Split-Path -Parent $script:root) 'inputs\winappcli-x64.zip'
-if (-not [IO.File]::Exists($script:packagingWinAppArchive)) {
-    $candidate = 'T:\Windows\Downloads\winappcli-x64.zip'
-    if ([IO.File]::Exists($candidate)) { $script:packagingWinAppArchive = $candidate }
-}
+# substituting a look-alike. Keep downloads inside this workspace; the producer verifies the pin.
+$script:packagingWinAppArchive = Join-Path $script:root '.cache/downloads/winappcli-x64.zip'
 
 function Get-TestCases {
     return @(
@@ -523,7 +528,7 @@ function Get-TestCases {
                     Assert-True ($calls[3].arguments -contains '-p:SelfContained=true') 'RID restore must acquire self-contained runtime packs'
                     Assert-Equal $fixture.NugetRoot (Get-PackagingArgument -Call $calls[3] -Name '--source') 'RID restore must stay offline'
                     $testResults = Get-PackagingArgument -Call $calls[1] -Name '--results-directory'
-                    $evidenceParent = Join-Path $fixture.Repo '.superpowers\publish-media-desktop'
+                    $evidenceParent = Join-Path $fixture.Repo 'artifacts/reports/publish-media-desktop'
                     Assert-Equal $evidenceParent ([IO.Path]::GetDirectoryName($testResults)) 'test evidence must stay in the fixture workspace'
                     Assert-True ([IO.Path]::GetFileName($testResults) -match '^[0-9a-f]{32}$') 'each invocation must own a fresh evidence leaf'
                     Assert-Equal 'trx' (Get-PackagingArgument -Call $calls[1] -Name '--logger')
@@ -690,7 +695,7 @@ function Get-TestCases {
                         $results = Get-PackagingArgument -Call $calls[1] -Name '--results-directory'
                         Assert-True ($seenResults -notcontains $results) 'a retry must never reuse an earlier evidence leaf'
                         $seenResults += $results
-                        Assert-Equal (Join-Path $fixture.Repo '.superpowers\publish-media-desktop') ([IO.Path]::GetDirectoryName($results))
+                        Assert-Equal (Join-Path $fixture.Repo 'artifacts/reports/publish-media-desktop') ([IO.Path]::GetDirectoryName($results))
                         $trx = Join-Path $results 'fixture.trx'
                         if ($failure.Outcome -eq '') {
                             Assert-True (-not [IO.File]::Exists($trx)) 'a missing report must not be fabricated'
@@ -934,6 +939,61 @@ function Get-TestCases {
                     Assert-True ($result.ExitCode -ne 0) ('a flat contaminated product must be refused: ' + $result.Output)
                     Assert-Contains $result.Output 'TraceFold.Media.UiAcceptance.Support.dll' ('the flat file must be named: ' + $result.Output)
                     Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Dist 'TraceFold-MediaDesktop-Stage5C-C-win-x64'))) 'nothing may be promoted'
+                }
+                finally { Remove-UiTestTree -Path $base }
+            }
+        },
+        @{
+            Name = 'workspace private directories are refused before promotion and by the independent smoke'
+            Body = {
+                $base = New-PackagingAttempt
+                try {
+                    $fixture = New-PackagingFixture -Attempt $base
+                    foreach ($variant in @(
+                            @{ Directory = 'artifacts'; Hidden = '0' }, @{ Directory = 'artifacts'; Hidden = '1' },
+                            @{ Directory = '.cache'; Hidden = '0' }, @{ Directory = '.cache'; Hidden = '1' },
+                            @{ Directory = '.worktrees'; Hidden = '0' }, @{ Directory = '.worktrees'; Hidden = '1' })) {
+                        $directory = [string] $variant.Directory
+                        $refused = Invoke-PackagingPublisher -Fixture $fixture -Environment @{
+                            TRACEFOLD_FIXTURE_CONTAMINATE = $directory
+                            TRACEFOLD_FIXTURE_HIDE_PRIVATE = [string] $variant.Hidden
+                        }
+                        Assert-True ($refused.ExitCode -ne 0) ('private directory must fail publication: ' + $refused.Output)
+                        Assert-Contains $refused.Output 'runtime/source directories'
+                        Assert-Contains $refused.Output $directory
+                        Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Dist 'TraceFold-MediaDesktop-Stage5C-C-win-x64'))) 'nothing may be promoted'
+                        Write-Host ('CONTROLLED producer privacy refused: directory=' + $directory + ' hidden=' + $variant.Hidden)
+                    }
+                    $published = Invoke-PackagingPublisher -Fixture $fixture
+                    Assert-Equal 0 $published.ExitCode ('clean controlled publication failed: ' + $published.Output)
+                    $productDir = Join-Path $fixture.Dist 'TraceFold-MediaDesktop-Stage5C-C-win-x64'
+                    $toolkitDir = Join-Path $fixture.Dist 'TraceFold-MediaDesktop-Stage5C-C-UiAcceptance-win-x64'
+                    $smokeScript = Join-Path $fixture.Repo 'scripts/smoke-stage5cc-ui-acceptance-toolkit.ps1'
+                    $hostExe = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+                    foreach ($variant in @(
+                            @{ Directory = 'artifacts'; Hidden = '0' }, @{ Directory = 'artifacts'; Hidden = '1' },
+                            @{ Directory = '.cache'; Hidden = '0' }, @{ Directory = '.cache'; Hidden = '1' },
+                            @{ Directory = '.worktrees'; Hidden = '0' }, @{ Directory = '.worktrees'; Hidden = '1' })) {
+                        $directory = [string] $variant.Directory
+                        $privateRoot = Join-Path $productDir $directory
+                        Write-PackagingText -Path (Join-Path $privateRoot 'private.txt') -Text 'CONTROLLED private workspace payload'
+                        if ($variant.Hidden -eq '1') {
+                            [IO.File]::SetAttributes($privateRoot, ([IO.File]::GetAttributes($privateRoot) -bor [IO.FileAttributes]::Hidden))
+                            Assert-True ([bool] ([IO.File]::GetAttributes($privateRoot) -band [IO.FileAttributes]::Hidden)) 'Hidden fixture directory was actually created'
+                        }
+                        $previousErrorAction = $ErrorActionPreference
+                        try {
+                            $ErrorActionPreference = 'Continue'
+                            $smokeOutput = (& $hostExe -NoProfile -File $smokeScript -ToolkitDirectory $toolkitDir -ProductDirectory $productDir 2>&1 | Out-String)
+                            $smokeCode = $LASTEXITCODE
+                        }
+                        finally { $ErrorActionPreference = $previousErrorAction }
+                        Assert-True ($smokeCode -ne 0) ('independent smoke must refuse ' + $directory)
+                        Assert-Contains $smokeOutput 'the product carries an acceptance directory'
+                        Write-Host ('CONTROLLED independent smoke privacy refused: directory=' + $directory + ' hidden=' + $variant.Hidden)
+                        # Only this case's exact, newly created contamination is removed.
+                        Remove-Item -LiteralPath $privateRoot -Recurse -Force
+                    }
                 }
                 finally { Remove-UiTestTree -Path $base }
             }

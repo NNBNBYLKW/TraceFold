@@ -318,15 +318,15 @@ try {
         'media-desktop-stage5cc-visual-uia-test-guide.md',
         'media-desktop-stage5cc-visual-uia-acceptance.md',
         '70-visual-keyboard-matrix.ps1')
-    $forbiddenDirectories = @('ui-acceptance', 'report-template', 'fixtures', '.superpowers', 'node_modules', '.git')
-    foreach ($file in @(Get-ChildItem -LiteralPath $productRoot -Recurse -File -ErrorAction Stop)) {
+    $forbiddenDirectories = @('ui-acceptance', 'report-template', 'fixtures', '.superpowers', 'node_modules', '.git', 'artifacts', '.cache', '.worktrees')
+    foreach ($file in @(Get-ChildItem -LiteralPath $productRoot -Recurse -File -Force -ErrorAction Stop)) {
         Assert-Smoke -Condition ($forbiddenNames -notcontains $file.Name) -Message ('the product carries acceptance payload: ' + $file.FullName)
         Assert-Smoke -Condition ($file.Name -notlike 'TraceFold.Media.UiAcceptance.Support.*') -Message ('the product carries a support dependency: ' + $file.FullName)
         Assert-Smoke -Condition ($file.Name -notlike 'TraceFold.UiAcceptance.*.psm1') -Message ('the product carries an acceptance module: ' + $file.FullName)
         Assert-Smoke -Condition ($file.Extension -ne '.ps1') -Message ('the product carries an acceptance script: ' + $file.FullName)
         Assert-Smoke -Condition ($file.Extension -notin @('.pdb')) -Message ('the product carries debug symbols: ' + $file.Name)
     }
-    foreach ($directory in @(Get-ChildItem -LiteralPath $productRoot -Recurse -Directory -ErrorAction Stop)) {
+    foreach ($directory in @(Get-ChildItem -LiteralPath $productRoot -Recurse -Directory -Force -ErrorAction Stop)) {
         Assert-Smoke -Condition ($forbiddenDirectories -notcontains $directory.Name.ToLowerInvariant()) -Message ('the product carries an acceptance directory: ' + $directory.Name)
     }
     foreach ($file in @(Get-ChildItem -LiteralPath $toolkitRoot -Recurse -File -ErrorAction Stop)) {

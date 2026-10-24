@@ -1121,6 +1121,30 @@ function Get-TestCases {
                     Assert-Equal 0 $positional.ExitCode ('the positional call still binds the old parameters; output: ' + $positional.Output)
                     $positionalSummary = Read-OfflineJson -Path (Join-Path $positionalOut 'summary.json')
                     Assert-Equal 'Passed' ([string] $positionalSummary.status) 'the positional call really ran'
+
+                    # With no output argument the same external-cwd CLI must use the source
+                    # workspace evidence directory, not the caller's cwd or the retired tree.
+                    $defaultResult = Invoke-OfflineEntry -EntryPath (Join-Path $scripts 'run-stage5cc-ui-acceptance.ps1') -WorkingDirectory (Join-Path $base 'cwd') -Parameters ([ordered] @{
+                        WinAppCliArchivePath = $archive
+                        ProductDirectory     = $product
+                        Scenario             = 'StartupLayout'
+                    })
+                    Assert-Equal 0 $defaultResult.ExitCode ('the default source output still reaches the scenario: ' + $defaultResult.Output)
+                    $defaultParent = Join-Path $repository 'artifacts/evidence/stage5cc-uia-gate'
+                    $defaultLeaf = Find-OfflineResultLeaf -ResultsRoot $defaultParent
+                    Assert-True (-not [string]::IsNullOrWhiteSpace($defaultLeaf)) 'source default evidence exists'
+                    $defaultSummary = Read-OfflineJson -Path (Join-Path $defaultLeaf 'summary.json')
+                    Assert-Equal 'Passed' ([string] $defaultSummary.status) 'the default output contains a real entry summary from the controlled scenario'
+                    Write-Host ('CONTROLLED source-default seam: ' + ([ordered] @{
+                        workingDirectory = (Join-Path $base 'cwd')
+                        entryPath = (Join-Path $scripts 'run-stage5cc-ui-acceptance.ps1')
+                        outputArgumentOmitted = $true
+                        outputLeaf = $defaultLeaf
+                        summary = $defaultSummary
+                        observation = 'Synthetic support/driver/scenario; real public entry and report consumer'
+                    } | ConvertTo-Json -Depth 20 -Compress))
+                    Assert-True (-not (Test-Path -LiteralPath (Join-Path $repository '.superpowers'))) 'the source entry must not create the retired output root'
+                    Assert-True (-not (Test-Path -LiteralPath (Join-Path $base 'cwd/artifacts'))) 'the caller cwd must not own source evidence'
                 }
                 finally { Remove-UiTestTree -Path $base }
             }

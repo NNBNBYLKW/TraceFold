@@ -645,7 +645,7 @@ try {
         '--ignore-failed-sources')
     # Reports belong to this invocation, outside staging/rollback cleanup. Keep them on failure
     # as well as success; a later publish always gets a new leaf and cannot replace the first run.
-    $testResultsRoot = Join-Path (Join-Path $repoRoot '.superpowers\publish-media-desktop') ([Guid]::NewGuid().ToString('N'))
+    $testResultsRoot = Join-Path (Join-Path $repoRoot 'artifacts/reports/publish-media-desktop') ([Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $testResultsRoot | Out-Null
     Assert-NoReparseTree -Path $testResultsRoot
     Write-Output "Publish test evidence: $testResultsRoot"
@@ -754,13 +754,13 @@ try {
             throw "Media tool executable is outside tools\ffmpeg: $($mediaExecutable.FullName)"
         }
     }
-    $forbiddenDirectories = @('data', 'logs', 'work', 'node_modules', '.git')
-    $unexpectedDirectories = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -Directory |
+    $forbiddenDirectories = @('data', 'logs', 'work', 'node_modules', '.git', 'artifacts', '.cache', '.worktrees')
+    $unexpectedDirectories = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -Directory -Force |
         Where-Object { $forbiddenDirectories -contains $_.Name.ToLowerInvariant() })
     if ($unexpectedDirectories.Count -ne 0) {
         throw "Published package contains runtime/source directories: $($unexpectedDirectories.FullName -join ', ')"
     }
-    $databaseFiles = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -File |
+    $databaseFiles = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -File -Force |
         Where-Object { $_.Extension -in @('.db', '.sqlite', '.sqlite3') })
     if ($databaseFiles.Count -ne 0) {
         throw "Published package contains database files: $($databaseFiles.Name -join ', ')"
@@ -784,7 +784,7 @@ try {
             'media-desktop-stage5cc-visual-uia-test-guide.md',
             'media-desktop-stage5cc-visual-uia-acceptance.md',
             '70-visual-keyboard-matrix.ps1')
-        $acceptancePayload = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -File |
+        $acceptancePayload = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -File -Force |
             Where-Object {
                 $acceptanceFileNames -contains $_.Name -or
                 $_.Name -like 'TraceFold.Media.UiAcceptance.Support.*' -or
@@ -794,7 +794,7 @@ try {
         if ($acceptancePayload.Count -ne 0) {
             throw "Published product contains acceptance payload: $($acceptancePayload.Name -join ', ')"
         }
-        $acceptancePayloadDirectories = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -Directory |
+        $acceptancePayloadDirectories = @(Get-ChildItem -LiteralPath $stagingPackage -Recurse -Directory -Force |
             Where-Object { $_.Name.ToLowerInvariant() -in @('ui-acceptance', 'report-template', 'fixtures', '.superpowers') })
         if ($acceptancePayloadDirectories.Count -ne 0) {
             throw "Published product contains acceptance directories: $($acceptancePayloadDirectories.FullName -join ', ')"

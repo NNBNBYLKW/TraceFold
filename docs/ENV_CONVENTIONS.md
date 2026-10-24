@@ -1,619 +1,97 @@
-# ENV CONVENTIONS
+# 环境与配置约定
 
-## 1. 目标
+本页是当前生效的配置入口和维护规则。配置名、默认值及读取行为以对应源码为准；环境变量、脚本参数与持久化设置分别管理。
 
-本文档定义 TraceFold 项目的环境变量（env）命名、归属、读取与变更规则。
+## 组件与读取入口
 
-Phase 1 的重点是先把 `apps/api` 的配置规范立住，避免后续由 Codex 实现代码时出现：
+| 组件 | 当前变量 | 读取入口与示例 |
+|---|---|---|
+| 原生媒体桌面 `apps/media-desktop` | `TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT` | [LocalAppDataPathProvider](../apps/media-desktop/src/TraceFold.Media.Infrastructure/Paths/LocalAppDataPathProvider.cs) |
+| 共享 API `apps/api` | `TRACEFOLD_API_*`、`TRACEFOLD_AI_*` | [config.py](../apps/api/app/core/config.py)、[.env.example](../apps/api/.env.example) |
+| Web `apps/web` | `VITE_API_BASE_URL` | [api.ts](../apps/web/src/api.ts)、[.env.example](../apps/web/.env.example) |
+| Python 桌面壳 `apps/desktop` | `TRACEFOLD_DESKTOP_*` | [config.py](../apps/desktop/app/core/config.py)、[.env.example](../apps/desktop/.env.example) |
+| Telegram adapter | `TRACEFOLD_TELEGRAM_*` | [config.py](../apps/telegram/app/core/config.py)、[.env.example](../apps/telegram/.env.example) |
+| Feishu adapter | `TRACEFOLD_FEISHU_*` | [config.py](../apps/feishu/app/core/config.py)、[.env.example](../apps/feishu/.env.example) |
+| 媒体 API `apps/media-api` | `TRACEFOLD_MEDIA_*` | [config.py](../apps/media-api/src/media_api/infrastructure/config.py)、[.env.example](../apps/media-api/.env.example) |
+| 媒体 Web `apps/media-web` | `VITE_API_BASE_URL` | [.env.example](../apps/media-web/.env.example) |
 
-- 变量命名混乱
-- 业务代码到处直接读取环境变量
-- `.env.example`、文档、代码三者不一致
-- 不同 app 后续接入时命名空间冲突
+各组件是独立配置上下文，不把共享 API/Web、Python 桌面壳或媒体 API 的变量当作原生媒体桌面的启动前置。
 
----
+## 原生媒体桌面
 
-## 2. 当前适用范围
+`TRACEFOLD_MEDIA_DESKTOP_DATA_ROOT` 可选，指定应用数据根的绝对路径。路径选择优先级为注入的 root override、进程环境变量、默认位置 `%LOCALAPPDATA%\TraceFold\MediaDesktop`；相对路径会被拒绝。
 
-### 2.1 Phase 1 实际重点
+| 数据 | 默认根下的文件/目录 |
+|---|---|
+| SQLite 数据库 | `media-desktop.db` |
+| 日志 | `logs`，文件 `tracefold-*.log` |
+| 默认工作目录 | `work` |
 
-Phase 1 只把以下范围作为强执行主线：
+原生应用直接读取进程环境，不使用 API 的 `.env` 加载器。待入库、正式库、工作目录由“设置 → 文件夹与扫描”保存；它们不是待新增的一组环境变量。`TRACEFOLD_DESKTOP_*` 属于 Python 桌面壳，不配置原生媒体桌面。
 
-- `apps/api`
+自动化若需要自定义应用数据根，必须使用专用隔离目录。用户数据库、profile 和媒体资料不作为临时缓存；不以换数据根或删除资料代替故障定位。
 
-也就是说：
+## API 配置合同
 
-- 当前必须真正落地并严格执行的是 **API 的 env 规范**
-- Web / Desktop / Bot 的命名空间可以预留，但不作为当前阶段的主要实现对象
+API 唯一读取入口是 `apps/api/app/core/config.py`。其他模块导入 `settings` 或调用 `get_settings()`，业务层不得直接调用 `os.getenv()`、`os.environ[...]` 或 `os.environ.get(...)` 重新解释配置。
 
-### 2.2 后续预留范围
+API 使用该 app 的 `.env`、UTF-8 编码与大小写敏感的变量名。配置字段都有默认值；是否设置环境变量取决于运行环境，不能把文档中的示例值当成强制必填。
 
-为后续扩展，本文档保留以下 app 的命名空间约定：
+| 变量 | 源码默认值 | 用途 |
+|---|---|---|
+| `TRACEFOLD_API_APP_NAME` | `TraceFold API` | 应用名称 |
+| `TRACEFOLD_API_ENV` | `development` | `development` / `test` / `production` |
+| `TRACEFOLD_API_DEBUG` | `false` | 调试模式 |
+| `TRACEFOLD_API_HOST` | `127.0.0.1` | 本地监听配置 |
+| `TRACEFOLD_API_PORT` | `8000` | 端口 |
+| `TRACEFOLD_API_DB_URL` | `sqlite:///../../data/tracefold.db` | 数据库连接，按敏感配置处理 |
+| `TRACEFOLD_API_LOG_LEVEL` | `INFO` | 日志级别 |
+| `TRACEFOLD_API_ENABLE_DOCS` | `true` | OpenAPI 文档开关 |
+| `TRACEFOLD_AI_PROVIDER` | `openai_compatible` | API 服务端 provider |
+| `TRACEFOLD_AI_BASE_URL` | `http://127.0.0.1:11434/v1` | provider 地址 |
+| `TRACEFOLD_AI_API_KEY` | 空字符串 | 凭据；服务端专用 |
+| `TRACEFOLD_AI_MODEL` | `qwen3.5:9b` | provider 模型 |
+| `TRACEFOLD_AI_TIMEOUT_SECONDS` | `60` | 超时秒数 |
 
-- `apps/web`
-- `apps/desktop`
-- `apps/bot`
+`production` 配合 `TRACEFOLD_API_DEBUG=true` 会被配置校验拒绝。示例文件可显式开启开发调试，这不改变源码默认关闭的事实。数据库路径及 API/Web 启动命令见 [开发入口](DEVELOPMENT_ENTRYPOINTS.md)。
 
-但这些 app 在 Phase 1 中：
+## 其他应用
 
-- 不要求完整实现
-- 不要求配置项完全展开
-- 不允许反向影响当前 API 规范设计
+- 共享 Web 的实际公开入口是 `VITE_API_BASE_URL`，示例指向 `http://127.0.0.1:8000`；媒体 Web 的示例指向 `http://127.0.0.1:8100/api`。前端只能读取公开配置。
+- Python 桌面壳读取 `TRACEFOLD_DESKTOP_WEB_WORKBENCH_URL`、`TRACEFOLD_DESKTOP_API_BASE_URL`、`TRACEFOLD_DESKTOP_STARTUP_MODE`、`TRACEFOLD_DESKTOP_DEBUG` 和 `TRACEFOLD_DESKTOP_LOG_ENABLED`。前两个 URL 必填；启动模式为 `window` 或 `tray`。
+- Telegram 读取 `TRACEFOLD_TELEGRAM_BOT_TOKEN`、`TRACEFOLD_TELEGRAM_API_BASE_URL`、`TRACEFOLD_TELEGRAM_TIMEOUT_SECONDS`、`TRACEFOLD_TELEGRAM_DEBUG` 和 `TRACEFOLD_TELEGRAM_LOG_ENABLED`；token 与 API URL 必填。
+- Feishu 的 `TRACEFOLD_FEISHU_APP_ID`、`TRACEFOLD_FEISHU_APP_SECRET`、`TRACEFOLD_FEISHU_VERIFICATION_TOKEN` 和 `TRACEFOLD_FEISHU_API_BASE_URL` 必填；其余实际字段见对应配置入口与示例。
+- 媒体 API 的 inbox/library/work/database、扫描间隔、Web origin/dist 配置以其 `BootstrapSettings` 为准；不套用原生桌面的数据目录规则。
 
----
+## 原生 PowerShell 与临时目录
 
-## 3. 核心原则
+使用已验证的原生 PowerShell 7；受影响脚本同时覆盖系统 Windows PowerShell 5.1。不要修改全局 shell、用户环境或永久网络/TLS 设置。
 
-### 原则 1：环境变量是接口契约，不是随手新增的字符串
+从仓库根选择本轮 owned 临时叶，在真正调用目标命令的最外层设置 `TEMP/TMP` 并恢复。下面是外层包装示例；把所需的测试或发布命令放到 `try` 中：
 
-每个环境变量都必须有明确的：
+~~~powershell
+$repoRoot = (Resolve-Path -LiteralPath '.').Path
+$nativePs7 = (Get-Command pwsh.exe -ErrorAction Stop).Source
+$ownedTmp = Join-Path $repoRoot ('.cache/tmp/' + [guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($ownedTmp)
+$priorTemp = $env:TEMP
+$priorTmp = $env:TMP
+try {
+    $env:TEMP = $ownedTmp
+    $env:TMP = $ownedTmp
+    # 在这里执行所需命令；检查并记录实际退出码。
+} finally {
+    $env:TEMP = $priorTemp
+    $env:TMP = $priorTmp
+}
+~~~
 
-- 名称
-- owner app（归属应用）
-- 是否必填
-- 是否敏感
-- 示例值
-- 用途说明
+持久证据放 `artifacts/evidence`，报告和 TRX 放 `artifacts/reports`；下载与可再生临时输入放 `.cache`。项目 `apps/media-desktop/.packages`、常规 `bin/obj` 与便携工具包自己的 `resultsRoot` 保持各自契约，不统改到临时目录。
 
-不允许“先写进代码，之后再补文档”。
+## 配置维护规则
 
----
+每个 app 自有变量有明确命名空间、owner、是否必填、敏感性和实际读取入口。不得用无归属的 `PORT`、`HOST`、`TOKEN` 等字符串新增 app 配置；Vite 公开变量使用其真实 `VITE_*` 机制。
 
-### 原则 2：变量必须带命名空间前缀
+每个 app 只维护自己的 `.env.example`。新增、删除、重命名或改变语义时，同步修改对应配置入口、示例、本文和实际引用。`.env.example` 是示例，不替代源码与规范；不把预留设计写成已生效变量，也不把凭据、数据库连接或服务端专用配置暴露到前端。
 
-所有 app 自有变量都必须带 app 前缀，禁止使用模糊公共名。
-
-当前已确定的命名空间规则：
-
-- API 使用 `TRACEFOLD_API_`
-- AI provider integration 使用 `TRACEFOLD_AI_`
-- Web 预留使用 `TRACEFOLD_WEB_`
-- Desktop 预留使用 `TRACEFOLD_DESKTOP_`
-- Bot 预留使用 `TRACEFOLD_BOT_`
-
----
-
-### 原则 3：配置统一入口读取
-
-所有环境变量必须通过统一配置入口解析。
-
-对于 API：
-
-- 只允许 `apps/api/app/core/config.py` 读取环境变量
-- 业务代码不得直接调用 `os.getenv()` / `os.environ`
-
----
-
-### 原则 4：`.env.example` 不是规范真相源
-
-每个 app 可以有自己的 `.env.example`，但规范真相源是：
-
-1. 本文档 `docs/ENV_CONVENTIONS.md`
-2. 对应 app 的统一配置入口（例如 API 的 `app/core/config.py`）
-
-`.env.example` 只是示例文件，不是架构规则本身。
-
----
-
-### 原则 5：敏感变量不得暴露到前端可见环境
-
-任何密钥、数据库地址、私有 token、服务端专用配置，都不得进入前端可见环境。
-
-即使未来实现 Web，也必须遵守：
-
-- 前端只能读取明确允许公开的配置
-- 服务端敏感配置只能由服务端读取
-
----
-
-## 4. 命名规则
-
-## 4.1 命名空间规则
-
-### API
-
-API 环境变量统一使用前缀：
-
-- `TRACEFOLD_API_`
-
-示例：
-
-- `TRACEFOLD_API_APP_NAME`
-- `TRACEFOLD_API_ENV`
-- `TRACEFOLD_API_DEBUG`
-- `TRACEFOLD_API_HOST`
-- `TRACEFOLD_API_PORT`
-- `TRACEFOLD_API_DB_URL`
-- `TRACEFOLD_API_LOG_LEVEL`
-
-### AI provider integration
-
-Post-Phase-1 的最小真实 AI provider 集成使用前缀：
-
-- `TRACEFOLD_AI_`
-
-这些变量仍然只允许由 API 服务端读取，不允许暴露到前端。当前正式接入对象只有 `knowledge_summary`，默认 provider 口径是 OpenAI-compatible + 本地 Ollama。
-
-示例：
-
-- `TRACEFOLD_AI_PROVIDER`
-- `TRACEFOLD_AI_BASE_URL`
-- `TRACEFOLD_AI_API_KEY`
-- `TRACEFOLD_AI_MODEL`
-- `TRACEFOLD_AI_TIMEOUT_SECONDS`
-
-### Web（预留）
-
-Web 环境变量预留使用前缀：
-
-- `TRACEFOLD_WEB_`
-
-示例：
-
-- `TRACEFOLD_WEB_ENV`
-- `TRACEFOLD_WEB_PORT`
-- `TRACEFOLD_WEB_API_BASE_URL`
-
-### Desktop（预留）
-
-Desktop 环境变量预留使用前缀：
-
-- `TRACEFOLD_DESKTOP_`
-
-示例：
-
-- `TRACEFOLD_DESKTOP_ENV`
-- `TRACEFOLD_DESKTOP_WEB_URL`
-- `TRACEFOLD_DESKTOP_SINGLE_INSTANCE`
-
-### Bot（预留）
-
-Bot 环境变量预留使用前缀：
-
-- `TRACEFOLD_BOT_`
-
-示例：
-
-- `TRACEFOLD_BOT_ENV`
-- `TRACEFOLD_BOT_API_BASE_URL`
-- `TRACEFOLD_BOT_TELEGRAM_TOKEN`
-
----
-
-## 4.2 禁止使用的模糊变量名
-
-以下变量名原则上禁止直接使用：
-
-- `PORT`
-- `HOST`
-- `ENV`
-- `DEBUG`
-- `URL`
-- `BASE_URL`
-- `TOKEN`
-- `KEY`
-- `DATABASE_URL`
-
-原因：
-
-- 看不出属于哪个 app
-- 看不出谁应该读取
-- 多 app 共存时极易冲突
-- Codex 很容易误判归属
-
-必须改写成带命名空间和语义的名称，例如：
-
-- `TRACEFOLD_API_PORT`
-- `TRACEFOLD_API_DB_URL`
-- `TRACEFOLD_WEB_API_BASE_URL`
-- `TRACEFOLD_BOT_TELEGRAM_TOKEN`
-
----
-
-## 4.3 命名风格
-
-统一使用：
-
-- 全大写
-- 单词以下划线连接
-- 名称尽量体现归属和用途
-
-推荐：
-
-- `TRACEFOLD_API_DB_URL`
-- `TRACEFOLD_API_LOG_LEVEL`
-- `TRACEFOLD_WEB_API_BASE_URL`
-
-不推荐：
-
-- `TRACEFOLD_API_DB`
-- `TRACEFOLD_WEB_URL`
-- `TRACEFOLD_BOT_TOKEN`
-
----
-
-## 5. Owner 归属规则
-
-每个环境变量必须有且只有一个 owner app。
-
-owner 的含义是：
-
-- 该变量主要由哪个 app 定义和维护
-- 该变量应写入哪个 app 的 `.env.example`
-- 该变量由哪个 app 的配置入口负责解析
-
-例如：
-
-- `TRACEFOLD_API_PORT` 的 owner 是 `api`
-- `TRACEFOLD_WEB_API_BASE_URL` 的 owner 是 `web`
-- `TRACEFOLD_BOT_TELEGRAM_TOKEN` 的 owner 是 `bot`
-
-注意：
-
-- 一个变量只能有一个 owner
-- 变量可以被其他 app 间接依赖，但不能因此变成“共享无主变量”
-
----
-
-## 6. API 读取规则（Phase 1 强制执行）
-
-### 6.1 唯一读取入口
-
-在 API 项目中，环境变量只允许在以下位置读取：
-
-- `apps/api/app/core/config.py`
-
-这是唯一合法入口。
-
----
-
-### 6.2 禁止直接读取 env 的位置
-
-禁止在以下位置直接读取环境变量：
-
-- `apps/api/app/api/*.py`
-- `apps/api/app/domains/**/*.py`
-- `apps/api/app/db/*.py`
-- `router.py`
-- `service.py`
-- `repository.py`
-- `models.py`
-- `schemas.py`
-
-禁止形式包括但不限于：
-
-- `os.getenv(...)`
-- `os.environ[...]`
-- `os.environ.get(...)`
-
----
-
-### 6.3 正确使用方式
-
-正确做法是：
-
-1. 在 `app/core/config.py` 中统一解析 env
-2. 构造统一配置对象，如 `settings`
-3. 其他模块通过导入或依赖注入使用配置对象
-4. 不在业务层重新解释 env 语义
-
----
-
-## 7. 其他 app 的读取规则（预留）
-
-虽然 Web / Desktop / Bot 尚未在 Phase 1 中完整落地，但规则提前统一：
-
-- 每个 app 未来都必须有自己的统一配置入口
-- 业务逻辑层不得散落式读取 env
-- 不允许组件、页面、业务服务到处直接取环境变量
-
-也就是说：
-
-- 现在先把 API 规则定严
-- 以后其他 app 按同样模式落地
-- 不允许以后再回头打破 API 已确立的配置原则
-
----
-
-## 8. 安全规则
-
-## 8.1 可暴露给前端的变量
-
-允许暴露给前端的变量必须满足：
-
-- 不含密钥
-- 不含数据库连接信息
-- 不含私有 token
-- 只用于公开运行时配置
-
-示例：
-
-- `TRACEFOLD_WEB_ENV`
-- `TRACEFOLD_WEB_API_BASE_URL`
-
----
-
-## 8.2 不可暴露给前端的变量
-
-以下类型不得进入前端可见环境：
-
-- 数据库连接串
-- 私有第三方服务凭证
-- Telegram Token
-- OpenAI API Key
-- 内部管理密钥
-- 任何仅服务端需要的开关或连接信息
-
-示例：
-
-- `TRACEFOLD_API_DB_URL`
-- `TRACEFOLD_BOT_TELEGRAM_TOKEN`
-- `OPENAI_API_KEY`
-
----
-
-## 9. 文件规则
-
-项目采用“分 app 维护 `.env.example`，统一文档约束”的方式。
-
-建议文件位置：
-
-- `apps/api/.env.example`
-- `apps/web/.env.example`
-- `apps/desktop/.env.example`
-- `apps/bot/.env.example`
-
-但在 Phase 1 中，真正需要先落地的是：
-
-- `apps/api/.env.example`
-
----
-
-### 规则 1
-
-每个 app 只维护自己的 `.env.example`。
-
----
-
-### 规则 2
-
-`.env.example` 中只放该 app 实际需要的变量。
-
-不允许：
-
-- 把未来可能用到但当前没实现的变量提前塞满
-- 把别的 app 的变量写进当前 app 的 `.env.example`
-
----
-
-### 规则 3
-
-如变量变更，必须同步更新：
-
-- 对应 app 的 `.env.example`
-- 本文档 `docs/ENV_CONVENTIONS.md`
-- 对应 app 的配置入口代码
-
-对 API 来说就是：
-
-- `apps/api/.env.example`
-- `docs/ENV_CONVENTIONS.md`
-- `apps/api/app/core/config.py`
-
-三者必须同步。
-
----
-
-## 10. 变量分类规则
-
-为了避免 env 文件越来越乱，变量应尽量归入以下四类之一。
-
-### 10.1 运行基础类
-
-用于定义运行环境和基础行为。
-
-示例：
-
-- `TRACEFOLD_API_APP_NAME`
-- `TRACEFOLD_API_ENV`
-- `TRACEFOLD_API_DEBUG`
-- `TRACEFOLD_API_HOST`
-- `TRACEFOLD_API_PORT`
-- `TRACEFOLD_API_LOG_LEVEL`
-
-### 10.2 地址连接类
-
-用于定义服务访问地址或数据库连接。
-
-示例：
-
-- `TRACEFOLD_API_DB_URL`
-- `TRACEFOLD_WEB_API_BASE_URL`
-- `TRACEFOLD_DESKTOP_WEB_URL`
-- `TRACEFOLD_BOT_API_BASE_URL`
-- `TRACEFOLD_AI_BASE_URL`
-
-### 10.3 外部集成类
-
-用于定义第三方系统接入配置。
-
-示例：
-
-- `TRACEFOLD_BOT_TELEGRAM_TOKEN`
-- `OPENAI_API_KEY`
-- `TRACEFOLD_AI_API_KEY`
-
-### 10.4 功能开关类
-
-用于定义可开关的特性。
-
-示例：
-
-- `TRACEFOLD_API_DEBUG`
-- `TRACEFOLD_API_ENABLE_DOCS`
-- `TRACEFOLD_DESKTOP_SINGLE_INSTANCE`
-
-如果某个变量无法明确归类，说明命名或设计可能有问题，应先整理再加入。
-
----
-
-## 11. Phase 1 API 推荐变量清单
-
-Phase 1 当前推荐只先确定 API 的最小必要变量。
-
-| 变量名 | Owner | 必填 | 敏感 | 示例值 | 用途 |
-|---|---|---:|---:|---|---|
-| `TRACEFOLD_API_APP_NAME` | api | 是 | 否 | `TraceFold API` | API 应用名称 |
-| `TRACEFOLD_API_ENV` | api | 是 | 否 | `development` | API 运行环境 |
-| `TRACEFOLD_API_DEBUG` | api | 是 | 否 | `true` | 是否启用调试模式 |
-| `TRACEFOLD_API_HOST` | api | 是 | 否 | `127.0.0.1` | API 监听地址 |
-| `TRACEFOLD_API_PORT` | api | 是 | 否 | `8000` | API 监听端口 |
-| `TRACEFOLD_API_DB_URL` | api | 是 | 是 | `sqlite:///../../data/tracefold.db` | API 使用的数据库连接 |
-| `TRACEFOLD_API_LOG_LEVEL` | api | 是 | 否 | `INFO` | API 日志级别 |
-| `TRACEFOLD_API_ENABLE_DOCS` | api | 否 | 否 | `true` | 是否启用 OpenAPI 文档 |
-| `TRACEFOLD_AI_PROVIDER` | api | 否 | 否 | `openai_compatible` | 当前 AI provider 类型 |
-| `TRACEFOLD_AI_BASE_URL` | api | 否 | 否 | `http://127.0.0.1:11434/v1` | OpenAI-compatible provider 基础地址 |
-| `TRACEFOLD_AI_API_KEY` | api | 否 | 是 | `` | Provider API key；本地 Ollama 可留空 |
-| `TRACEFOLD_AI_MODEL` | api | 否 | 否 | `qwen3.5:9b` | 当前 knowledge_summary 使用的 provider 模型 |
-| `TRACEFOLD_AI_TIMEOUT_SECONDS` | api | 否 | 否 | `60` | Provider 请求超时秒数 |
-
-说明：
-
-- `TRACEFOLD_API_ENABLE_DOCS` 可选，但很实用，适合开发期保留
-- 如你想进一步收紧，也可以 Phase 1 先不加它
-- 生产环境必须设置 `TRACEFOLD_API_DEBUG=false`；应用会拒绝带调试模式的生产配置。未配置时调试模式默认关闭。
-
----
-
-## 12. API `.env.example` 参考内容
-
-以下内容可作为 `apps/api/.env.example` 初版：
-
-```env
-TRACEFOLD_API_APP_NAME=TraceFold API
-TRACEFOLD_API_ENV=development
-TRACEFOLD_API_DEBUG=true
-TRACEFOLD_API_HOST=127.0.0.1
-TRACEFOLD_API_PORT=8000
-TRACEFOLD_API_DB_URL=sqlite:///../../data/tracefold.db
-TRACEFOLD_API_LOG_LEVEL=INFO
-TRACEFOLD_API_ENABLE_DOCS=true
-TRACEFOLD_AI_PROVIDER=openai_compatible
-TRACEFOLD_AI_BASE_URL=http://127.0.0.1:11434/v1
-TRACEFOLD_AI_API_KEY=
-TRACEFOLD_AI_MODEL=qwen3.5:9b
-TRACEFOLD_AI_TIMEOUT_SECONDS=60
-```
-
----
-
-## 13. 预留命名空间示例（非 Phase 1 必落地）
-
-以下只是为了统一未来命名风格，不代表当前就要实现这些 app。
-
-### 13.1 Web
-
-```env
-TRACEFOLD_WEB_ENV=development
-TRACEFOLD_WEB_PORT=5173
-TRACEFOLD_WEB_API_BASE_URL=http://127.0.0.1:8000
-```
-
-### 13.2 Desktop
-
-```env
-TRACEFOLD_DESKTOP_ENV=development
-TRACEFOLD_DESKTOP_WEB_URL=http://127.0.0.1:5173
-TRACEFOLD_DESKTOP_SINGLE_INSTANCE=true
-```
-
-### 13.3 Bot
-
-```env
-TRACEFOLD_BOT_ENV=development
-TRACEFOLD_BOT_API_BASE_URL=http://127.0.0.1:8000
-TRACEFOLD_BOT_TELEGRAM_TOKEN=
-```
-
-这些内容当前只用于预留命名空间，不作为 Phase 1 的主实现要求。
-
----
-
-## 14. 配置变更流程
-
-新增、删除或修改环境变量时，必须同时完成以下步骤。
-
-### 14.1 新增变量
-
-必须同步修改：
-
-1. 对应 app 的 `.env.example`
-2. 本文档 `docs/ENV_CONVENTIONS.md`
-3. 对应 app 的配置入口代码
-
----
-
-### 14.2 删除变量
-
-必须同步修改：
-
-1. 删除 `.env.example` 中对应项
-2. 删除配置入口中的对应字段
-3. 更新本文档说明
-
----
-
-### 14.3 重命名变量
-
-禁止只改其中一处。
-
-必须同时修改：
-
-- 配置入口
-- `.env.example`
-- 本文档
-- 所有引用代码
-
----
-
-## 15. Codex 实现规则
-
-Codex 后续在本仓库中工作时，必须遵守以下 env 规范：
-
-1. 不得在 `app/core/config.py` 之外直接读取 API 环境变量
-2. 不得引入模糊变量名
-3. 新增变量必须带命名空间前缀
-4. 新增变量必须声明 owner app
-5. 涉及配置变更时，必须同步更新：
-   - `.env.example`
-   - 本文档
-   - 配置入口代码
-6. 不得把服务端敏感变量暴露给前端 app
-7. 不得因为未来 Web / Desktop / Bot 需求，破坏当前 API 配置规则
-
----
-
-## 16. Phase 1 铁律
-
-第一阶段最重要的 env 约束只有这几条：
-
-- API 变量统一使用 `TRACEFOLD_API_` 前缀
-- 每个变量必须有明确 owner
-- API 只允许 `app/core/config.py` 读取 env
-- `.env.example` 只是示例，不是真相源
-- 任何配置变更必须同步更新文档和配置入口
-- Phase 1 先以 API 配置规则为主，不让其他 app 的预留设计反向干扰当前实现
-
----
-
-## 17. 本文档的定位
-
-本文档不是为了罗列很多变量，而是为了定义：
-
-- 变量应该怎么命名
-- 变量归谁负责
-- 变量在哪里读取
-- 变量变更时必须同步哪些地方
-- 为什么 Phase 1 要先把 API 的配置规则立住
-
-它是 TraceFold Phase 1 的配置规范文档，也是后续约束 Codex 实现 `config.py` 和 `.env.example` 的直接依据。
+当前功能入口、固定文件名、路径、参数和变量只记录现行状态。变更过程与旧版本说明写到明确标识的解释/历史文档，不混进当前操作清单。

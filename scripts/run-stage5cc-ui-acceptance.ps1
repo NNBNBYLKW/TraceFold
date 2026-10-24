@@ -22,9 +22,9 @@
 #
 # Usage:
 #   pwsh -NoProfile -File scripts/run-stage5cc-ui-acceptance.ps1 `
-#       -ProductDirectory .superpowers/stage5cc-product `
+#       -ProductDirectory dist/TraceFold-MediaDesktop-Stage5C-C-win-x64 `
 #       -WinAppCliArchivePath D:\downloads\winappcli-x64.zip `
-#       -OutputDirectory .superpowers/stage5cc-uia-gate `
+#       -OutputDirectory artifacts/evidence/stage5cc-uia-gate/manual-run `
 #       -Scenario StartupLayout
 #
 #   pwsh -NoProfile -File <toolkit>/scripts/run-stage5cc-ui-acceptance.ps1 `
@@ -1029,8 +1029,8 @@ else {
 }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     # A moved toolkit writes into the results directory its own manifest declares; a source tree
-    # keeps its .superpowers gate directory. Neither falls back to the other's location.
-    $defaultParent = if ($packageMode) { [string] $script:toolkitPackage.ResultsRoot } else { Join-Path $script:repositoryRoot '.superpowers/stage5cc-uia-gate' }
+    # keeps its durable workspace evidence directory. Neither falls back to the other's location.
+    $defaultParent = if ($packageMode) { [string] $script:toolkitPackage.ResultsRoot } else { Join-Path $script:repositoryRoot 'artifacts/evidence/stage5cc-uia-gate' }
     if ($packageMode) {
         try { Assert-Stage5CCExistingPathNotAliased -Path $defaultParent -Code 'toolkit.results_reparse' }
         catch {

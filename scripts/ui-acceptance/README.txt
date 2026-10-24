@@ -25,7 +25,7 @@ Two invocation shapes
    The driver archive is verified against apps/media-desktop/tools/winapp/win-x64/manifest.json
    and unpacked into this run's owned directory. The support CLI is published from its project
    with dotnet, so the .NET SDK is required. The default output lives under
-   .superpowers/stage5cc-uia-gate/run-<id>.
+   artifacts/evidence/stage5cc-uia-gate/run-<id>.
 
 2. Moved toolkit (no source tree, no Git, no SDK)
 
