@@ -103,7 +103,7 @@ TraceFold 是一个 Windows 桌面媒体整理工具：把待整理的照片和�
 
 该包复用当前已发布 `01264b7a086aebfcfa2f546d294def5076113e3e` 产品负载，增加双语文档、能力事实和独立文档身份清单，不重新编译产品，也不新增运行时能力。原始产品 ZIP、UI 验收包、tag 和既有 SHA-256 保持不变；需要原产品的用户仍可从上方链接下载原始产品 ZIP。
 
-增强包自身的 SHA-256 以随资产发布的独立 `.sha256` 文件和公开 Release manifest 为准。
+增强包自身的 SHA-256 见公开的 [SHA256SUMS-docs-20261025.txt](https://github.com/NNBNBYLKW/TraceFold/releases/download/v4.0.0-stage5cc/SHA256SUMS-docs-20261025.txt) 和公开 Release manifest。
 
 ## 许可证状态
 

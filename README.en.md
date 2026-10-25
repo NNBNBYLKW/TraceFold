@@ -66,7 +66,7 @@ See the [current release capability matrix](docs/capability-matrix.en.md) for th
 
 It reuses the currently published `01264b7a086aebfcfa2f546d294def5076113e3e` product payload and adds bilingual documentation, capability facts, and an independent documentation identity manifest. It does not recompile the product or add runtime capabilities. The original product ZIP, UI acceptance package, tag, and existing SHA-256 values remain unchanged; users who need the original package can still download it from the link above.
 
-Use the separate `.sha256` file shipped with the enhanced package and its public Release manifest for that package's own SHA-256.
+The enhanced package's SHA-256 values are published in [SHA256SUMS-docs-20261025.txt](https://github.com/NNBNBYLKW/TraceFold/releases/download/v4.0.0-stage5cc/SHA256SUMS-docs-20261025.txt) and the public Release manifest.
 
 ## Version and documentation identity
 
