@@ -58,15 +58,15 @@ See the [current release capability matrix](docs/capability-matrix.en.md) for th
 | `ACCEPTANCE-SUMMARY.zh-CN.md` | Acceptance results and coverage limits for this release. |
 | GitHub-generated `Source code` ZIP/TAR | Source snapshot, not a compiled application. |
 
-### Documentation-enhanced package (planned)
+### Recommended download: documentation-enhanced package
 
-A separate documentation-enhanced package is planned:
+**[Download the package with bilingual guides](https://github.com/NNBNBYLKW/TraceFold/releases/download/v4.0.0-stage5cc/TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.zip)**
 
 `TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.zip`
 
-It reuses the currently published `01264b7a086aebfcfa2f546d294def5076113e3e` product payload and adds only bilingual documentation, capability facts, and an independent documentation identity manifest. It does not recompile the product or add runtime capabilities. The original product ZIP, UI acceptance package, tag, and existing SHA-256 values remain unchanged.
+It reuses the currently published `01264b7a086aebfcfa2f546d294def5076113e3e` product payload and adds bilingual documentation, capability facts, and an independent documentation identity manifest. It does not recompile the product or add runtime capabilities. The original product ZIP, UI acceptance package, tag, and existing SHA-256 values remain unchanged; users who need the original package can still download it from the link above.
 
-This package is **not uploaded yet**. After publication, use the actual asset, its separate `.sha256`, and the package manifest from [GitHub Releases](https://github.com/NNBNBYLKW/TraceFold/releases); do not treat this page as a predeclared final hash.
+Use the separate `.sha256` file shipped with the enhanced package and its public Release manifest for that package's own SHA-256.
 
 ## Version and documentation identity
 
@@ -74,8 +74,8 @@ This package is **not uploaded yet**. After publication, use the actual asset, i
 | --- | --- |
 | Public Release | `v4.0.0-stage5cc` (prerelease) |
 | Product source identity | `01264b7a086aebfcfa2f546d294def5076113e3e` |
-| Product asset | `TraceFold-MediaDesktop-Stage5C-C-win-x64.zip` |
-| Product SHA-256 | `19b82302d00916b9b74143dc5b72b9d48d84df0a8a8cecbaa52beafd839efbaf` |
+| Original product archive | `TraceFold-MediaDesktop-Stage5C-C-win-x64.zip` |
+| Original product archive SHA-256 | `19b82302d00916b9b74143dc5b72b9d48d84df0a8a8cecbaa52beafd839efbaf` |
 
 The public Release, the product's displayed version, and the acceptance summary define the behavior of the current product build. The default branch may contain newer source that is not part of the public package. Do not infer that a capability present only on the default branch is available in the current package. Maintain this identity block together with each public Release.
 

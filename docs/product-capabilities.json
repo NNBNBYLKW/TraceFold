@@ -13,9 +13,20 @@
     "tag": "v4.0.0-stage5cc",
     "channel": "prerelease",
     "productSourceCommit": "01264b7a086aebfcfa2f546d294def5076113e3e",
-    "productArchiveName": "TraceFold-MediaDesktop-Stage5C-C-win-x64.zip",
-    "productArchiveBytes": 225879347,
-    "productArchiveSha256": "19B82302D00916B9B74143DC5B72B9D48D84DF0A8A8CECBAA52BEAFD839EFBAF",
+    "originalProductArchive": {
+      "name": "TraceFold-MediaDesktop-Stage5C-C-win-x64.zip",
+      "bytes": 225879347,
+      "sha256": "19B82302D00916B9B74143DC5B72B9D48D84DF0A8A8CECBAA52BEAFD839EFBAF"
+    },
+    "recommendedDocumentationAsset": {
+      "name": "TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.zip",
+      "productSourceCommit": "01264b7a086aebfcfa2f546d294def5076113e3e",
+      "url": "https://github.com/NNBNBYLKW/TraceFold/releases/download/v4.0.0-stage5cc/TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.zip",
+      "publicManifestName": "TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.public-manifest.json",
+      "checksumName": "SHA256SUMS-docs-20261025.txt",
+      "reusesOriginalProductPayload": true,
+      "recompiledProduct": false
+    },
     "documentationIdentity": {
       "binding": "release-time-compatible-documentation-commit",
       "embeddedSelfReference": false,

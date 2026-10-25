@@ -80,8 +80,8 @@ TraceFold 是一个 Windows 桌面媒体整理工具：把待整理的照片和�
 | --- | --- |
 | 公开 Release | `v4.0.0-stage5cc`（prerelease） |
 | 产品源码身份 | `01264b7a086aebfcfa2f546d294def5076113e3e` |
-| 产品包 | `TraceFold-MediaDesktop-Stage5C-C-win-x64.zip` |
-| 产品包 SHA-256 | `19b82302d00916b9b74143dc5b72b9d48d84df0a8a8cecbaa52beafd839efbaf` |
+| 原始产品包 | `TraceFold-MediaDesktop-Stage5C-C-win-x64.zip` |
+| 原始产品包 SHA-256 | `19b82302d00916b9b74143dc5b72b9d48d84df0a8a8cecbaa52beafd839efbaf` |
 
 当前公开 Release 的产品行为以该 Release、产品包内版本信息和验收摘要为准。默认分支的源码可能继续前进；不要仅凭默认分支的新代码推断当前产品包已经包含这些能力。本文档页负责说明当前公开版本，发布维护时应随公开 Release 一并更新版本身份。
 
@@ -95,15 +95,15 @@ TraceFold 是一个 Windows 桌面媒体整理工具：把待整理的照片和�
 | ACCEPTANCE-SUMMARY.zh-CN.md | 当前版本的验收结果与覆盖边界。 |
 | GitHub 自动提供的 Source code（zip / tar.gz） | 源码快照，不是已编译应用，不等同于产品 ZIP。 |
 
-### 文档增强包（拟发布）
+### 推荐下载：含指南的文档增强包
 
-拟随独立文档增强包提供：
+**[下载含双语指南的文档增强包](https://github.com/NNBNBYLKW/TraceFold/releases/download/v4.0.0-stage5cc/TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.zip)**
 
 `TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.zip`
 
-该包复用当前已发布 `01264b7a086aebfcfa2f546d294def5076113e3e` 产品负载，仅增加双语文档、能力事实和独立文档身份清单，不重新编译产品，也不新增运行时能力。原始产品 ZIP、UI 验收包、tag 和既有 SHA-256 保持不变。
+该包复用当前已发布 `01264b7a086aebfcfa2f546d294def5076113e3e` 产品负载，增加双语文档、能力事实和独立文档身份清单，不重新编译产品，也不新增运行时能力。原始产品 ZIP、UI 验收包、tag 和既有 SHA-256 保持不变；需要原产品的用户仍可从上方链接下载原始产品 ZIP。
 
-此增强包**尚未上传**；发布后以 [GitHub Releases](https://github.com/NNBNBYLKW/TraceFold/releases) 中的实际资产、独立 `.sha256` 和包内 manifest 为准，不以本页预写固定最终 hash。
+增强包自身的 SHA-256 以随资产发布的独立 `.sha256` 文件和公开 Release manifest 为准。
 
 ## 许可证状态
 
