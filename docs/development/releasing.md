@@ -96,4 +96,49 @@ if ($productIdentityExit -ne 0) { throw "Product identity check exited $productI
 
 构建身份记录在 `package-version.json`，K 的成员身份记录在 `toolkit.json`；核对两包源提交、版本与 ZIP SHA-256。现有已发布产品的源码身份不会因本地文档提交自动改变。保存新运行的证据与首败，结论按 [测试分层](testing.md) 表述。
 
+## 文档增强包
+
+`package-media-desktop-docs-enhanced.ps1` 生成独立的文档增强 ZIP，不是新的产品版本，也不替换既有 P/K、`SHA256SUMS.txt`、tag 或 Release 附件。它只读取固定的已发布产品 ZIP，保留 `package-version.json` 原字节，并逐成员比较原 584 个文件的名称、未压缩大小与 SHA-256；随后加入经严格白名单校验的双语 README、`START-HERE.txt`、能力矩阵、离线指南和文档身份 manifest。
+
+输入必须是当前公开产品 `TraceFold-MediaDesktop-Stage5C-C-win-x64.zip`（源码身份 `01264b7a086aebfcfa2f546d294def5076113e3e`），`-DocumentationRef` 必须是一个已提交且为当前 `HEAD` 祖先的 40 位文档提交，`-OutputDirectory` 与 `-WorkingDirectory` 必须是不存在的新叶；工作目录位于本仓库 `.cache/tmp/`。命令不编译产品、不启动产品、不运行 smoke 或 GUI。
+
+~~~powershell
+$docsRef = '<40-character committed docs ref>'
+$outputLeaf = Join-Path $repoRoot 'artifacts/releases/docs-enhanced-20261025-01'
+$workLeaf = Join-Path $repoRoot ('.cache/tmp/' + [guid]::NewGuid().ToString('N'))
+& $nativePs7 -NoProfile -File (Join-Path $repoRoot 'scripts/package-media-desktop-docs-enhanced.ps1') `
+    -SourceProductArchive (Join-Path $repoRoot 'dist/TraceFold-MediaDesktop-Stage5C-C-win-x64.zip') `
+    -OutputDirectory $outputLeaf `
+    -DocumentationRef $docsRef `
+    -WorkingDirectory $workLeaf
+$bundleExit = $LASTEXITCODE
+if ($bundleExit -ne 0) { throw "Documentation-enhanced package exited $bundleExit" }
+~~~
+
+生成后可用同一脚本的 `-ValidateOnly` 对已有输出叶重做静态成员和链接验证；它不会创建新的 ZIP，也不运行产品：
+
+~~~powershell
+& $nativePs7 -NoProfile -File (Join-Path $repoRoot 'scripts/package-media-desktop-docs-enhanced.ps1') `
+    -SourceProductArchive (Join-Path $repoRoot 'dist/TraceFold-MediaDesktop-Stage5C-C-win-x64.zip') `
+    -OutputDirectory $outputLeaf `
+    -DocumentationRef $docsRef `
+    -WorkingDirectory $workLeaf `
+    -ValidateOnly
+$bundleExit = $LASTEXITCODE
+if ($bundleExit -ne 0) { throw "Documentation-enhanced package validation exited $bundleExit" }
+~~~
+
+固定输出：
+
+| 内容 | 文件名 |
+|---|---|
+| 文档增强 ZIP | `TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.zip` |
+| 独立校验值 | `SHA256SUMS-docs-20261025.txt` |
+| 可公开 manifest | `TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.public-manifest.json` |
+| 本地运维回执（不得上传） | `TraceFold-MediaDesktop-Stage5C-C-win-x64-docs-20261025.private-receipt.json` |
+
+ZIP 内的 `DOCS-ENHANCED-MANIFEST.json` 分列 `productSourceCommit` 与 `documentationRef`，并记录原 P 来源、逐成员产品清单、新增文档成员及网络链接边界。外部 public manifest 只保留公开身份、URL、成员绑定哈希和验证范围；private receipt 才记录本机绝对路径与本轮工作目录，不得作为 Release 附件。独立 `SHA256SUMS-docs-20261025.txt` 列出增强 ZIP 与 public manifest，不修改原 `SHA256SUMS.txt`。
+
+静态验证只证明成员集合、名称、未压缩字节、大小、SHA-256、大小写碰撞、路径覆盖和相对链接符合预期，不证明产品启动、UI 或新增验收通过。
+
 [返回开发导航](README.md)
