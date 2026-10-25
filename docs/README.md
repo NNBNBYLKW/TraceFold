@@ -1,13 +1,17 @@
 # TraceFold 文档
 
+[简体中文](README.md) | [English README](../README.en.md)
+
 ## 普通用户
 
 TraceFold 是 Windows 本地媒体整理工具，提供待入库处理、正式文件库和词表分类。
 
-1. [下载与快速开始](../README.md)：v4.0.0-stage5cc 预发布版，选择产品 ZIP。
+1. [中文 README](../README.md) / [English README](../README.en.md)：身份说明与下载入口。
 2. [使用指南](getting-started.md)：解压启动、三个目录、扫描处理、入库与资料管理。
-3. [常见问题与排障](troubleshooting.md)。
-4. [支持与反馈](../SUPPORT.md)。
+3. [离线快速指南](offline-quick-start.md) / [Offline quick start](offline-quick-start.en.md)。
+4. [当前发布能力矩阵](capability-matrix.md) / [Capability matrix](capability-matrix.en.md)。
+5. [常见问题与排障](troubleshooting.md)。
+6. [支持与反馈](../SUPPORT.md)。
 
 适用系统及已知限制见 [版本状态](../README.md#版本状态)。
 

@@ -1,0 +1,133 @@
+{
+  "schema": "tracefold-product-capabilities",
+  "schemaVersion": 1,
+  "product": {
+    "name": "TraceFold",
+    "identity": {
+      "zh-CN": "TraceFold Windows 照片与视频整理工具",
+      "en": "TraceFold Windows photo and video organizer"
+    },
+    "canonicalRepositoryUrl": "https://github.com/NNBNBYLKW/TraceFold"
+  },
+  "release": {
+    "tag": "v4.0.0-stage5cc",
+    "channel": "prerelease",
+    "productSourceCommit": "01264b7a086aebfcfa2f546d294def5076113e3e",
+    "productArchiveName": "TraceFold-MediaDesktop-Stage5C-C-win-x64.zip",
+    "productArchiveBytes": 225879347,
+    "productArchiveSha256": "19B82302D00916B9B74143DC5B72B9D48D84DF0A8A8CECBAA52BEAFD839EFBAF",
+    "documentationIdentity": {
+      "binding": "release-time-compatible-documentation-commit",
+      "embeddedSelfReference": false,
+      "rule": "The documentation ref is selected and recorded separately when public release material is prepared; it is not inferred from or substituted for productSourceCommit."
+    }
+  },
+  "platform": {
+    "os": "Windows 11 24H2 (build 26100) or later",
+    "architecture": "x64"
+  },
+  "capabilities": [
+    {
+      "id": "desktop-media-organization",
+      "status": "shipped",
+      "summary": "Local desktop organization of photos and ordinary videos."
+    },
+    {
+      "id": "inbox-preview",
+      "status": "shipped",
+      "summary": "Preview inbox photos and ordinary videos after configuring Inbox, Library and Work directories."
+    },
+    {
+      "id": "mp4-m4a-pairing",
+      "status": "shipped",
+      "summary": "Pair matching MP4 and M4A inputs, preprocess them, and explicitly commit the result; this is not standalone music playback."
+    },
+    {
+      "id": "metadata-and-taxonomy",
+      "status": "shipped",
+      "summary": "Maintain display names, authors, series and content tags; display names remain separate from filenames on disk."
+    },
+    {
+      "id": "library-search-and-filter",
+      "status": "shipped",
+      "summary": "Search by filename or display name and filter through existing author, series and tag flows."
+    },
+    {
+      "id": "conflict-resolution",
+      "status": "shipped",
+      "summary": "Compare detected conflicts and choose the documented skip, keep-both or replace flow."
+    },
+    {
+      "id": "local-file-workflow",
+      "status": "shipped",
+      "summary": "The documented product workflow uses local directories and does not require configuring a cloud service or online account first."
+    },
+    {
+      "id": "bundled-runtime",
+      "status": "shipped",
+      "summary": "The published product package includes .NET, Windows App SDK runtime components, FFmpeg and FFprobe."
+    }
+  ],
+  "notShipped": [
+    {
+      "id": "direct-control-api-cli-mcp",
+      "status": "not-shipped",
+      "summary": "No public API, CLI or MCP surface is declared for third-party control of the desktop application."
+    },
+    {
+      "id": "reading-and-music",
+      "status": "not-shipped",
+      "summary": "PDF, EPUB, comic reading, and standalone music-file ingestion, playback, or music-library management are not part of the current release."
+    },
+    {
+      "id": "multiple-spaces",
+      "status": "not-shipped",
+      "summary": "Multiple media spaces and multi-instance workflows are not part of the current release."
+    },
+    {
+      "id": "content-ai",
+      "status": "not-shipped",
+      "summary": "OCR, audio transcription, face matching and automatic tagging are not part of the current release."
+    },
+    {
+      "id": "missing-record-management",
+      "status": "not-shipped",
+      "summary": "Missing-library-record hiding and stale-record removal are not part of the current release."
+    },
+    {
+      "id": "acceptance-toolkit-as-product",
+      "status": "not-shipped",
+      "summary": "The UI acceptance toolkit is not the ordinary-user product entry point."
+    }
+  ],
+  "automation": {
+    "publicDesktopApi": "not-declared",
+    "publicDesktopCli": "not-declared",
+    "mcp": "not-shipped",
+    "uiAcceptanceToolkitRole": "development-and-validation-only"
+  },
+  "verification": {
+    "publishedNetTests": {
+      "status": "Passed",
+      "passed": 1267
+    },
+    "publishedProductSmoke": "Passed",
+    "automatedUiAcceptance": {
+      "status": "Mixed",
+      "passed": 7,
+      "failed": 5,
+      "blocked": 2
+    },
+    "visualMatrix": {
+      "status": "Incomplete"
+    },
+    "cleanVirtualMachine": {
+      "status": "NotRun"
+    },
+    "interpretation": "Plans, source-only changes and unpublished development candidates are not shipped capabilities."
+  },
+  "license": {
+    "projectLicense": "not-declared",
+    "thirdPartyNoticeScope": "Third-party component licenses are separate from project licensing."
+  }
+}
